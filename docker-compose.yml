@@ -1,0 +1,97 @@
+# =============================================================================
+# DOCKER COMPOSE CONFIGURATION FOR juena-chatbot
+# =============================================================================
+# Single configuration file for both development and production.
+#
+# Environment Variables:
+#   - Development: Uses .env file in project root (auto-loaded by docker-compose)
+#   - Production: Uses /etc/juena/.env (set via env_file)
+#
+# Usage:
+#   docker-compose up -d          # Start in detached mode
+#   docker-compose up              # Start with logs
+#   docker-compose down            # Stop and remove containers
+#   docker-compose logs -f         # View logs
+#
+# Security:
+#   - Never commit .env files with actual secrets
+#   - Production secrets should be managed securely (e.g., Docker secrets, env files)
+# =============================================================================
+
+services:
+  juena-chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: juena-chatbot:latest
+    container_name: juena-chatbot
+    volumes:
+      # Mount logs directory for persistence
+      - chatbot-logs:/data/logs
+      # Optional: Mount .env file for development (comment out in production)
+      - ./.env:/app/.env:ro
+    environment:
+      # Server configuration
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - UI_PORT=8501
+      
+      # LLM Provider configuration (from .env)
+      - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-openai}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - BLABLADOR_API_KEY=${BLABLADOR_API_KEY:-}
+      - BLABLADOR_BASE_URL=${BLABLADOR_BASE_URL:-}
+      
+      # LLM Settings
+      - MAX_TOKENS=${MAX_TOKENS:-10000}
+      - TIMEOUT_SECONDS=${TIMEOUT_SECONDS:-60}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      
+      # LangSmith Tracing (optional)
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-juena-chatbot}
+      
+      # Environment settings
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/data/logs
+      - RELOAD=${RELOAD:-false}
+    ports:
+      - "8000:8000"  # FastAPI server
+      - "8501:8501"  # Streamlit UI
+    networks:
+      - chatbot-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  chatbot-logs:
+    driver: local
+    name: juena-chatbot-logs
+
+networks:
+  chatbot-network:
+    driver: bridge
+    name: juena-chatbot-network
