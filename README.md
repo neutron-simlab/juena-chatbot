@@ -1,6 +1,12 @@
 # juena-chatbot Template
 
-A general-purpose chatbot template that provides a bare-minimum infrastructure for building LangGraph-based chatbots. Simply plug in your own LangGraph graph and start chatting!
+<div align="center">
+  <img src="app/assets/logo.png" alt="VITESS AI Agent Logo" width="200"/>
+</div>
+
+**Jülich Neutron AI Agents (JüNA) chatbot** is a template of an agentic AI–ready system designed to assist researchers in accessing and utilizing JCNS's extensive knowledge base in neutron science.
+
+This repository provides a bare-minimum infrastructure for building LangGraph-based chatbots. Simply plug in your own LangGraph graph and start chatting!
 
 ## Features
 
