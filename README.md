@@ -1,6 +1,6 @@
 # juena-chatbot Template
 
-A general-purpose chatbot template that provides a complete UI+Server+Client infrastructure for building LangGraph-based chatbots. Simply plug in your own LangGraph graph and start chatting!
+A general-purpose chatbot template that provides a bare-minimum infrastructure for building LangGraph-based chatbots. Simply plug in your own LangGraph graph and start chatting!
 
 ## Features
 
@@ -32,6 +32,43 @@ A general-purpose chatbot template that provides a complete UI+Server+Client inf
 │    Agent    │
 └─────────────┘
 ```
+
+## Registering agents
+
+Agents are **not** auto-discovered. You must register each agent type with the server before it can be used.
+
+### How it works
+
+- **Agent registry** (`src/juena/server/agent_registry.py`): Stores **agent factories**, not instances. When a request asks for an `agent_id`, the server looks up the factory, calls it to create the agent (if needed), and caches the result.
+- **API** (`src/juena/server/api_endpoints.py`): All agent endpoints accept an optional `agent_id`. If omitted, the **default agent** is used (the one registered with `set_as_default=True`).
+
+### Steps to register an agent
+
+1. **Implement an async factory** with this signature:
+   ```python
+   async def create_my_agent(provider: str, model: str) -> tuple[Any, CompiledStateGraph]:
+       # ... build your LangGraph (e.g. with create_agent) ...
+       return (agent_instance, compiled_graph)
+   ```
+   - `provider` / `model`: LLM provider and model name (from config or request). Used for initial agent creation.
+   - Return: `(agent_instance, compiled_graph)`. `agent_instance` can be `None` for simple agents; it is used for things like `restart_with_new_config`. `compiled_graph` must be a LangGraph `CompiledStateGraph`.
+
+2. **Register the factory** (before the server starts):
+   ```python
+   from juena.server.agent_registry import register_agent_factory
+
+   register_agent_factory("my_agent", create_my_agent, set_as_default=True)
+   ```
+   - `agent_id`: Unique ID used in API paths and requests (e.g. `my_agent`).
+   - `set_as_default=True`: Use this agent when requests do not specify an `agent_id`.
+
+3. **Import the registration in `main.py`** so the factory is registered at startup:
+   ```python
+   # In main.py, before uvicorn.run()
+   import juena.agents.react_agent  # or your module that calls register_agent_factory
+   ```
+
+Only **registered** `agent_id`s can be used. The API returns 404 with details (including `available_agents`) when an unknown `agent_id` is requested. To list registered IDs programmatically, use `list_registered_agents()` from `juena.server.agent_registry`.
 
 ## Quick Start
 
@@ -81,40 +118,18 @@ See the Quick Start above for Docker usage.
    # DEFAULT_PROVIDER=blablador
    ```
 
-3. **Create Your Agent:**
-   Create a file `my_agent.py`:
+3. **Create and register your agent** (see [Registering agents](#registering-agents) above). The template ships with a default agent: `src/juena/agents/react_agent.py` registers `"react_agent"` and sets it as default. In `main.py`, that registration is triggered by:
    ```python
-   from langchain.agents import create_agent
-   from juena.core.llms_providers import create_llm_with_fallback
-   from juena.server.agent_registry import register_agent_factory
-
-   async def create_my_agent(provider: str, model: str):
-       llm = create_llm_with_fallback(provider=provider, model=model)
-       
-       react_agent = create_agent(
-           model=llm,
-           tools=[],  # Add your tools here
-           system_prompt="You are a helpful assistant.",
-           name="my_agent"
-       )
-       
-       return (None, react_agent)
-
-   register_agent_factory("my_agent", create_my_agent, set_as_default=True)
+   import juena.agents.react_agent
    ```
+   To use your own agent, implement your factory, call `register_agent_factory(...)` in a module, and import that module in `main.py` instead of (or in addition to) `juena.agents.react_agent`.
 
-4. **Register Your Agent:**
-   In `main.py`, import your agent before starting the server:
-   ```python
-   import my_agent  # This registers your agent
-   ```
-
-5. **Start the Server:**
+4. **Start the Server:**
    ```bash
    python main.py
    ```
 
-6. **Start the UI:**
+5. **Start the UI:**
    In another terminal:
    ```bash
    streamlit run app/streamlit_app.py
@@ -311,7 +326,7 @@ compiled_graph = workflow.compile(checkpointer=InMemorySaver())
 
 #### Step 7: Create Agent Factory Function
 
-Create an async factory function that the template will call:
+Create an **async** factory that the server will call when an agent is first requested. The signature must be `(provider: str, model: str) -> tuple[Any, CompiledStateGraph]` (see [Registering agents](#registering-agents)):
 
 ```python
 from typing import Tuple, Any
@@ -322,27 +337,12 @@ async def create_my_agent(
     model: str
 ) -> Tuple[Any, CompiledStateGraph]:
     """
-    Factory function to create your agent.
-    
-    Args:
-        provider: LLM provider (e.g., 'openai', 'blablador')
-        model: Model name (e.g., 'gpt-4o-mini')
-    
-    Returns:
-        Tuple of (agent_instance, compiled_graph)
-        - agent_instance: Can be None or your agent object (for accessing agent methods)
-        - compiled_graph: The CompiledStateGraph to use
+    Factory function called by the server to create your agent.
     """
-    # Step 1: Create LLM
     llm = create_llm_with_fallback(provider=provider, model=model)
-    
-    # Step 2: Create tools (if any)
     tools = [search_database, send_email]  # Your tools here
-    
-    # Step 3: Create system prompt
     system_prompt = "You are a helpful assistant..."
     
-    # Step 4: Create react-agent
     react_agent = create_agent(
         model=llm,
         tools=tools,
@@ -350,33 +350,24 @@ async def create_my_agent(
         name="my_agent"
     )
     
-    # Step 5: Return (agent_instance, compiled_graph)
-    # For simple agents, agent_instance can be None
+    # Return (agent_instance, compiled_graph). agent_instance can be None.
     return (None, react_agent)
 ```
 
-**Important:** The factory function must be `async` and return a tuple of `(AgentInstance, CompiledStateGraph)`.
-
 #### Step 8: Register Your Agent
 
-Register your agent factory with the template:
+Register the factory in `agent_registry` and ensure the registration runs before the server starts (e.g. by importing your agent module in `main.py`):
 
 ```python
 from juena.server.agent_registry import register_agent_factory
 
-# Register your agent factory
 register_agent_factory("my_agent", create_my_agent, set_as_default=True)
 ```
 
-**Parameters:**
-- `agent_id`: Unique identifier for your agent (used in API calls)
-- `factory`: Your async factory function
-- `set_as_default`: If True, sets this as the default agent
+- **agent_id** (`"my_agent"`): Used in API paths like `POST /my_agent/invoke` and in request bodies; must be unique.
+- **set_as_default=True**: This agent is used when no `agent_id` is specified (e.g. `POST /invoke` or `POST /stream`).
 
-**When to register:** This must be done **before** starting the server. Common places:
-- In `main.py` before `uvicorn.run()`
-- In a separate `agents.py` file that you import in `main.py`
-- In your agent file itself (as shown in the example)
+Registration must happen **before** the server starts. The template does this by importing the agent module in `main.py` (e.g. `import juena.agents.react_agent`).
 
 #### Step 9: Start the Server
 
@@ -399,7 +390,7 @@ if __name__ == "__main__":
 
 ### Complete Example: Simple Q&A Agent
 
-Here's a complete, working example (`src/juena/agents/react_agent.py`):
+The template includes a working example in `src/juena/agents/react_agent.py`. It registers the `"react_agent"` factory and sets it as the default; `main.py` imports this module so the registration runs at startup. Condensed version:
 
 ```python
 """
@@ -599,10 +590,10 @@ asyncio.run(test())
 
 ### Troubleshooting
 
-**Agent not responding:**
-- Check that your agent is registered before starting the server
-- Verify the agent_id matches what you registered
-- Check server logs for errors
+**Agent not found (404):**
+- Ensure the agent factory is registered via `register_agent_factory()` before the server starts (import the module that registers it in `main.py`).
+- Use an `agent_id` that was registered (e.g. `"react_agent"` for the built-in agent). The 404 response body includes `available_agents` listing valid IDs.
+- Call `list_registered_agents()` from `juena.server.agent_registry` to see registered IDs.
 
 **Tools not being called:**
 - Ensure tool docstrings are clear and descriptive
@@ -626,17 +617,19 @@ asyncio.run(test())
 
 ## API Endpoints
 
+Endpoints are defined in `src/juena/server/api_endpoints.py` and mounted on the FastAPI app in `service.py` (no path prefix). Only **registered** agent IDs (see [Registering agents](#registering-agents)) can be used; unknown IDs return 404 with `available_agents` in the detail.
+
 ### Agent Endpoints
 
-- **POST `/{agent_id}/invoke`** or **POST `/invoke`** - Send message and get complete response
-- **POST `/{agent_id}/stream`** or **POST `/stream`** - Real-time streaming response (SSE)
-- **POST `/{agent_id}/restart`** or **POST `/restart`** - Restart agent with new configuration
+- **POST `/{agent_id}/invoke`** or **POST `/invoke`** — Send a message and get the full response. With `agent_id` in the path, that agent is used; without it, the default agent is used.
+- **POST `/{agent_id}/stream`** or **POST `/stream`** — Stream the response (SSE). Same `agent_id` behavior as above.
+- **POST `/{agent_id}/restart`** or **POST `/restart`** — Restart the agent (clear state / apply new config). Query params: `provider`, `model` (optional).
 
 ### Health Check
 
-- **GET `/health`** - Health check endpoint
+- **GET `/health`** — Health check endpoint.
 
-See `/docs` for interactive API documentation.
+See http://localhost:8000/docs for interactive API documentation.
 
 ## Project Structure
 
@@ -654,8 +647,8 @@ juena/
 │       ├── clients/        # HTTP client library
 │       ├── server/         # FastAPI server
 │       │   ├── service.py  # FastAPI app
-│       │   ├── api_endpoints.py  # API routes
-│       │   ├── agent_registry.py  # Agent factory registry
+│       │   ├── api_endpoints.py  # Agent invoke/stream/restart; uses agent_registry
+│       │   ├── agent_registry.py  # register_agent_factory, get_agent, list_registered_agents
 │       │   └── streaming/  # SSE streaming processors
 │       ├── core/           # Core utilities
 │       │   ├── config.py   # Configuration management
