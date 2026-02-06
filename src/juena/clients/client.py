@@ -268,6 +268,10 @@ class AgentClient:
                 error_msg = "Error: " + parsed.get("content", "Unknown error")
                 return ChatMessage(type="ai", content=error_msg)
             
+            # Thread ID for conversation persistence (sent first in stream; use for follow-up)
+            elif parsed_type == "thread":
+                return {"type": "thread", "thread_id": parsed.get("thread_id", "")}
+            
             # Normalize all token types into unified format
             elif parsed_type.startswith("token"):
                 content = parsed.get("content", "")

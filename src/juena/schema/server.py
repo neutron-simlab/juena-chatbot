@@ -131,7 +131,12 @@ class ChatMessage(BaseModel):
         examples=["call_Jja7J89XsjrOLA5r!MEOW!SL"],
     )
     run_id: Optional[str] = Field(
-        description="Run ID of the message.",
+        description="ID of this single invocation (one turn). Use for feedback/tracing (e.g. record_feedback(run_id=...)).",
+        default=None,
+        examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
+    )
+    thread_id: Optional[str] = Field(
+        description="ID of the conversation (whole chat). Use for follow-up messages to persist context.",
         default=None,
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
     )

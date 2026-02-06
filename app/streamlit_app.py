@@ -1,5 +1,5 @@
 """
-Streamlit UI for Chatbot Template
+Streamlit UI for JüNA Chatbot
 
 This Streamlit application provides a web interface for interacting with
 LangGraph agents through the FastAPI service.
@@ -27,7 +27,7 @@ _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir 
 
 # Page configuration
 st.set_page_config(
-    page_title="Chatbot Template",
+    page_title="JüNA Chatbot",
     page_icon=str(_logo_path) if _logo_path and _logo_path.exists() else None,
     layout="wide",
     initial_sidebar_state="expanded"
