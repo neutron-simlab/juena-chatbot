@@ -93,6 +93,11 @@ async def message_generator(
         yield "data: [DONE]\n\n"
         return
     
+    # Emit thread_id first so clients can use it for follow-up messages (checkpointer persistence)
+    thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
+    if thread_id_used:
+        yield f"data: {json.dumps({'type': 'thread', 'thread_id': thread_id_used})}\n\n"
+    
     try:
         # Create stream event processor
         processor = StreamEventProcessor(
@@ -192,6 +197,9 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
             )
 
         output.run_id = str(run_id)
+        thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
+        if thread_id_used:
+            output.thread_id = thread_id_used
         return output
     except HTTPException:
         raise

@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from langgraph.graph.state import CompiledStateGraph
 from juena.core.llms_providers import create_llm_with_fallback
 from juena.server.agent_registry import register_agent_factory
+from langgraph.checkpoint.memory import InMemorySaver
 
 # Step 1: Define state
 class ReactAgentState(TypedDict):
@@ -87,17 +88,19 @@ async def create_react_agent(
     
     Always be polite and helpful."""
     
-    # Create react-agent using LangChain's create_agent
     react_agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=system_prompt,
+        checkpointer=InMemorySaver(),
         name="react_agent"
     )
     
     # Return (agent_instance, compiled_graph)
     # For simple agents, agent_instance can be None
     return (None, react_agent)
+
+
 
 
 # Step 4: Register agent factory
