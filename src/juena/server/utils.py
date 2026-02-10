@@ -53,16 +53,6 @@ def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
                 type="ai",
                 content=convert_message_content_to_string(message.content),
             )
-            # Initialize custom_data if not already set
-            if not ai_message.custom_data:
-                ai_message.custom_data = {}
-            
-            # Extract custom data if present in message metadata
-            if hasattr(message, "additional_kwargs") and message.additional_kwargs:
-                metadata = message.additional_kwargs
-                if "plot_data" in metadata:
-                    ai_message.custom_data["plot_data"] = metadata["plot_data"]
-            
             if message.tool_calls:
                 ai_message.tool_calls = message.tool_calls
             if message.response_metadata:

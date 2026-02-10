@@ -17,8 +17,6 @@ dependencies = [
     "streamlit>=1.28.0",
     "pydantic[all]>=2.11.2,<3.0.0",
     "python-dotenv>=1.0.0",
-    "markdown>=3.10",
-    "plotly>=6.5.0",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "aiosqlite>=0.22.1",
 ]

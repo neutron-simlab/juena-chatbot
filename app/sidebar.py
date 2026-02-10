@@ -6,15 +6,15 @@ from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
 
-from juena.schema.llm_models import (
-    Provider,
-    OpenAIModelName,
-    BlabladorModelName,
-    get_blablador_model_display_name,
-    get_default_model_for_provider,
+from juena.schema.llm_models import Provider
+from juena.core.llms_providers import (
+    get_available_providers,
+    get_available_models,
+    get_default_model,
+    format_model_name,
 )
-from juena.core.llms_providers import get_available_providers, get_available_models
 from app.chat_storage import get_chat_storage, Chat
+from app.file_management import check_server_health, initialize_client
 
 # Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
@@ -28,11 +28,39 @@ def render_sidebar() -> None:
             st.image(str(_logo_path), width='stretch')
         st.title("JüNA")
         
-        # 1 Connection status indicator
-        if st.session_state.server_connected:
-            st.success("🟢 Server Connected")
-        else:
-            st.error("🔴 Server Disconnected")
+        # 1. Server Configuration
+        st.subheader("Server")
+        
+        # Server URL input
+        server_url = st.text_input(
+            "Server URL",
+            value=st.session_state.server_url,
+            help="URL of the backend API server",
+            key="server_url_input"
+        )
+        
+        # Update server URL if changed
+        if server_url != st.session_state.server_url:
+            st.session_state.server_url = server_url
+            st.session_state._health_checked = False  # Force re-check
+        
+        # Connection status and recheck button
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            if st.session_state.server_connected:
+                st.success("Connected")
+            else:
+                st.error("Disconnected")
+        with col2:
+            if st.button("Check", help="Recheck server connection"):
+                st.session_state.server_connected = check_server_health(st.session_state.server_url)
+                if st.session_state.server_connected:
+                    st.session_state.client = initialize_client(st.session_state.server_url)
+                    if st.session_state.client is None:
+                        st.session_state.server_connected = False
+                else:
+                    st.session_state.client = None
+                st.rerun()
         
         st.divider()
 
@@ -51,11 +79,7 @@ def render_sidebar() -> None:
         # Auto-select first available provider if current selection is unavailable
         if st.session_state.selected_provider not in provider_options:
             st.session_state.selected_provider = provider_options[0]
-            try:
-                provider_enum = Provider(st.session_state.selected_provider)
-                st.session_state.selected_model = get_default_model_for_provider(provider_enum)
-            except ValueError:
-                pass
+            st.session_state.selected_model = get_default_model(st.session_state.selected_provider)
             st.warning(f"⚠️ Previously selected provider is unavailable. Auto-selected: **{st.session_state.selected_provider}**")
         
         selected_provider = st.radio(
@@ -65,45 +89,43 @@ def render_sidebar() -> None:
             help="Select the LLM provider to use"
         )
         
-        # Handle provider change
+        # Handle provider change - use registry to get default model
         if selected_provider != st.session_state.selected_provider:
             st.session_state.selected_provider = selected_provider
-            if selected_provider == Provider.BLABLADOR.value:
-                st.session_state.selected_model = BlabladorModelName.GPT_OSS.value
-            else:
-                st.session_state.selected_model = OpenAIModelName.GPT_4O_MINI.value
+            st.session_state.selected_model = get_default_model(selected_provider)
             st.info(f"Switched to **{selected_provider}**. Next message will use the new model.")
         
-        # Model selector based on provider
+        # Model selector - generic for all providers
         model_options = get_available_models(st.session_state.selected_provider)
         
-        if st.session_state.selected_provider == Provider.OPENAI.value:
-            # Ensure selected model is valid for current provider
-            if st.session_state.selected_model not in model_options:
-                default_model = get_default_model_for_provider(Provider.OPENAI)
-                st.session_state.selected_model = default_model if default_model in model_options else (model_options[0] if model_options else OpenAIModelName.GPT_4O_MINI.value)
-            selected_model = st.selectbox(
-                "Model",
-                options=model_options,
-                index=model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0,
-                help="Select the OpenAI model to use"
-            )
-        else:  # Blablador
-            if st.session_state.selected_model not in model_options:
-                default_model = get_default_model_for_provider(Provider.BLABLADOR)
-                st.session_state.selected_model = default_model if default_model in model_options else (model_options[0] if model_options else BlabladorModelName.GPT_OSS.value)
-            selected_model = st.selectbox(
-                "Model",
-                options=model_options,
-                index=model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0,
-                format_func=get_blablador_model_display_name,
-                help="Select the Blablador model to use",
-            )
+        # Ensure selected model is valid for current provider
+        if st.session_state.selected_model not in model_options:
+            default = get_default_model(st.session_state.selected_provider)
+            st.session_state.selected_model = default if default in model_options else (model_options[0] if model_options else "")
+        
+        # Create model selector with provider-specific formatting
+        selected_model = st.selectbox(
+            "Model",
+            options=model_options,
+            index=model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0,
+            format_func=lambda m: format_model_name(st.session_state.selected_provider, m),
+            help="Select the model to use"
+        )
         
         # Update model if changed
         if selected_model != st.session_state.selected_model:
             st.session_state.selected_model = selected_model
             st.info(f"Model changed to **{selected_model}**. Next message will use the new model.")
+        
+        # System messages toggle
+        show_system = st.checkbox(
+            "Show system messages",
+            value=st.session_state.show_system_messages,
+            help="Display system/debug messages in the chat"
+        )
+        if show_system != st.session_state.show_system_messages:
+            st.session_state.show_system_messages = show_system
+            st.rerun()
 
         st.divider()
 

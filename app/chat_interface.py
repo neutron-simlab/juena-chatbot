@@ -85,6 +85,70 @@ def process_stream_chunk(
     return response_text, received_complete_message
 
 
+def stream_and_display_response(
+    message: str,
+    message_placeholder,
+    should_rerun: bool = True
+) -> None:
+    """
+    Stream a response from the agent and display it.
+    
+    This is a unified helper for both welcome messages and user prompts.
+    
+    Args:
+        message: The message to send to the agent
+        message_placeholder: Streamlit placeholder for streaming display
+        should_rerun: Whether to rerun after streaming completes
+    """
+    response_text = ""
+    received_complete_message = False
+    
+    try:
+        for chunk in st.session_state.client.stream(
+            message=message,
+            thread_id=st.session_state.thread_id,
+            user_id=st.session_state.user_id,
+            provider=st.session_state.selected_provider,
+            model=st.session_state.selected_model,
+            stream_tokens=True,
+        ):
+            response_text, received_complete_message = process_stream_chunk(
+                chunk,
+                st.session_state.client,
+                response_text,
+                received_complete_message,
+                message_placeholder,
+                st.session_state.messages,
+                st.session_state.thread_id
+            )
+        
+        # Finalize message display
+        if response_text and not received_complete_message:
+            message_placeholder.markdown(response_text)
+            ai_message = ChatMessage(type="ai", content=response_text)
+            st.session_state.messages.append(ai_message)
+            save_message_to_storage(st.session_state.thread_id, ai_message)
+        elif not response_text and st.session_state.messages:
+            # If no response text accumulated, check for last message
+            last_msg = st.session_state.messages[-1]
+            if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
+                message_placeholder.markdown(last_msg.content)
+        
+        if should_rerun:
+            st.rerun()
+            
+    except AgentClientError as e:
+        st.error(f"Error communicating with server: {e}")
+        error_message = ChatMessage(type="ai", content=f"Error: {str(e)}")
+        st.session_state.messages.append(error_message)
+        save_message_to_storage(st.session_state.thread_id, error_message)
+    except Exception as e:
+        st.error(f"Unexpected error: {e}")
+        error_message = ChatMessage(type="ai", content=f"Unexpected error: {str(e)}")
+        st.session_state.messages.append(error_message)
+        save_message_to_storage(st.session_state.thread_id, error_message)
+
+
 def render_chat_interface() -> None:
     """Render the main chat interface including header, message history, and input."""
     # Render header
@@ -100,47 +164,7 @@ def render_chat_interface() -> None:
         st.session_state.welcome_initialized = True
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            response_text = ""
-            received_complete_message = False
-
-            try:
-                for chunk in st.session_state.client.stream(
-                    message="Start",
-                    thread_id=st.session_state.thread_id,
-                    user_id=st.session_state.user_id,
-                    provider=st.session_state.selected_provider,
-                    model=st.session_state.selected_model,
-                    stream_tokens=True,
-                ):
-                    # Process chunk using unified helper
-                    response_text, received_complete_message = process_stream_chunk(
-                        chunk,
-                        st.session_state.client,
-                        response_text,
-                        received_complete_message,
-                        message_placeholder,
-                        st.session_state.messages,
-                        st.session_state.thread_id
-                    )
-
-            except AgentClientError as e:
-                st.error(f"Error communicating with server: {e}")
-                error_message = ChatMessage(type="ai", content=f"Error: {str(e)}")
-                st.session_state.messages.append(error_message)
-                save_message_to_storage(st.session_state.thread_id, error_message)
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
-                error_message = ChatMessage(type="ai", content=f"Unexpected error: {str(e)}")
-                st.session_state.messages.append(error_message)
-                save_message_to_storage(st.session_state.thread_id, error_message)
-            finally:
-                # Finalize message if we streamed tokens only
-                if response_text and not received_complete_message:
-                    message_placeholder.markdown(response_text)
-                    ai_message = ChatMessage(type="ai", content=response_text)
-                    st.session_state.messages.append(ai_message)
-                    save_message_to_storage(st.session_state.thread_id, ai_message)
-                st.rerun()
+            stream_and_display_response("Start", message_placeholder)
 
     # Display chat history (filter out system messages unless debug mode is enabled)
     for message in st.session_state.messages:
@@ -160,59 +184,4 @@ def render_chat_interface() -> None:
             # Stream response
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
-                response_text = ""
-                received_complete_message = False
-
-                try:
-                    for chunk in st.session_state.client.stream(
-                        message=prompt,
-                        thread_id=st.session_state.thread_id,
-                        user_id=st.session_state.user_id,
-                        provider=st.session_state.selected_provider,
-                        model=st.session_state.selected_model,
-                        stream_tokens=True
-                    ):
-                        # Process chunk using unified helper
-                        response_text, received_complete_message = process_stream_chunk(
-                            chunk,
-                            st.session_state.client,
-                            response_text,
-                            received_complete_message,
-                            message_placeholder,
-                            st.session_state.messages,
-                            st.session_state.thread_id
-                        )
-
-                    # Finalize message display
-                    # Only add accumulated token text if we didn't receive a complete ChatMessage
-                    if response_text and not received_complete_message:
-                        message_placeholder.markdown(response_text)
-                        ai_message = ChatMessage(type="ai", content=response_text)
-                        st.session_state.messages.append(ai_message)
-                        save_message_to_storage(st.session_state.thread_id, ai_message)
-                    elif not response_text and st.session_state.messages:
-                        # If no response text accumulated, check for last message
-                        last_msg = st.session_state.messages[-1]
-                        if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
-                            message_placeholder.markdown(last_msg.content)
-                    
-                    # After streaming completes, rerun to display any tool messages that were added
-                    # This ensures all messages (including tool messages) are displayed in correct order
-                    st.rerun()
-
-                except AgentClientError as e:
-                    st.error(f"Error communicating with server: {e}")
-                    error_message = ChatMessage(
-                        type="ai",
-                        content=f"Error: {str(e)}"
-                    )
-                    st.session_state.messages.append(error_message)
-                    save_message_to_storage(st.session_state.thread_id, error_message)
-                except Exception as e:
-                    st.error(f"Unexpected error: {e}")
-                    error_message = ChatMessage(
-                        type="ai",
-                        content=f"Unexpected error: {str(e)}"
-                    )
-                    st.session_state.messages.append(error_message)
-                    save_message_to_storage(st.session_state.thread_id, error_message)
+                stream_and_display_response(prompt, message_placeholder)

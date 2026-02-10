@@ -12,9 +12,9 @@ import sys
 # Add parent directory to path to import juena modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from juena.schema.llm_models import Provider, get_default_model_for_provider
+from juena.schema.llm_models import Provider
 from juena.core.config import global_config
-from juena.core.llms_providers import get_available_providers
+from juena.core.llms_providers import get_available_providers, get_default_model
 
 # Import UI modules
 from app.sidebar import render_sidebar
@@ -71,13 +71,8 @@ if "selected_provider" not in st.session_state:
         st.session_state.selected_provider = Provider.OPENAI.value
 
 if "selected_model" not in st.session_state:
-    # Initialize model based on selected provider
-    try:
-        provider_enum = Provider(st.session_state.selected_provider)
-        st.session_state.selected_model = get_default_model_for_provider(provider_enum)
-    except (ValueError, KeyError):
-        # Fallback to OpenAI default if provider not found
-        st.session_state.selected_model = "gpt-4o-mini"
+    # Initialize model based on selected provider using registry
+    st.session_state.selected_model = get_default_model(st.session_state.selected_provider) or "gpt-4o-mini"
 
 # Initialize chat storage
 if "chat_storage" not in st.session_state:
