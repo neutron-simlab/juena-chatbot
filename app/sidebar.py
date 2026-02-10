@@ -153,7 +153,6 @@ def render_sidebar() -> None:
         if st.button("New Thread", help="Start a new conversation thread"):
             st.session_state.thread_id = str(uuid4())
             st.session_state.messages = []
-            st.session_state.current_interrupt = None
             st.rerun()
 
         st.divider()

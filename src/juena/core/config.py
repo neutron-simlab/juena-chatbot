@@ -1,13 +1,25 @@
 import os
+from pathlib import Path
 from typing import Dict
 from dotenv import load_dotenv
 
+
+def _find_repo_root() -> Path:
+    """Resolve repo root by walking up from this file until we find pyproject.toml."""
+    path = Path(__file__).resolve()
+    for parent in path.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    return path.parent  # fallback to config's parent dir
+
 # Load environment variables from .env file
-# Note: load_dotenv() by default does NOT override existing environment variables
-# This means system environment variables take precedence over .env file
+# If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
+# so that "cp env.example .env" in the repo root works without extra configuration.
 path_env = os.getenv("JUENA_ENV_PATH")
+if path_env is None or path_env == "":
+    path_env = str(_find_repo_root() / ".env")
+# Note: load_dotenv() by default does NOT override existing environment variables
 # Use override=False to respect system env vars (default behavior)
-# Set override=True if you want .env to override system env vars
 load_dotenv(path_env, override=False)
 
 class Config:

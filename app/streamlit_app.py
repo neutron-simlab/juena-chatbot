@@ -49,9 +49,6 @@ if "server_url" not in st.session_state:
 if "client" not in st.session_state:
     st.session_state.client = None
 
-if "current_interrupt" not in st.session_state:
-    st.session_state.current_interrupt = None
-
 if "server_connected" not in st.session_state:
     st.session_state.server_connected = False
 

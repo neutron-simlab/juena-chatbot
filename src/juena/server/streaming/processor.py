@@ -13,7 +13,6 @@ from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 
 from juena.core.log import get_logger
-from juena.server.module_tracker import ModuleTracker
 from juena.server.errors import StreamingError
 from juena.server.utils import langchain_to_chat_message
 from juena.server.streaming.handlers import (
@@ -51,9 +50,6 @@ class StreamEventProcessor:
         self.message_processor = MessageProcessor(
             agent, config, run_id, user_input_message, self._streamed_message_ids
         )
-        
-        # Track current module
-        self.current_module: Optional[str] = None
     
     def _parse_stream_event(self, stream_event: Any) -> tuple[str, Any, Optional[str]]:
         """
@@ -76,14 +72,6 @@ class StreamEventProcessor:
             # Without subgraphs: (stream_mode, event)
             stream_mode, event = stream_event
             return stream_mode, event, None
-    
-    async def _update_current_module(self, node_path: Optional[str]) -> None:
-        """Update the current module from state or node path."""
-        self.current_module = await ModuleTracker.get_current_module(
-            self.agent,
-            self.config,
-            node_path
-        )
     
     async def _initialize_streamed_message_ids(self) -> None:
         """
@@ -114,9 +102,6 @@ class StreamEventProcessor:
                 logger.debug("State exists but has no messages, starting with empty streamed_message_ids")
                 return
             
-            # Get current module from state for consistent module detection
-            current_module_from_state = state.values.get('current_module')
-            
             # Generate IDs for all existing messages
             initialized_count = 0
             for message in existing_messages:
@@ -125,23 +110,13 @@ class StreamEventProcessor:
                     if isinstance(message, SystemMessage):
                         continue
                     
-                    # Determine module for this message
-                    # Use state's current_module if available, otherwise try to extract from message metadata
-                    module_for_message = current_module_from_state
-                    if not module_for_message and hasattr(message, 'additional_kwargs'):
-                        module_for_message = message.additional_kwargs.get('module_name')
-                    
                     # Convert to ChatMessage to get consistent format
-                    chat_message = langchain_to_chat_message(
-                        message, 
-                        module_name=module_for_message
-                    )
+                    chat_message = langchain_to_chat_message(message)
                     
                     # Generate message ID using same logic as MessageProcessor
                     message_id = get_message_identifier(
                         message,
                         chat_message,
-                        module_for_message,
                         run_id=self.run_id
                     )
                     
@@ -177,36 +152,21 @@ class StreamEventProcessor:
         try:
             stream_mode, event, node_path = self._parse_stream_event(stream_event)
             
-            # Update current module
-            await self._update_current_module(node_path)
-            
             # Process based on stream mode
             if stream_mode == "updates":
-                messages = self.updates_handler.process_updates(
-                    event,
-                    node_path,
-                    self.current_module
-                )
-                async for sse_string in self.message_processor.process_and_yield_messages(
-                    messages,
-                    node_path,
-                    self.current_module
-                ):
+                messages = self.updates_handler.process_updates(event)
+                async for sse_string in self.message_processor.process_and_yield_messages(messages):
                     yield sse_string
             
             elif stream_mode == "messages":
-                handler = MessagesStreamHandler(self.run_id, self.current_module)
+                handler = MessagesStreamHandler(self.run_id)
                 token_data = handler.process_messages(event, self.user_input_message)
                 if token_data:
                     yield token_data
             
             elif stream_mode == "custom":
                 messages = CustomStreamHandler.process_custom(event)
-                async for sse_string in self.message_processor.process_and_yield_messages(
-                    messages,
-                    node_path,
-                    self.current_module
-                ):
+                async for sse_string in self.message_processor.process_and_yield_messages(messages):
                     yield sse_string
             
         except Exception as e:
