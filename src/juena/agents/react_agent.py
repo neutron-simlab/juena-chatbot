@@ -11,7 +11,7 @@ from langchain_core.tools import tool
 from langgraph.graph.state import CompiledStateGraph
 from juena.core.llms_providers import create_llm_with_fallback
 from juena.server.agent_registry import register_agent_factory
-from langgraph.checkpoint.memory import InMemorySaver
+from juena.server.checkpointer import get_checkpointer
 
 # Step 1: Define state
 class ReactAgentState(TypedDict):
@@ -92,7 +92,7 @@ async def create_react_agent(
         model=llm,
         tools=tools,
         system_prompt=system_prompt,
-        checkpointer=InMemorySaver(),
+        checkpointer=get_checkpointer(),
         name="react_agent"
     )
     

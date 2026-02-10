@@ -19,8 +19,8 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 # Paths and assets
-_assets_dir = Path(__file__).parent / "assets"
-_logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
+# _assets_dir = Path(__file__).parent / "assets"
+# _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
 
 # Default styling color
 DEFAULT_COLOR = "blue"
@@ -28,9 +28,9 @@ DEFAULT_COLOR = "blue"
 
 def render_header_with_logo() -> None:
     """Render a top header with logo if available."""
-    if _logo_path and _logo_path.exists():
-        st.image(str(_logo_path), width=200)
-    st.title("JueNA Chatbot")
+    # if _logo_path and _logo_path.exists():
+    #     st.image(str(_logo_path), width=200)
+    st.title("JüNA Chatbot")
 
 
 def markdown_to_html(markdown_text: str) -> str:

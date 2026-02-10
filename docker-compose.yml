@@ -28,6 +28,8 @@ services:
     volumes:
       # Mount logs directory for persistence
       - chatbot-logs:/data/logs
+      # Mount database directory for SQLite persistence (checkpoints + chat history)
+      - chatbot-db:/data/db
       # Optional: Mount .env file for development (comment out in production)
       - ./.env:/app/.env:ro
     environment:
@@ -59,6 +61,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/data/logs
       - RELOAD=${RELOAD:-false}
+      
+      # Database settings (SQLite)
+      - DB_DIR=/data/db
+      - CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite
+      - CHAT_DB_PATH=/data/db/chats.sqlite
     ports:
       - "8000:8000"  # FastAPI server
       - "8501:8501"  # Streamlit UI
@@ -90,6 +97,9 @@ volumes:
   chatbot-logs:
     driver: local
     name: juena-chatbot-logs
+  chatbot-db:
+    driver: local
+    name: juena-chatbot-db
 
 networks:
   chatbot-network:

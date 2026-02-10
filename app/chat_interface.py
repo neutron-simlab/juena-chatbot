@@ -1,8 +1,5 @@
 """
 Chat interface for Streamlit app.
-
-This module provides functions for handling chat interactions, streaming responses,
-and message display.
 """
 import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
@@ -12,6 +9,23 @@ from app.ui_components import (
     render_message,
     render_streaming_token,
 )
+from app.chat_storage import get_chat_storage
+
+
+def save_message_to_storage(thread_id: str, message: ChatMessage) -> None:
+    """
+    Save a message to SQLite storage.
+    
+    Args:
+        thread_id: Thread ID the message belongs to
+        message: ChatMessage to save
+    """
+    try:
+        storage = get_chat_storage()
+        storage.save_message(thread_id, message)
+    except Exception as e:
+        # Don't block UI if storage fails
+        print(f"Warning: Failed to save message to storage: {e}")
 
 
 def process_stream_chunk(
@@ -20,7 +34,8 @@ def process_stream_chunk(
     response_text: str,
     received_complete_message: bool,
     message_placeholder,
-    messages: list
+    messages: list,
+    thread_id: str
 ) -> tuple[str, bool]:
     """
     Process a single chunk from the stream and update UI.
@@ -32,6 +47,7 @@ def process_stream_chunk(
         received_complete_message: Whether complete message was received
         message_placeholder: Streamlit placeholder
         messages: Message history list
+        thread_id: Thread ID for storage persistence
         
     Returns:
         Tuple of (updated_response_text, updated_complete_flag)
@@ -46,6 +62,8 @@ def process_stream_chunk(
         received_complete_message = True
         # Backend handles deduplication, so we can always append
         messages.append(chunk)
+        # Persist to SQLite storage
+        save_message_to_storage(thread_id, chunk)
         
         if chunk.type == "ai":
             message_placeholder.markdown(chunk.content)
@@ -101,23 +119,27 @@ def render_chat_interface() -> None:
                         response_text,
                         received_complete_message,
                         message_placeholder,
-                        st.session_state.messages
+                        st.session_state.messages,
+                        st.session_state.thread_id
                     )
 
             except AgentClientError as e:
                 st.error(f"Error communicating with server: {e}")
                 error_message = ChatMessage(type="ai", content=f"Error: {str(e)}")
                 st.session_state.messages.append(error_message)
+                save_message_to_storage(st.session_state.thread_id, error_message)
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
                 error_message = ChatMessage(type="ai", content=f"Unexpected error: {str(e)}")
                 st.session_state.messages.append(error_message)
+                save_message_to_storage(st.session_state.thread_id, error_message)
             finally:
                 # Finalize message if we streamed tokens only
                 if response_text and not received_complete_message:
                     message_placeholder.markdown(response_text)
                     ai_message = ChatMessage(type="ai", content=response_text)
                     st.session_state.messages.append(ai_message)
+                    save_message_to_storage(st.session_state.thread_id, ai_message)
                 st.rerun()
 
     # Display chat history (filter out system messages unless debug mode is enabled)
@@ -132,6 +154,7 @@ def render_chat_interface() -> None:
             # Add user message
             user_message = ChatMessage(type="human", content=prompt)
             st.session_state.messages.append(user_message)
+            save_message_to_storage(st.session_state.thread_id, user_message)
             render_message(user_message)
 
             # Stream response
@@ -156,7 +179,8 @@ def render_chat_interface() -> None:
                             response_text,
                             received_complete_message,
                             message_placeholder,
-                            st.session_state.messages
+                            st.session_state.messages,
+                            st.session_state.thread_id
                         )
 
                     # Finalize message display
@@ -165,6 +189,7 @@ def render_chat_interface() -> None:
                         message_placeholder.markdown(response_text)
                         ai_message = ChatMessage(type="ai", content=response_text)
                         st.session_state.messages.append(ai_message)
+                        save_message_to_storage(st.session_state.thread_id, ai_message)
                     elif not response_text and st.session_state.messages:
                         # If no response text accumulated, check for last message
                         last_msg = st.session_state.messages[-1]
@@ -182,6 +207,7 @@ def render_chat_interface() -> None:
                         content=f"Error: {str(e)}"
                     )
                     st.session_state.messages.append(error_message)
+                    save_message_to_storage(st.session_state.thread_id, error_message)
                 except Exception as e:
                     st.error(f"Unexpected error: {e}")
                     error_message = ChatMessage(
@@ -189,3 +215,4 @@ def render_chat_interface() -> None:
                         content=f"Unexpected error: {str(e)}"
                     )
                     st.session_state.messages.append(error_message)
+                    save_message_to_storage(st.session_state.thread_id, error_message)

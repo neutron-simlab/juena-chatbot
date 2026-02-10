@@ -13,6 +13,7 @@ from langchain_core._api import LangChainBetaWarning
 from juena.core.log import get_logger
 from juena.schema.server import HealthStatus
 from juena.server.api_endpoints import router as api_router
+from juena.server.checkpointer import checkpointer_lifespan
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)
@@ -22,10 +23,13 @@ logger.info("Service logging initialized")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
-    Simple lifespan for in-memory only operation.
+    Application lifespan manager for SQLite checkpointer.
+
+    Uses AsyncSqliteSaver so that LangGraph's async methods (astream, aget_state)
+    work correctly.
     """
-    # No database/store initialization needed for in-memory operation
-    yield
+    async with checkpointer_lifespan():
+        yield
 
 
 app = FastAPI(lifespan=lifespan)
