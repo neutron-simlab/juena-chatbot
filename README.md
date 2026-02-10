@@ -79,7 +79,7 @@ Only **registered** `agent_id`s can be used. The API returns 404 with details (i
 
 ## Quick Start
 
-### Option 1: Docker (Recommended)
+Docker is the recommended way to run this application, as it handles SQLite database setup and persistence automatically.
 
 1. **Create `.env` file:**
    ```bash
@@ -102,47 +102,12 @@ Only **registered** `agent_id`s can be used. The API returns 404 with details (i
    docker-compose logs -f
    ```
 
-See the Quick Start above for Docker usage.
-
-### Option 2: Local Development
-
-1. **Install Dependencies:**
+5. **Stop the application:**
    ```bash
-   cd juena-chatbot
-   pip install -e .
+   docker-compose down
    ```
-
-2. **Configure Environment:**
-   Create a `.env` file:
-   ```bash
-   # Required: At least one LLM provider
-   OPENAI_API_KEY=sk-your-openai-api-key-here
-   DEFAULT_PROVIDER=openai
-
-   # OR for Blablador
-   # BLABLADOR_API_KEY=your-blablador-api-key-here
-   # BLABLADOR_BASE_URL=https://api.helmholtz-blablador.fz-juelich.de/v1/
-   # DEFAULT_PROVIDER=blablador
-   ```
-
-3. **Create and register your agent** (see [Registering agents](#registering-agents) above). The template ships with a default agent: `src/juena/agents/react_agent.py` registers `"react_agent"` and sets it as default. In `main.py`, that registration is triggered by:
-   ```python
-   import juena.agents.react_agent
-   ```
-   To use your own agent, implement your factory, call `register_agent_factory(...)` in a module, and import that module in `main.py` instead of (or in addition to) `juena.agents.react_agent`.
-
-4. **Start the Server:**
-   ```bash
-   python main.py
-   ```
-
-5. **Start the UI:**
-   In another terminal:
-   ```bash
-   streamlit run app/streamlit_app.py
-   ```
-
-   Access the UI at `http://localhost:8501`
+   
+   Note: Your chat history and conversation data are stored in Docker volumes and will persist across restarts.
 
 ## Creating Your Own Agent
 
