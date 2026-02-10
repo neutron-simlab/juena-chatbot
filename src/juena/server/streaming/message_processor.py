@@ -7,7 +7,7 @@ deduplication and filtering.
 
 import inspect
 import json
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -15,7 +15,6 @@ from langchain_core.runnables import RunnableConfig
 
 from juena.core.log import get_logger
 from juena.server.utils import langchain_to_chat_message
-from juena.server.module_tracker import ModuleTracker
 from juena.server.errors import MessageProcessingError
 from juena.server.streaming.deduplication import get_message_identifier
 
@@ -82,9 +81,7 @@ class MessageProcessor:
     
     async def process_and_yield_messages(
         self,
-        messages: list[BaseMessage],
-        node_path: Optional[str],
-        current_module: Optional[str]
+        messages: list[BaseMessage]
     ) -> AsyncGenerator[str, None]:
         """
         Process messages and yield SSE-formatted strings.
@@ -94,8 +91,6 @@ class MessageProcessor:
         
         Args:
             messages: List of messages to process
-            node_path: Optional node path for module detection
-            current_module: Current module from state
             
         Yields:
             SSE-formatted data strings
@@ -109,14 +104,8 @@ class MessageProcessor:
                 if isinstance(message, SystemMessage):
                     continue
                 
-                # Determine module for this message
-                module_for_message = ModuleTracker.get_module_for_message(
-                    current_module,
-                    node_path
-                )
-                
                 # Convert to ChatMessage
-                chat_message = langchain_to_chat_message(message, module_name=module_for_message)
+                chat_message = langchain_to_chat_message(message)
                 chat_message.run_id = str(self.run_id)
                 
                 # Filter out duplicate user input messages
@@ -139,8 +128,7 @@ class MessageProcessor:
                 # Deduplication: Check if we've already streamed this message
                 message_id = get_message_identifier(
                     message, 
-                    chat_message, 
-                    module_for_message,
+                    chat_message,
                     run_id=self.run_id
                 )
                 if message_id in self.streamed_message_ids:

@@ -1,13 +1,25 @@
 import os
+from pathlib import Path
 from typing import Dict
 from dotenv import load_dotenv
 
+
+def _find_repo_root() -> Path:
+    """Resolve repo root by walking up from this file until we find pyproject.toml."""
+    path = Path(__file__).resolve()
+    for parent in path.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    return path.parent  # fallback to config's parent dir
+
 # Load environment variables from .env file
-# Note: load_dotenv() by default does NOT override existing environment variables
-# This means system environment variables take precedence over .env file
+# If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
+# so that "cp env.example .env" in the repo root works without extra configuration.
 path_env = os.getenv("JUENA_ENV_PATH")
+if path_env is None or path_env == "":
+    path_env = str(_find_repo_root() / ".env")
+# Note: load_dotenv() by default does NOT override existing environment variables
 # Use override=False to respect system env vars (default behavior)
-# Set override=True if you want .env to override system env vars
 load_dotenv(path_env, override=False)
 
 class Config:
@@ -93,6 +105,20 @@ class Config:
     
     # Application log directory (for date-based log files)
     LOG_DIR = os.getenv("LOG_DIR", "/tmp/logs")
+    
+    # =============================================================================
+    # DATABASE CONFIGURATION (SQLite)
+    # =============================================================================
+    
+    # Directory for SQLite databases (LangGraph checkpoints and chat history)
+    # In Docker: /data/db, locally: <repo_root>/data/db
+    DB_DIR = os.getenv("DB_DIR", "/data/db")
+    
+    # LangGraph checkpoint database path
+    CHECKPOINT_DB_PATH = os.getenv("CHECKPOINT_DB_PATH", os.path.join(DB_DIR, "checkpoints.sqlite"))
+    
+    # Chat history database path (for Streamlit sidebar)
+    CHAT_DB_PATH = os.getenv("CHAT_DB_PATH", os.path.join(DB_DIR, "chats.sqlite"))
     
     @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
@@ -258,6 +284,10 @@ class Config:
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
         
+        # Ensure database directory exists
+        db_dir = Path(cls.DB_DIR)
+        db_dir.mkdir(parents=True, exist_ok=True)
+        
         # Get and display available providers
         available_providers = cls.get_available_providers()
         available_list = [p for p, available in available_providers.items() if available]
@@ -267,6 +297,7 @@ class Config:
         print(f"✅ Default Provider: {cls.DEFAULT_PROVIDER}")
         print(f"✅ Available Providers: {', '.join(available_list) if available_list else 'None'}")
         print(f"✅ LangSmith: {'enabled' if langsmith_enabled else 'disabled'}")
+        print(f"✅ Database directory: {cls.DB_DIR}")
         
         return cls
 

@@ -12,7 +12,6 @@ from langgraph.types import Interrupt
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 
-from juena.server.module_tracker import ModuleTracker
 from juena.server.utils import (
     convert_message_content_to_string,
     remove_tool_calls,
@@ -37,17 +36,13 @@ class UpdatesStreamHandler:
     
     def process_updates(
         self,
-        event: dict[str, Any],
-        node_path: Optional[str],
-        current_module: Optional[str]
+        event: dict[str, Any]
     ) -> list[BaseMessage]:
         """
         Process updates stream events and extract messages.
         
         Args:
             event: The updates event dictionary
-            node_path: Optional node path for module detection
-            current_module: Current module from state
             
         Returns:
             List of messages extracted from updates
@@ -67,10 +62,6 @@ class UpdatesStreamHandler:
             updates = updates or {}
             update_messages = updates.get("messages", [])
             
-            # Filter out internal nodes that don't emit user-facing messages
-            if ModuleTracker.is_internal_node(node):
-                update_messages = []
-            
             new_messages.extend(update_messages)
         
         return new_messages
@@ -81,11 +72,9 @@ class MessagesStreamHandler:
     
     def __init__(
         self,
-        run_id: str,
-        current_module: Optional[str]
+        run_id: str
     ):
         self.run_id = run_id
-        self.current_module = current_module
     
     def process_messages(
         self,
@@ -116,12 +105,8 @@ class MessagesStreamHandler:
         if not content:
             return None
         
-        # Include module info in token type for color coding
-        token_module = self.current_module if self.current_module else 'default'
-        token_type = f"token_{token_module}"
-        
         token_content = convert_message_content_to_string(content)
-        return f"data: {json.dumps({'type': token_type, 'content': token_content})}\n\n"
+        return f"data: {json.dumps({'type': 'token', 'content': token_content})}\n\n"
 
 
 class CustomStreamHandler:

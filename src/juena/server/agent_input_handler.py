@@ -1,9 +1,7 @@
 """
 Agent input preparation utilities for LangGraph agents.
 
-This module provides utilities for preparing input for LangGraph agent execution
-in the react-agent architecture. With react-agent architecture, modules use the
-END pattern (ending when user input is needed) rather than interrupts.
+This module provides utilities for preparing input for LangGraph agent execution.
 LangGraph automatically resumes from checkpoint when invoked with the same thread_id.
 """
 
@@ -21,7 +19,7 @@ logger = get_logger(__name__)
 
 
 class AgentInputHandler:
-    """Handles input preparation for LangGraph agents in react-agent architecture."""
+    """Handles input preparation for LangGraph agents."""
     
     @staticmethod
     async def prepare_input(
@@ -36,7 +34,6 @@ class AgentInputHandler:
         """
         Prepare input for agent invocation.
         
-        With react-agent architecture, modules END when needing user input.
         LangGraph automatically resumes from checkpoint when invoked with same thread_id.
         Provider and model are placed in config.configurable so dynamic model
         middleware can use them without restarting the graph.
@@ -73,8 +70,7 @@ class AgentInputHandler:
         )
         
         # Prepare input - always add as human message
-        # LangGraph will automatically resume from checkpoint if there's an active module
-        # that ended waiting for user input (END pattern)
+        # LangGraph will automatically resume from checkpoint
         input_data = {
             "messages": [HumanMessage(content=user_input)],
             "thread_id": thread_id,
@@ -87,36 +83,3 @@ class AgentInputHandler:
         }
         
         return kwargs, run_id
-    
-    @staticmethod
-    async def has_active_module_waiting(
-        agent: CompiledStateGraph,
-        config: RunnableConfig
-    ) -> bool:
-        """
-        Check if there's an active module waiting for user input (END pattern).
-        
-        With react-agent architecture, modules END when needing user input.
-        This checks if current_active_module is set in state.
-        
-        Args:
-            agent: The compiled state graph
-            config: The runnable config for state access
-            
-        Returns:
-            True if there's an active module waiting, False otherwise
-        """
-        try:
-            state: Any = await agent.aget_state(config=config)
-            
-            if not state or not state.values:
-                return False
-            
-            # Check for current_active_module in state
-            current_active_module = state.values.get('current_active_module')
-            return current_active_module is not None
-            
-        except Exception as e:
-            logger.error(f"Failed to access agent state: {e}", exc_info=True)
-            # Return False on error - will start fresh
-            return False

@@ -20,6 +20,7 @@ from juena.core.llms_providers import get_available_providers
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
 from app.file_management import check_server_health, initialize_client
+from app.chat_storage import get_chat_storage, Chat
 
 # Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
@@ -49,9 +50,6 @@ if "server_url" not in st.session_state:
 if "client" not in st.session_state:
     st.session_state.client = None
 
-if "current_interrupt" not in st.session_state:
-    st.session_state.current_interrupt = None
-
 if "server_connected" not in st.session_state:
     st.session_state.server_connected = False
 
@@ -80,6 +78,25 @@ if "selected_model" not in st.session_state:
     except (ValueError, KeyError):
         # Fallback to OpenAI default if provider not found
         st.session_state.selected_model = "gpt-4o-mini"
+
+# Initialize chat storage
+if "chat_storage" not in st.session_state:
+    st.session_state.chat_storage = get_chat_storage()
+
+# Create or load current chat on first run
+if "chat_initialized" not in st.session_state:
+    storage = st.session_state.chat_storage
+    
+    # Create a new chat entry for the current thread
+    existing_chat = storage.get_chat(st.session_state.thread_id)
+    if existing_chat is None:
+        new_chat = Chat(thread_id=st.session_state.thread_id)
+        storage.upsert_chat(new_chat)
+    else:
+        # Load existing messages if resuming a chat
+        st.session_state.messages = storage.load_messages(st.session_state.thread_id)
+    
+    st.session_state.chat_initialized = True
 
 # Auto-connect to server on app load (only check once per session)
 if not hasattr(st.session_state, '_health_checked'):

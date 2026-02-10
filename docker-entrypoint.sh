@@ -15,6 +15,9 @@ trap cleanup SIGTERM SIGINT EXIT
 mkdir -p /data/logs
 echo "✅ Log directory: /data/logs"
 
+mkdir -p /data/db
+echo "✅ Database directory: /data/db"
+
 # Activate virtual environment if it exists (for uv)
 if [ -f "/app/.venv/bin/activate" ]; then
     echo "Activating virtual environment..."

@@ -35,14 +35,11 @@ def convert_message_content_to_string(content: str | list[str | dict]) -> str:
     return "".join(text)
 
 
-def langchain_to_chat_message(message: BaseMessage, module_name: str = None) -> ChatMessage:
+def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
     """Create a ChatMessage from a LangChain message.
-    
-    Adds metadata and includes module information for color coding.
     
     Args:
         message: LangChain message to convert
-        module_name: Optional module name for color coding
     """
     match message:
         case HumanMessage():
@@ -60,20 +57,11 @@ def langchain_to_chat_message(message: BaseMessage, module_name: str = None) -> 
             if not ai_message.custom_data:
                 ai_message.custom_data = {}
             
-            # Check for module info in message metadata first (has priority)
-            message_module_name = None
+            # Extract custom data if present in message metadata
             if hasattr(message, "additional_kwargs") and message.additional_kwargs:
                 metadata = message.additional_kwargs
-                if "module_name" in metadata:
-                    message_module_name = metadata["module_name"]
-                # Extract custom data if present
                 if "plot_data" in metadata:
                     ai_message.custom_data["plot_data"] = metadata["plot_data"]
-            
-            # Use module_name from message metadata if available, otherwise use provided parameter
-            final_module_name = message_module_name or module_name
-            if final_module_name:
-                ai_message.custom_data["module_name"] = final_module_name
             
             if message.tool_calls:
                 ai_message.tool_calls = message.tool_calls
@@ -86,20 +74,6 @@ def langchain_to_chat_message(message: BaseMessage, module_name: str = None) -> 
                 content=convert_message_content_to_string(message.content),
                 tool_call_id=message.tool_call_id,
             )
-            # Initialize custom_data if not already set
-            if not tool_message.custom_data:
-                tool_message.custom_data = {}
-            
-            # Add module information if provided
-            if module_name:
-                tool_message.custom_data["module_name"] = module_name
-            
-            # Check for module info in message metadata
-            if hasattr(message, "additional_kwargs") and message.additional_kwargs:
-                metadata = message.additional_kwargs
-                if "module_name" in metadata and not module_name:
-                    tool_message.custom_data["module_name"] = metadata["module_name"]
-            
             return tool_message
         case SystemMessage():
             system_message = ChatMessage(

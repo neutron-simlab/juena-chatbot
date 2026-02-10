@@ -16,6 +16,7 @@ This repository provides a bare-minimum infrastructure for building LangGraph-ba
 - **Multiple LLM Providers**: Support for OpenAI and Blablador (OpenAI-compatible)
 - **Real-time Streaming**: Server-Sent Events (SSE) for live conversation streaming
 - **Thread Management**: Multi-turn conversation support with thread persistence
+- **Long Memory Persistence**: Local SQLite storage for LangGraph checkpoints and chat history
 - **Pluggable Architecture**: Easy to customize and extend
 
 ## Architecture
@@ -608,7 +609,9 @@ asyncio.run(test())
 
 **State not persisting:**
 - Ensure you're using the same `thread_id` across requests
-- Check that your graph is compiled with a checkpointer: `graph.compile(checkpointer=InMemorySaver())`
+- Check that your graph is compiled with a checkpointer (the template uses `SqliteSaver` by default)
+- Verify the database directory exists and is writable (`DB_DIR` in config)
+- In Docker, ensure the `chatbot-db` volume is mounted correctly
 
 **Streaming not working:**
 - Verify your LangGraph supports streaming (react-agents from `create_agent` do)
@@ -644,7 +647,8 @@ juena/
 ├── app/                    # Streamlit web interface
 │   ├── streamlit_app.py    # Main Streamlit app
 │   ├── chat_interface.py   # Chat UI logic
-│   ├── sidebar.py          # Sidebar configuration
+│   ├── sidebar.py          # Sidebar with chat history
+│   ├── chat_storage.py     # SQLite chat storage
 │   └── ui_components.py    # Reusable UI components
 ├── src/
 │   └── juena/
@@ -655,6 +659,7 @@ juena/
 │       │   ├── service.py  # FastAPI app
 │       │   ├── api_endpoints.py  # Agent invoke/stream/restart; uses agent_registry
 │       │   ├── agent_registry.py  # register_agent_factory, get_agent, list_registered_agents
+│       │   ├── checkpointer.py  # SQLite checkpointer singleton
 │       │   └── streaming/  # SSE streaming processors
 │       ├── core/           # Core utilities
 │       │   ├── config.py   # Configuration management
@@ -687,6 +692,11 @@ SERVER_HOST=0.0.0.0
 SERVER_PORT=8000
 UI_PORT=8501
 
+# Optional: Database configuration (SQLite)
+DB_DIR=/data/db                          # Database directory
+CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite  # LangGraph checkpoints
+CHAT_DB_PATH=/data/db/chats.sqlite       # Chat history for sidebar
+
 # Optional: LangSmith tracing
 LANGSMITH_TRACING=false
 LANGSMITH_API_KEY=your-key-here
@@ -718,9 +728,47 @@ Modify Streamlit components in `app/`:
 - `sidebar.py` - Configuration sidebar
 - `chat_interface.py` - Chat logic and streaming
 
-### Using Persistent Storage
+### SQLite Local Persistence
 
-Replace `InMemorySaver` with a persistent checkpointer:
+The template includes built-in SQLite persistence for both LangGraph checkpoints and chat history. This enables:
+
+- **Conversation continuity**: Resume conversations after server restarts
+- **Chat history sidebar**: View and switch between past conversations
+- **User-defined titles**: Users can rename their conversations using the edit button
+
+#### How It Works
+
+1. **LangGraph Checkpoints**: Agent state is persisted using `langgraph-checkpoint-sqlite`. The `AsyncSqliteSaver` is initialized once at startup and shared across all agents.
+
+2. **Chat History**: A separate SQLite database stores chat metadata (titles) and messages for the Streamlit sidebar.
+
+#### Configuration
+
+Configure paths in your `.env` file:
+
+```bash
+# Database directory (default: /data/db in Docker, or local path)
+DB_DIR=/data/db
+
+# LangGraph checkpoint database (for conversation state)
+CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite
+
+# Chat history database (for sidebar)
+CHAT_DB_PATH=/data/db/chats.sqlite
+```
+
+#### Docker Volume
+
+In Docker, the database is stored in a persistent volume:
+
+```yaml
+volumes:
+  - chatbot-db:/data/db  # SQLite databases persist across restarts
+```
+
+#### Using PostgreSQL Instead
+
+For production deployments, you can switch to PostgreSQL:
 
 ```python
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -728,6 +776,8 @@ from langgraph.checkpoint.postgres import PostgresSaver
 checkpointer = PostgresSaver.from_conn_string("postgresql://...")
 compiled = graph.compile(checkpointer=checkpointer)
 ```
+
+Update `src/juena/server/checkpointer.py` to use `PostgresSaver` instead of `SqliteSaver`.
 
 ## License
 
