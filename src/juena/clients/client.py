@@ -8,8 +8,6 @@ import httpx
 from juena.schema.llm_models import Provider
 from juena.schema.server import (
     ChatMessage,
-    Feedback,
-    ServiceMetadata,
     StreamInput,
     UserInput,
 )
@@ -27,7 +25,6 @@ class AgentClient:
         base_url: str = "http://0.0.0.0",
         agent: str | None = None,
         timeout: float | None = None,
-        get_info: bool = True,
     ) -> None:
         """
         Initialize the client.
@@ -36,18 +33,11 @@ class AgentClient:
             base_url (str): The base URL of the agent service.
             agent (str): The name of the default agent to use.
             timeout (float, optional): The timeout for requests.
-            get_info (bool, optional): Whether to fetch agent information on init.
-                Default: True
         """
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
         self.timeout = timeout
-        self.info: ServiceMetadata | None = None
-        self.agent: str | None = None
-        if get_info:
-            self.retrieve_info()
-        if agent:
-            self.update_agent(agent)
+        self.agent: str | None = agent
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -56,30 +46,8 @@ class AgentClient:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
 
-    def retrieve_info(self) -> None:
-        try:
-            response = httpx.get(
-                f"{self.base_url}/info",
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise AgentClientError(f"Error getting service info: {e}")
-
-        self.info = ServiceMetadata.model_validate(response.json())
-        if not self.agent or self.agent not in [a.key for a in self.info.agents]:
-            self.agent = self.info.default_agent
-
-    def update_agent(self, agent: str, verify: bool = True) -> None:
-        if verify:
-            if not self.info:
-                self.retrieve_info()
-            agent_keys = [a.key for a in self.info.agents]  # type: ignore[union-attr]
-            if agent not in agent_keys:
-                raise AgentClientError(
-                    f"Agent {agent} not found in available agents: {', '.join(agent_keys)}"
-                )
+    def update_agent(self, agent: str) -> None:
+        """Update the agent to use for requests."""
         self.agent = agent
 
     async def ainvoke(
@@ -365,31 +333,6 @@ class AgentClient:
                             yield parsed
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")
-
-    async def acreate_feedback(
-        self, run_id: str, key: str, score: float, kwargs: dict[str, Any] = {}
-    ) -> None:
-        """
-        Create a feedback record for a run.
-
-        This is a simple wrapper for the LangSmith create_feedback API, so the
-        credentials can be stored and managed in the service rather than the client.
-        See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
-        """
-        request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/feedback",
-                    json=request.model_dump(),
-                    headers=self._headers,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                response.json()
-            except httpx.HTTPError as e:
-                raise AgentClientError(f"Error: {e}")
-
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """

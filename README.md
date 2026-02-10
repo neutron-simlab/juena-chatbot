@@ -635,6 +635,44 @@ juena/
 └── README.md              # This file
 ```
 
+## Adding New LLM Providers
+
+The template uses a provider registry pattern for easy extensibility. To add a new provider:
+
+1. **Add provider to the enum** in `src/juena/schema/llm_models.py`:
+   ```python
+   class Provider(StrEnum):
+       OPENAI = "openai"
+       BLABLADOR = "blablador"
+       MY_PROVIDER = "my_provider"  # Add your provider
+   ```
+
+2. **Register the provider** in `src/juena/core/llms_providers.py`:
+   ```python
+   def _check_my_provider_available() -> bool:
+       config = _get_config()
+       return bool(config.MY_PROVIDER_API_KEY)
+
+   def _create_my_provider_llm(model: str, temperature: float, kwargs: dict) -> ChatOpenAI:
+       config = _get_config()
+       return ChatOpenAI(
+           api_key=config.MY_PROVIDER_API_KEY,
+           base_url=config.MY_PROVIDER_BASE_URL,
+           model=model,
+           temperature=temperature,
+       )
+
+   register_provider(
+       name="my_provider",
+       check_available=_check_my_provider_available,
+       create_llm=_create_my_provider_llm,
+       get_available_models=lambda: ["model-a", "model-b"],
+       get_default_model=lambda: "model-a",
+   )
+   ```
+
+3. **Add configuration** to `src/juena/core/config.py` and `env.example`.
+
 ## Configuration
 
 ### Environment Variables
@@ -692,6 +730,14 @@ Modify Streamlit components in `app/`:
 - `ui_components.py` - Message rendering, badges, colors
 - `sidebar.py` - Configuration sidebar
 - `chat_interface.py` - Chat logic and streaming
+
+#### UI Features
+
+The sidebar includes:
+- **Server Configuration**: Configure the backend server URL and test the connection
+- **LLM Selection**: Choose provider and model from available options
+- **System Messages Toggle**: Show/hide system messages in the chat
+- **Chat History**: View, rename, and delete past conversations
 
 ### SQLite Local Persistence
 

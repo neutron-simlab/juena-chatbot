@@ -7,6 +7,8 @@ your agent factory with the template.
 import os
 import uvicorn
 
+from juena.core.config import global_config
+
 # Import agent registration (registers react_agent as default)
 import juena.agents.react_agent
 
@@ -18,8 +20,8 @@ def main():
     
     uvicorn.run(
         "juena.server.service:app",  # Import string for reload support
-        host="0.0.0.0",
-        port=8000,
+        host=global_config.SERVER_HOST,
+        port=global_config.SERVER_PORT,
         reload=reload,  # Enable auto-reload only if RELOAD=true
         log_level="info"
     )

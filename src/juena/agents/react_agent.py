@@ -33,25 +33,7 @@ def get_weather(location: str) -> str:
     return f"Weather in {location}: Sunny, 72°F"
 
 
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression.
-    
-    Args:
-        expression: A mathematical expression (e.g., "2 + 2", "10 * 5")
-        
-    Returns:
-        The result of the calculation
-    """
-    try:
-        # Simple evaluation (in production, use a safer method)
-        result = eval(expression)
-        return f"Result: {result}"
-    except Exception as e:
-        return f"Error calculating: {str(e)}"
-
-
-tools = [get_weather, calculate]
+tools = [get_weather]
 
 
 # Step 3: Create agent factory

@@ -121,111 +121,34 @@ class Config:
     CHAT_DB_PATH = os.getenv("CHAT_DB_PATH", os.path.join(DB_DIR, "chats.sqlite"))
     
     @classmethod
+    def _check_provider_available(cls, provider_name: str) -> bool:
+        """
+        Check if a provider is available based on config attributes.
+        
+        This is used during initialization before the registry is available.
+        """
+        provider_name = provider_name.lower()
+        if provider_name == 'openai':
+            return bool(cls.OPENAI_API_KEY and cls.OPENAI_API_KEY.strip())
+        elif provider_name == 'blablador':
+            return bool(
+                cls.BLABLADOR_API_KEY and cls.BLABLADOR_API_KEY.strip() and
+                cls.BLABLADOR_BASE_URL and cls.BLABLADOR_BASE_URL.strip()
+            )
+        return False
+    
+    @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
         """
         Get dictionary of available providers (have API keys configured).
         
-        This method checks all providers defined in the Provider enum dynamically,
-        making it future-proof for new providers (Gemini, Anthropic, etc.).
+        Uses direct config checks to avoid circular imports during initialization.
         
         Returns:
             Dict mapping provider names to availability status
         """
-        # Import Provider enum here to avoid circular import
         from juena.schema.llm_models import Provider
-        
-        providers = {}
-        
-        # Iterate over all Provider enum values (future-proof)
-        for provider in Provider:
-            provider_name = provider.value
-            
-            # Check provider-specific configuration requirements
-            if provider_name == 'openai':
-                # Check that API key exists and is not empty/whitespace
-                has_api_key = bool(cls.OPENAI_API_KEY and cls.OPENAI_API_KEY.strip())
-                providers[provider_name] = has_api_key
-            elif provider_name == 'blablador':
-                # Check that both API key and base URL exist and are not empty/whitespace
-                has_config = bool(
-                    cls.BLABLADOR_API_KEY and cls.BLABLADOR_API_KEY.strip() and
-                    cls.BLABLADOR_BASE_URL and cls.BLABLADOR_BASE_URL.strip()
-                )
-                providers[provider_name] = has_config
-            # Future providers can be added here:
-            # elif provider_name == 'anthropic':
-            #     providers[provider_name] = bool(cls.ANTHROPIC_API_KEY)
-            # elif provider_name == 'gemini':
-            #     providers[provider_name] = bool(cls.GEMINI_API_KEY)
-            else:
-                # Unknown provider - mark as unavailable
-                providers[provider_name] = False
-        
-        return providers
-    
-    @classmethod
-    def get_available_models(cls, provider: str) -> list[str]:
-        """
-        Get list of available models for a provider based on .env configuration.
-        
-        If provider-specific AVAILABLE_MODELS env var is set, returns that filtered list.
-        Otherwise, returns all models from the enum for that provider.
-        
-        Args:
-            provider: Provider name ('openai' or 'blablador')
-            
-        Returns:
-            List of available model names for the provider
-        """
-        # Import here to avoid circular import
-        from juena.schema.llm_models import (
-            Provider,
-            OpenAIModelName,
-            BlabladorModelName,
-            get_models_for_provider
-        )
-        
-        try:
-            provider_enum = Provider(provider.lower())
-        except ValueError:
-            return []
-        
-        # Get all models for this provider from enum
-        all_models = get_models_for_provider(provider_enum)
-        
-        # Check if there's a filter configured in .env
-        if provider.lower() == 'openai' and cls.OPENAI_AVAILABLE_MODELS:
-            # Parse comma-separated list and filter
-            configured_models = [
-                model.strip() 
-                for model in cls.OPENAI_AVAILABLE_MODELS.split(',')
-                if model.strip()
-            ]
-            # Only return models that are both in enum and in configured list
-            available_models = [
-                model for model in all_models 
-                if model in configured_models
-            ]
-            # If filter results in empty list, fall back to all models
-            return available_models if available_models else all_models
-        
-        elif provider.lower() == 'blablador' and cls.BLABLADOR_AVAILABLE_MODELS:
-            # Parse comma-separated list and filter
-            configured_models = [
-                model.strip() 
-                for model in cls.BLABLADOR_AVAILABLE_MODELS.split(',')
-                if model.strip()
-            ]
-            # Only return models that are both in enum and in configured list
-            available_models = [
-                model for model in all_models 
-                if model in configured_models
-            ]
-            # If filter results in empty list, fall back to all models
-            return available_models if available_models else all_models
-        
-        # No filter configured, return all models from enum
-        return all_models
+        return {p.value: cls._check_provider_available(p.value) for p in Provider}
     
     @classmethod
     def validate_required(cls):

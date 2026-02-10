@@ -1,20 +1,202 @@
 """
 LLM Provider Factory and Utilities
-Centralized LLM provider management for OpenAI, Blablador, and future providers
-"""
-from typing import Dict
-from langchain_openai import ChatOpenAI
-from juena.schema.llm_models import BlabladorModelName, Provider
+Centralized LLM provider management using a registry pattern for easy extensibility.
 
+To add a new provider:
+1. Add the provider to the Provider enum in llm_models.py
+2. Register the provider using register_provider() with:
+   - check_available: Function to check if provider is configured
+   - create_llm: Function to create the LLM instance
+   - get_models: Function to get available models (optional)
+   - get_default_model: Function to get the default model (optional)
+   - format_model_name: Function to format model names for UI (optional)
+"""
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional
+from langchain_openai import ChatOpenAI
+from juena.schema.llm_models import (
+    Provider,
+    get_models_for_provider,
+    get_default_model_for_provider,
+)
 
 def _get_config():
-    """Lazy import of global_config to avoid circular import"""
-    from juena.core.config import global_config
-    return global_config
+    """Lazy import of Config class to avoid circular import"""
+    from juena.core.config import Config
+    return Config
 
+
+# =============================================================================
+# PROVIDER REGISTRY
+# =============================================================================
+
+@dataclass
+class ProviderConfig:
+    """Configuration for a registered provider."""
+    name: str
+    check_available: Callable[[], bool]
+    create_llm: Callable[[str, float, dict], ChatOpenAI]
+    get_available_models: Optional[Callable[[], List[str]]] = None
+    get_default_model: Optional[Callable[[], str]] = None
+    format_model_name: Optional[Callable[[str], str]] = None
+
+
+class ProviderRegistry:
+    """Registry for LLM providers. Provides a single point of configuration."""
+    
+    _providers: Dict[str, ProviderConfig] = {}
+    
+    @classmethod
+    def register(
+        cls,
+        name: str,
+        check_available: Callable[[], bool],
+        create_llm: Callable[[str, float, dict], ChatOpenAI],
+        get_available_models: Optional[Callable[[], List[str]]] = None,
+        get_default_model: Optional[Callable[[], str]] = None,
+        format_model_name: Optional[Callable[[str], str]] = None,
+    ) -> None:
+        """Register a new provider."""
+        cls._providers[name.lower()] = ProviderConfig(
+            name=name.lower(),
+            check_available=check_available,
+            create_llm=create_llm,
+            get_available_models=get_available_models,
+            get_default_model=get_default_model,
+            format_model_name=format_model_name,
+        )
+    
+    @classmethod
+    def get(cls, name: str) -> Optional[ProviderConfig]:
+        """Get a provider config by name."""
+        return cls._providers.get(name.lower())
+    
+    @classmethod
+    def get_all(cls) -> Dict[str, ProviderConfig]:
+        """Get all registered providers."""
+        return cls._providers.copy()
+    
+    @classmethod
+    def is_available(cls, name: str) -> bool:
+        """Check if a provider is available (configured with valid credentials)."""
+        provider = cls.get(name)
+        if provider is None:
+            return False
+        try:
+            return provider.check_available()
+        except Exception:
+            return False
+    
+    @classmethod
+    def get_available_providers(cls) -> Dict[str, bool]:
+        """Get dictionary of all providers and their availability status."""
+        return {name: cls.is_available(name) for name in cls._providers}
+
+
+# Convenience function for registration
+def register_provider(
+    name: str,
+    check_available: Callable[[], bool],
+    create_llm: Callable[[str, float, dict], ChatOpenAI],
+    get_available_models: Optional[Callable[[], List[str]]] = None,
+    get_default_model: Optional[Callable[[], str]] = None,
+    format_model_name: Optional[Callable[[str], str]] = None,
+) -> None:
+    """Register a new LLM provider."""
+    ProviderRegistry.register(
+        name=name,
+        check_available=check_available,
+        create_llm=create_llm,
+        get_available_models=get_available_models,
+        get_default_model=get_default_model,
+        format_model_name=format_model_name,
+    )
+
+
+# =============================================================================
+# BUILT-IN PROVIDER IMPLEMENTATIONS
+# =============================================================================
+
+def _check_openai_available() -> bool:
+    """Check if OpenAI is configured."""
+    config = _get_config()
+    return bool(config.OPENAI_API_KEY and config.OPENAI_API_KEY.strip())
+
+
+def _create_openai_llm(model: str, temperature: float, kwargs: dict) -> ChatOpenAI:
+    """Create OpenAI LLM instance."""
+    config = _get_config()
+    llm_kwargs = {
+        'api_key': config.OPENAI_API_KEY,
+        'model': model,
+        'temperature': temperature,
+        'max_tokens': kwargs.get('max_tokens', config.MAX_TOKENS),
+        'timeout': kwargs.get('timeout', config.TIMEOUT_SECONDS),
+        'max_retries': kwargs.get('max_retries', config.MAX_RETRIES),
+    }
+    if 'streaming' in kwargs:
+        llm_kwargs['streaming'] = kwargs['streaming']
+    return ChatOpenAI(**llm_kwargs)
+
+
+def _check_blablador_available() -> bool:
+    """Check if Blablador is configured."""
+    config = _get_config()
+    return bool(
+        config.BLABLADOR_API_KEY and config.BLABLADOR_API_KEY.strip() and
+        config.BLABLADOR_BASE_URL and config.BLABLADOR_BASE_URL.strip()
+    )
+
+
+def _create_blablador_llm(model: str, temperature: float, kwargs: dict) -> ChatOpenAI:
+    """Create Blablador LLM instance (OpenAI-compatible API)."""
+    config = _get_config()
+    timeout = kwargs.get('timeout', config.TIMEOUT_SECONDS)
+    llm_kwargs = {
+        'api_key': config.BLABLADOR_API_KEY,
+        'base_url': config.BLABLADOR_BASE_URL,
+        'model': model,
+        'temperature': temperature,
+        'max_tokens': kwargs.get('max_tokens', config.MAX_TOKENS),
+        'timeout': timeout,
+        'max_retries': kwargs.get('max_retries', config.MAX_RETRIES),
+    }
+    if 'streaming' in kwargs:
+        llm_kwargs['streaming'] = kwargs['streaming']
+    return ChatOpenAI(**llm_kwargs)
+
+
+def _get_blablador_display_name(model_id: str) -> str:
+    """Format Blablador model name for UI display."""
+    from juena.schema.llm_models import get_blablador_model_display_name
+    return get_blablador_model_display_name(model_id)
+
+
+# Register built-in providers
+register_provider(
+    name="openai",
+    check_available=_check_openai_available,
+    create_llm=_create_openai_llm,
+    get_available_models=lambda: get_models_for_provider(Provider.OPENAI),
+    get_default_model=lambda: get_default_model_for_provider(Provider.OPENAI),
+)
+
+register_provider(
+    name="blablador",
+    check_available=_check_blablador_available,
+    create_llm=_create_blablador_llm,
+    get_available_models=lambda: get_models_for_provider(Provider.BLABLADOR),
+    get_default_model=lambda: get_default_model_for_provider(Provider.BLABLADOR),
+    format_model_name=_get_blablador_display_name,
+)
+
+
+# =============================================================================
+# LLM FACTORY (uses registry)
+# =============================================================================
 
 class LLMFactory:
-    """Factory for creating LLM instances with different providers"""
+    """Factory for creating LLM instances using the provider registry."""
     
     @staticmethod
     def create_llm(
@@ -24,10 +206,10 @@ class LLMFactory:
         **kwargs
     ) -> ChatOpenAI:
         """
-        Create LLM instance based on provider
+        Create LLM instance based on provider.
         
         Args:
-            provider: 'openai' and 'blablador'
+            provider: Provider name (e.g., 'openai', 'blablador')
             model: Model name (provider-specific)
             temperature: Temperature setting
             **kwargs: Provider-specific parameters
@@ -35,59 +217,16 @@ class LLMFactory:
         Returns:
             ChatOpenAI instance
         """
-        
-        # Use config defaults if not specified
         config = _get_config()
-        provider = provider or config.DEFAULT_PROVIDER
+        provider = (provider or config.DEFAULT_PROVIDER).lower()
         model = model or config.DEFAULT_MODEL
         
-        if provider.lower() == 'openai':
-            return LLMFactory._create_openai(model, temperature, **kwargs)
-        elif provider.lower() == 'blablador':
-            return LLMFactory._create_blablador(model, temperature, **kwargs)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}. Available: openai and blablador")
-    
-    @staticmethod
-    def _create_openai(model: str, temperature: float, **kwargs) -> ChatOpenAI:
-        """Create OpenAI LLM"""
-        config = _get_config()
-        llm_kwargs = {
-            'api_key': config.OPENAI_API_KEY,
-            'model': model,
-            'temperature': temperature,
-            'max_tokens': kwargs.get('max_tokens', config.MAX_TOKENS),
-            'timeout': kwargs.get('timeout', config.TIMEOUT_SECONDS),
-            'max_retries': kwargs.get('max_retries', config.MAX_RETRIES),
-        }
-        # Only set streaming if explicitly provided in kwargs
-        if 'streaming' in kwargs:
-            llm_kwargs['streaming'] = kwargs['streaming']
-        return ChatOpenAI(**llm_kwargs)
-    
-    @staticmethod
-    def _create_blablador(model: str, temperature: float, **kwargs) -> ChatOpenAI:
-        """Create Blablador LLM (uses ChatOpenAI with custom base_url)
+        provider_config = ProviderRegistry.get(provider)
+        if provider_config is None:
+            available = list(ProviderRegistry.get_all().keys())
+            raise ValueError(f"Unknown provider: {provider}. Available: {', '.join(available)}")
         
-        Note: timeout is properly configured here to prevent hanging.
-        The timeout value (default 60s from config.TIMEOUT_SECONDS) 
-        is passed to ChatOpenAI which will raise a timeout error if exceeded.
-        """
-        config = _get_config()
-        timeout = kwargs.get('timeout', config.TIMEOUT_SECONDS)
-        llm_kwargs = {
-            'api_key': config.BLABLADOR_API_KEY,
-            'base_url': config.BLABLADOR_BASE_URL,
-            'model': model,
-            'temperature': temperature,
-            'max_tokens': kwargs.get('max_tokens', config.MAX_TOKENS),
-            'timeout': timeout,  # Timeout in seconds - prevents hanging on Blablador
-            'max_retries': kwargs.get('max_retries', config.MAX_RETRIES),
-        }
-        # Only set streaming if explicitly provided in kwargs
-        if 'streaming' in kwargs:
-            llm_kwargs['streaming'] = kwargs['streaming']
-        return ChatOpenAI(**llm_kwargs)
+        return provider_config.create_llm(model, temperature, kwargs)
 
 
 def create_llm_with_fallback(
@@ -141,44 +280,81 @@ def create_llm_with_fallback(
 
 def get_available_providers() -> Dict[str, bool]:
     """
-    Check which providers are available (have API keys configured)
+    Check which providers are available (have API keys configured).
     
-    This function delegates to Config.get_available_providers() to avoid code duplication.
-    The actual implementation is in config.py to avoid circular imports.
+    Uses the provider registry to check availability.
     
     Returns:
         Dict mapping provider names to availability status
     """
-    config = _get_config()
-    return config.get_available_providers()
+    return ProviderRegistry.get_available_providers()
 
 
-def get_available_models(provider: str) -> list[str]:
+def get_available_models(provider: str) -> List[str]:
     """
     Get list of available models for a provider based on .env configuration.
     
     If provider-specific AVAILABLE_MODELS env var is set, returns that filtered list.
-    Otherwise, returns all models from the enum for that provider.
+    Otherwise, returns all models from the registry/enum for that provider.
     
     Args:
-        provider: Provider name ('openai' or 'blablador')
+        provider: Provider name (e.g., 'openai', 'blablador')
         
     Returns:
         List of available model names for the provider
     """
     config = _get_config()
-    return config.get_available_models(provider)
+    provider_config = ProviderRegistry.get(provider.lower())
+    
+    # Get all models from registry if available, otherwise from enum
+    if provider_config and provider_config.get_available_models:
+        all_models = provider_config.get_available_models()
+    else:
+        all_models = []
+    
+    # Check for env-based filter
+    env_filter = None
+    if provider.lower() == 'openai':
+        env_filter = config.OPENAI_AVAILABLE_MODELS
+    elif provider.lower() == 'blablador':
+        env_filter = config.BLABLADOR_AVAILABLE_MODELS
+    
+    if env_filter:
+        configured_models = [m.strip() for m in env_filter.split(',') if m.strip()]
+        filtered = [m for m in all_models if m in configured_models]
+        return filtered if filtered else all_models
+    
+    return all_models
 
 
-def validate_provider_config(provider: str) -> bool:
+def get_default_model(provider: str) -> str:
     """
-    Validate that a specific provider is properly configured
+    Get the default model for a provider.
     
     Args:
-        provider: Provider name to validate
-    
+        provider: Provider name
+        
     Returns:
-        True if provider is configured and available
+        Default model name for the provider
     """
-    available = get_available_providers()
-    return available.get(provider.lower(), False)
+    provider_config = ProviderRegistry.get(provider.lower())
+    if provider_config and provider_config.get_default_model:
+        return provider_config.get_default_model()
+    return ""
+
+
+def format_model_name(provider: str, model: str) -> str:
+    """
+    Format a model name for UI display.
+    
+    Args:
+        provider: Provider name
+        model: Model ID
+        
+    Returns:
+        Formatted model name for display
+    """
+    provider_config = ProviderRegistry.get(provider.lower())
+    if provider_config and provider_config.format_model_name:
+        return provider_config.format_model_name(model)
+    return model

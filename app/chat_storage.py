@@ -274,38 +274,6 @@ class ChatStorage:
             # Messages are deleted via CASCADE
             cursor.execute("DELETE FROM chats WHERE thread_id = ?", (thread_id,))
             conn.commit()
-    
-    def get_unsummarized_chats(self, min_messages: int = 5) -> list[Chat]:
-        """
-        Get chats that need summarization.
-        
-        Args:
-            min_messages: Minimum user messages required for summarization
-            
-        Returns:
-            List of Chat objects that need summarization
-        """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM chats 
-                WHERE is_summarized = 0 AND user_message_count >= ?
-                ORDER BY updated_at DESC
-            """, (min_messages,))
-            rows = cursor.fetchall()
-            
-            return [
-                Chat(
-                    thread_id=row["thread_id"],
-                    title=row["title"],
-                    summary=row["summary"],
-                    created_at=datetime.fromisoformat(row["created_at"]),
-                    updated_at=datetime.fromisoformat(row["updated_at"]),
-                    is_summarized=bool(row["is_summarized"]),
-                    user_message_count=row["user_message_count"]
-                )
-                for row in rows
-            ]
 
 
 # Singleton instance
