@@ -23,13 +23,13 @@ This repository provides a bare-minimum infrastructure for building LangGraph-ba
 
 ```
 ┌─────────────┐
-│  Streamlit  │  Web UI (Port 8501)
+│  Streamlit  │  Web UI (Port 9501)
 │     UI      │
 └──────┬──────┘
        │ HTTP/SSE
        ▼
 ┌─────────────┐
-│   FastAPI   │  API Server (Port 8000)
+│   FastAPI   │  API Server (Port 8080)
 │   Server    │
 └──────┬──────┘
        │
@@ -93,9 +93,9 @@ Docker is the recommended way to run this application, as it handles SQLite data
    ```
 
 3. **Access the application:**
-   - API Server: http://localhost:8000
-   - Web UI: http://localhost:8501
-   - API Docs: http://localhost:8000/docs
+   - API Server: http://localhost:8080
+   - Web UI: http://localhost:9501
+   - API Docs: http://localhost:8080/docs
 
 4. **View logs:**
    ```bash
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000
+        port=8080
     )
 ```
 
@@ -692,8 +692,8 @@ DEFAULT_MODEL=gpt-4o-mini
 
 # Optional: Server configuration
 SERVER_HOST=0.0.0.0
-SERVER_PORT=8000
-UI_PORT=8501
+SERVER_PORT=8080
+UI_PORT=9501
 
 # Optional: Database configuration (SQLite)
 DB_DIR=/data/db                          # Database directory

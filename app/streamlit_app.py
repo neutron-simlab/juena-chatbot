@@ -45,7 +45,7 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid4())
 
 if "server_url" not in st.session_state:
-    st.session_state.server_url = "http://localhost:8000"
+    st.session_state.server_url = "http://localhost:8080"
 
 if "client" not in st.session_state:
     st.session_state.client = None

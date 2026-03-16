@@ -40,9 +40,9 @@ RUN chmod +x docker-entrypoint.sh
 RUN mkdir -p /data/logs
 
 # Expose ports
-# 8000: FastAPI server
-# 8501: Streamlit UI
-EXPOSE 8000 8501
+# 8080: FastAPI server
+# 9501: Streamlit UI
+EXPOSE 8080 9501
 
 # Set entrypoint
 ENTRYPOINT ["./docker-entrypoint.sh"]

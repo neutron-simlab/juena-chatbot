@@ -93,8 +93,8 @@ class Config:
     # =============================================================================
     
     SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-    SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
-    UI_PORT = int(os.getenv("UI_PORT", "8501"))
+    SERVER_PORT = int(os.getenv("SERVER_PORT", "8080"))
+    UI_PORT = int(os.getenv("UI_PORT", "9501"))
     
     # =============================================================================
     # ENVIRONMENT

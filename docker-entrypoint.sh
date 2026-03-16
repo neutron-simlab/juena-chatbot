@@ -36,9 +36,9 @@ else
 fi
 
 # Start Streamlit in the background
-echo "Starting Streamlit UI on port 8501..."
+echo "Starting Streamlit UI on port 9501..."
 streamlit run app/streamlit_app.py \
-    --server.port=8501 \
+    --server.port=9501 \
     --server.address=0.0.0.0 \
     --server.headless=true \
     --server.enableCORS=false \
@@ -57,5 +57,5 @@ else
 fi
 
 # Start FastAPI in the foreground (so we see logs and it's the main process)
-echo "Starting FastAPI server on port 8000..."
+echo "Starting FastAPI server on port 8080..."
 python main.py
