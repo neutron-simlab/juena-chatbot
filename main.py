@@ -9,8 +9,9 @@ import uvicorn
 
 from juena.core.config import global_config
 
-# Import agent registration (registers react_agent as default)
-import juena.agents.react_agent
+# Import agent registrations – each module self-registers via register_agent_factory
+import juena.agents.react_agent       # default agent
+import juena.agents.code_chat_agent   # code-chat agent (hybrid search over repos)
 
 
 def main():

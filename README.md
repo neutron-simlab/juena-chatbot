@@ -696,9 +696,9 @@ SERVER_PORT=8080
 UI_PORT=9501
 
 # Optional: Database configuration (SQLite)
-DB_DIR=/data/db                          # Database directory
-CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite  # LangGraph checkpoints
-CHAT_DB_PATH=/data/db/chats.sqlite       # Chat history for sidebar
+DB_DIR=./data/db                         # Local default; Docker overrides this to /data/db
+CHECKPOINT_DB_PATH=./data/db/checkpoints.sqlite  # LangGraph checkpoints
+CHAT_DB_PATH=./data/db/chats.sqlite      # Chat history for sidebar
 
 # Optional: LangSmith tracing
 LANGSMITH_TRACING=false
@@ -758,14 +758,15 @@ The template includes built-in SQLite persistence for both LangGraph checkpoints
 Configure paths in your `.env` file:
 
 ```bash
-# Database directory (default: /data/db in Docker, or local path)
-DB_DIR=/data/db
+# Local default: <repo_root>/data/db
+# Docker default: /data/db
+DB_DIR=./data/db
 
 # LangGraph checkpoint database (for conversation state)
-CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite
+CHECKPOINT_DB_PATH=./data/db/checkpoints.sqlite
 
 # Chat history database (for sidebar)
-CHAT_DB_PATH=/data/db/chats.sqlite
+CHAT_DB_PATH=./data/db/chats.sqlite
 ```
 
 #### Docker Volume

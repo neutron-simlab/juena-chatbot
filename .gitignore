@@ -57,3 +57,6 @@ htmlcov/
 # Project specific
 *.db
 *.sqlite
+
+# data 
+data/

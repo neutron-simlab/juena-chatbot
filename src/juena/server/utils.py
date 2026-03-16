@@ -64,6 +64,10 @@ def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
                 content=convert_message_content_to_string(message.content),
                 tool_call_id=message.tool_call_id,
             )
+            tool_message.custom_data = {
+                "tool_kind": "regular_tool_result",
+                "display_mode": "collapsed_by_default",
+            }
             return tool_message
         case SystemMessage():
             system_message = ChatMessage(

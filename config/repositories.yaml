@@ -1,0 +1,68 @@
+# Repository registry for the code-chat agent.
+# Each entry describes one software project that the agent can search and answer
+# questions about.  Add new software by appending another block.
+#
+# Fields:
+#   id            – unique slug (used in API + vector store namespace)
+#   name          – human-readable display name
+#   description   – short blurb shown to users / used in tool descriptions
+#   source.url    – Git clone URL (HTTPS or SSH)
+#   source.branch – branch to track (default: main)
+#   include_globs – file patterns to index (default: all text files)
+#   exclude_globs – patterns to skip
+#   max_file_bytes– skip files larger than this (default: 512 KB)
+#   chunk_size    – characters per chunk for embedding (default: 1500)
+#   chunk_overlap – overlap between chunks (default: 200)
+#   docs_paths    – paths inside the repo treated as documentation
+
+repositories:
+  - id: chat-langchain
+    name: Chat LangChain
+    description: "Documentation assistant built with LangGraph, LangChain Agents, and middleware."
+    source:
+      url: https://github.com/langchain-ai/chat-langchain.git
+      branch: master
+    include_globs:
+      - "**/*.py"
+      - "**/*.md"
+      - "**/*.json"
+      - "**/*.yaml"
+      - "**/*.yml"
+      - "**/*.toml"
+      - "**/*.txt"
+      - "**/*.rst"
+    exclude_globs:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/__pycache__/**"
+      - "**/.venv/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/*.egg-info/**"
+    max_file_bytes: 524288          # 512 KB
+    chunk_size: 1500
+    chunk_overlap: 200
+    docs_paths:
+      - "README.md"
+      - "docs/"
+
+  # ── Example: index another remote repo ────────────────────────────
+  - id: langgraph
+    name: LangGraph
+    description: "Framework for building stateful, multi-actor LLM applications."
+    source:
+      url: https://github.com/langchain-ai/langgraph.git
+      branch: main
+    include_globs:
+      - "**/*.py"
+      - "**/*.md"
+    exclude_globs:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/__pycache__/**"
+    max_file_bytes: 524288
+    chunk_size: 1500
+    chunk_overlap: 200
+    docs_paths:
+      - "README.md"
+      - "docs/"

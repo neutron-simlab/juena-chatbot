@@ -30,6 +30,9 @@ services:
       - chatbot-logs:/data/logs
       # Mount database directory for SQLite persistence (checkpoints + chat history)
       - chatbot-db:/data/db
+      # Persist cloned repos and vector index across restarts
+      - chatbot-repos:/data/repos
+      - chatbot-vector-index:/data/vector_index
       # Optional: Mount .env file for development (comment out in production)
       - ./.env:/app/.env:ro
     environment:
@@ -66,6 +69,10 @@ services:
       - DB_DIR=/data/db
       - CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite
       - CHAT_DB_PATH=/data/db/chats.sqlite
+      
+      # Code-chat agent settings
+      - REPO_CACHE_DIR=/data/repos
+      - VECTOR_INDEX_DIR=/data/vector_index
     ports:
       - "8080:8080"  # FastAPI server
       - "9501:9501"  # Streamlit UI
@@ -100,6 +107,12 @@ volumes:
   chatbot-db:
     driver: local
     name: juena-chatbot-db
+  chatbot-repos:
+    driver: local
+    name: juena-chatbot-repos
+  chatbot-vector-index:
+    driver: local
+    name: juena-chatbot-vector-index
 
 networks:
   chatbot-network:

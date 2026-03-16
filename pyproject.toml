@@ -19,6 +19,10 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "aiosqlite>=0.22.1",
+    "pyyaml>=6.0",
+    "chromadb>=0.6.0",
+    "langchain-community>=0.3.0",
+    "langchain-text-splitters>=0.3.0",
 ]
 
 [project.optional-dependencies]

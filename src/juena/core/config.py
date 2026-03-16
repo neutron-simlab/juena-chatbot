@@ -12,6 +12,11 @@ def _find_repo_root() -> Path:
             return parent
     return path.parent  # fallback to config's parent dir
 
+
+def _repo_data_dir(*parts: str) -> Path:
+    """Build a path inside the repository-local data directory."""
+    return _find_repo_root() / "data" / Path(*parts)
+
 # Load environment variables from .env file
 # If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
 # so that "cp env.example .env" in the repo root works without extra configuration.
@@ -111,8 +116,9 @@ class Config:
     # =============================================================================
     
     # Directory for SQLite databases (LangGraph checkpoints and chat history)
-    # In Docker: /data/db, locally: <repo_root>/data/db
-    DB_DIR = os.getenv("DB_DIR", "/data/db")
+    # In Docker this is typically overridden to /data/db via environment.
+    # For local runs, default to a writable path inside the repository.
+    DB_DIR = os.getenv("DB_DIR", str(_repo_data_dir("db")))
     
     # LangGraph checkpoint database path
     CHECKPOINT_DB_PATH = os.getenv("CHECKPOINT_DB_PATH", os.path.join(DB_DIR, "checkpoints.sqlite"))
@@ -207,9 +213,13 @@ class Config:
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
         
-        # Ensure database directory exists
+        # Ensure database directories exist for both the base DB dir and the
+        # concrete SQLite file paths. This keeps local runs working even when
+        # callers override the individual database file locations.
         db_dir = Path(cls.DB_DIR)
         db_dir.mkdir(parents=True, exist_ok=True)
+        Path(cls.CHECKPOINT_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(cls.CHAT_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
         
         # Get and display available providers
         available_providers = cls.get_available_providers()

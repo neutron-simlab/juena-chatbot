@@ -5,6 +5,9 @@ import streamlit as st
 from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
+import textwrap
+
+import httpx
 
 from juena.schema.llm_models import Provider
 from juena.core.llms_providers import (
@@ -16,9 +19,32 @@ from juena.core.llms_providers import (
 from app.chat_storage import get_chat_storage, Chat
 from app.file_management import check_server_health, initialize_client
 
+
+def _fetch_agents(server_url: str) -> tuple[list[str], str]:
+    """Fetch registered agents from the backend.  Returns (agent_list, default)."""
+    try:
+        resp = httpx.get(f"{server_url}/agents", timeout=3.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("agents", []), data.get("default", "")
+    except Exception:
+        return [], ""
+
 # Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
 _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
+
+
+def _format_chat_history_title(chat: Chat, max_chars: int = 22) -> tuple[str, str]:
+    """Return a compact single-line label and the full title for tooltips."""
+    title = " ".join(chat.title.split()).strip()
+    if not title or title == "New Chat":
+        title = f"Chat {chat.thread_id[:8]}"
+
+    if len(title) <= max_chars:
+        return title, title
+
+    return textwrap.shorten(title, width=max_chars, placeholder="..."), title
 
 
 def render_sidebar() -> None:
@@ -64,7 +90,42 @@ def render_sidebar() -> None:
         
         st.divider()
 
-        # 2. LLM Configuration
+        # 2. Agent Selection
+        st.subheader("Agent")
+
+        if st.session_state.server_connected:
+            agent_list, default_agent = _fetch_agents(st.session_state.server_url)
+        else:
+            agent_list, default_agent = [], ""
+
+        if not agent_list:
+            agent_list = [st.session_state.get("selected_agent", "react_agent")]
+
+        if "selected_agent" not in st.session_state:
+            st.session_state.selected_agent = default_agent or agent_list[0]
+
+        if st.session_state.selected_agent not in agent_list:
+            st.session_state.selected_agent = agent_list[0]
+
+        selected_agent = st.selectbox(
+            "Active agent",
+            options=agent_list,
+            index=agent_list.index(st.session_state.selected_agent),
+            help="Choose the LangGraph agent to handle messages",
+        )
+
+        if selected_agent != st.session_state.selected_agent:
+            st.session_state.selected_agent = selected_agent
+            if st.session_state.client:
+                st.session_state.client.update_agent(selected_agent)
+            st.info(f"Switched to agent **{selected_agent}**.")
+
+        if st.session_state.client and st.session_state.client.agent != st.session_state.selected_agent:
+            st.session_state.client.update_agent(st.session_state.selected_agent)
+
+        st.divider()
+
+        # 3. LLM Configuration
         st.subheader("LLM Configuration")
         
         # Get available providers dynamically
@@ -129,7 +190,7 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        # 3. Chat History
+        # 4. Chat History
         st.subheader("Chat History")
         
         # New Chat button
@@ -190,22 +251,20 @@ def render_sidebar() -> None:
                 # Highlight current chat
                 is_current = chat.thread_id == st.session_state.thread_id
                 
-                # Format display text
-                display_title = chat.title if chat.title != "New Chat" else f"Chat {chat.thread_id[:8]}..."
-                if len(display_title) > 25:
-                    display_title = display_title[:22] + "..."
+                display_title, full_title = _format_chat_history_title(chat)
                 
-                # Layout: [select button] [write button] [delete button]
-                select_col, write_col, delete_col = st.columns([5, 1, 1])
+                # Give the title most of the width and collapse actions into a popover.
+                select_col, actions_col = st.columns([6, 1], gap="small")
                 
                 with select_col:
                     button_type = "primary" if is_current else "secondary"
                     if st.button(
-                        f"{'💬 ' if is_current else ''}{display_title}",
+                        display_title,
                         key=f"chat_{chat.thread_id}",
                         use_container_width=True,
                         type=button_type,
-                        disabled=is_current
+                        disabled=is_current,
+                        help=full_title,
                     ):
                         # Switch to selected chat
                         st.session_state.thread_id = chat.thread_id
@@ -213,37 +272,41 @@ def render_sidebar() -> None:
                         st.session_state.welcome_initialized = True  # Don't show welcome for loaded chats
                         st.rerun()
                 
-                with write_col:
-                    if st.button(
-                        "✏️",
-                        key=f"write_{chat.thread_id}",
-                        help="Rename this conversation"
-                    ):
-                        st.session_state.editing_thread_id = chat.thread_id
-                        st.rerun()
-                
-                with delete_col:
-                    if st.button(
-                        "🗑",
-                        key=f"delete_{chat.thread_id}",
-                        help="Delete this conversation"
-                    ):
-                        # Delete chat from storage
-                        storage.delete_chat(chat.thread_id)
-                        
-                        # If deleting the current chat, reset to a fresh thread
+                with actions_col:
+                    with st.popover("⋯"):
+                        st.caption(full_title)
                         if is_current:
-                            st.session_state.thread_id = str(uuid4())
-                            st.session_state.messages = []
-                            st.session_state.welcome_initialized = False
-                        st.rerun()
+                            st.caption("Current conversation")
+
+                        if st.button(
+                            "Rename",
+                            key=f"write_{chat.thread_id}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.editing_thread_id = chat.thread_id
+                            st.rerun()
+
+                        if st.button(
+                            "Delete",
+                            key=f"delete_{chat.thread_id}",
+                            use_container_width=True,
+                        ):
+                            # Delete chat from storage
+                            storage.delete_chat(chat.thread_id)
+
+                            # If deleting the current chat, reset to a fresh thread
+                            if is_current:
+                                st.session_state.thread_id = str(uuid4())
+                                st.session_state.messages = []
+                                st.session_state.welcome_initialized = False
+                            st.rerun()
         else:
             st.caption("No saved conversations yet.")
         
         st.divider()
 
        
-        # 4. Information
+        # 5. Information
         st.subheader("About")
         st.info(
             """

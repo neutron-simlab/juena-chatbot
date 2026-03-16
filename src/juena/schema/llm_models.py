@@ -23,15 +23,17 @@ class OpenAIModelName(StrEnum):
 
 class BlabladorModelName(StrEnum):
     """Blablador model names (OpenAI-compatible API).
-    Only GPT-OSS-120b is offered in the UI (alias: GPT-OSS-120b).
+    The UI offers the curated Blablador model options used by this project.
     """
 
     GPT_OSS = "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025"
+    MINIMAX_M25 = "1 - MiniMax-M2.5 - our best model as of February, 2026"
 
 
 # Display name shown in UI for Blablador models (model id -> label)
 BLABLADOR_MODEL_DISPLAY_NAMES: Dict[str, str] = {
     BlabladorModelName.GPT_OSS.value: "GPT-OSS-120b",
+    BlabladorModelName.MINIMAX_M25.value: "MiniMax-M2.5",
 }
 
 

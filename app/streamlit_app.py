@@ -74,6 +74,9 @@ if "selected_model" not in st.session_state:
     # Initialize model based on selected provider using registry
     st.session_state.selected_model = get_default_model(st.session_state.selected_provider) or "gpt-4o-mini"
 
+if "selected_agent" not in st.session_state:
+    st.session_state.selected_agent = "react_agent"
+
 # Initialize chat storage
 if "chat_storage" not in st.session_state:
     st.session_state.chat_storage = get_chat_storage()
@@ -97,7 +100,10 @@ if "chat_initialized" not in st.session_state:
 if not hasattr(st.session_state, '_health_checked'):
     st.session_state.server_connected = check_server_health(st.session_state.server_url)
     if st.session_state.server_connected:
-        st.session_state.client = initialize_client(st.session_state.server_url)
+        st.session_state.client = initialize_client(
+            st.session_state.server_url,
+            agent_id=st.session_state.selected_agent,
+        )
         if st.session_state.client is None:
             st.session_state.server_connected = False
     else:

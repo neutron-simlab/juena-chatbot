@@ -22,9 +22,10 @@ WORKDIR /app
 # Copy dependency files first for better layer caching
 COPY pyproject.toml README.md ./
 
-# Copy source code
+# Copy source code and config
 COPY src/ ./src/
 COPY app/ ./app/
+COPY config/ ./config/
 COPY main.py ./
 
 # Copy entrypoint script
@@ -36,8 +37,8 @@ RUN uv pip install --system -e .
 # Make entrypoint script executable
 RUN chmod +x docker-entrypoint.sh
 
-# Create directories for logs and data
-RUN mkdir -p /data/logs
+# Create directories for logs, data, and vector index
+RUN mkdir -p /data/logs /data/repos /data/vector_index
 
 # Expose ports
 # 8080: FastAPI server

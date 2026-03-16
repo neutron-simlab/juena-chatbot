@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
-from juena.server.agent_registry import DEFAULT_AGENT, get_agent, restart_agent
+from juena.server.agent_registry import DEFAULT_AGENT, get_agent, restart_agent, list_registered_agents
 from juena.schema.server import ChatMessage, StreamInput, UserInput
 from juena.core.config import global_config
 from juena.schema.llm_models import Provider, get_default_model_for_provider
@@ -280,3 +280,25 @@ async def restart(
     except Exception as e:
         logger.error(f"Failed to restart agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to restart agent: {str(e)}")
+
+
+# ------------------------------------------------------------------
+# Discovery endpoints
+# ------------------------------------------------------------------
+
+@router.get("/agents")
+async def get_agents() -> dict[str, Any]:
+    """Return all registered agents and the current default."""
+    return {
+        "agents": list_registered_agents(),
+        "default": DEFAULT_AGENT,
+    }
+
+
+@router.get("/repositories")
+async def get_repositories() -> list[dict[str, Any]]:
+    """Return metadata for all configured software repositories."""
+    from juena.retrieval.repo_manager import RepoManager
+
+    mgr = RepoManager()
+    return mgr.list_repo_metadata()

@@ -5,6 +5,7 @@ import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
 from juena.schema.server import ChatMessage
 from app.ui_components import (
+    finalize_streaming_message,
     render_header_with_logo,
     render_message,
     render_streaming_token,
@@ -66,7 +67,7 @@ def process_stream_chunk(
         save_message_to_storage(thread_id, chunk)
         
         if chunk.type == "ai":
-            message_placeholder.markdown(chunk.content)
+            finalize_streaming_message(message_placeholder, chunk.content)
             response_text = chunk.content
         
         return response_text, received_complete_message
@@ -124,7 +125,7 @@ def stream_and_display_response(
         
         # Finalize message display
         if response_text and not received_complete_message:
-            message_placeholder.markdown(response_text)
+            finalize_streaming_message(message_placeholder, response_text)
             ai_message = ChatMessage(type="ai", content=response_text)
             st.session_state.messages.append(ai_message)
             save_message_to_storage(st.session_state.thread_id, ai_message)
@@ -132,7 +133,7 @@ def stream_and_display_response(
             # If no response text accumulated, check for last message
             last_msg = st.session_state.messages[-1]
             if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
-                message_placeholder.markdown(last_msg.content)
+                finalize_streaming_message(message_placeholder, last_msg.content)
         
         if should_rerun:
             st.rerun()
