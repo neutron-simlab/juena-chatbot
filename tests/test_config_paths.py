@@ -20,7 +20,14 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
     env["FALLBACK_PROVIDER"] = "openai"
     env["LANGSMITH_TRACING"] = "false"
 
-    for key in ("DB_DIR", "CHECKPOINT_DB_PATH", "CHAT_DB_PATH"):
+    for key in (
+        "DB_DIR",
+        "CHECKPOINT_DB_PATH",
+        "CHAT_DB_PATH",
+        "CONTEXT7_API_KEY",
+        "CONTEXT7_MCP_URL",
+        "CONTEXT7_TIMEOUT_SECONDS",
+    ):
         env.pop(key, None)
 
     if extra_env:
@@ -38,6 +45,9 @@ print("JSON::" + json.dumps({
     "db_dir_exists": Path(global_config.DB_DIR).is_dir(),
     "checkpoint_parent_exists": Path(global_config.CHECKPOINT_DB_PATH).parent.is_dir(),
     "chat_parent_exists": Path(global_config.CHAT_DB_PATH).parent.is_dir(),
+    "context7_api_key": global_config.CONTEXT7_API_KEY,
+    "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
+    "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
 }))
 """
     result = subprocess.run(
@@ -82,3 +92,11 @@ def test_overridden_db_file_parents_are_created(tmp_path: Path) -> None:
     assert snapshot["chat_db_path"] == str(chat_db)
     assert snapshot["checkpoint_parent_exists"] is True
     assert snapshot["chat_parent_exists"] is True
+
+
+def test_context7_defaults_are_parsed() -> None:
+    snapshot = _load_config_snapshot()
+
+    assert snapshot["context7_api_key"] is None
+    assert snapshot["context7_mcp_url"] == "https://mcp.context7.com/mcp"
+    assert snapshot["context7_timeout_seconds"] == 30

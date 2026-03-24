@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,7 +18,9 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     fake_graph = object()
     created: dict[str, Any] = {"create_deep_agent_calls": 0}
     llm = object()
-    tools = [object(), object(), object()]
+    local_tools = [object(), object(), object()]
+    context7_tools = [object(), object()]
+    context7_runtime = SimpleNamespace(client=object(), tools=context7_tools)
 
     class StubRepoManager:
         def __init__(self) -> None:
@@ -42,7 +45,13 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
 
     def fake_build_code_chat_tools(repo_manager: StubRepoManager, vector_index: StubVectorIndex) -> list[object]:
         created["tool_builder_args"] = (repo_manager, vector_index)
-        return tools
+        return local_tools
+
+    async def fake_load_optional_context7_tools() -> object:
+        created["load_optional_context7_tools_calls"] = (
+            created.get("load_optional_context7_tools_calls", 0) + 1
+        )
+        return context7_runtime
 
     class FakeSubagentGraph:
         def invoke(
@@ -88,6 +97,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", fake_create_llm_with_fallback)
     monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
     monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
+    monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
     monkeypatch.setattr(code_chat_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(code_chat_agent, "create_deep_agent", fake_create_deep_agent)
     monkeypatch.setattr(code_chat_agent, "get_checkpointer", lambda: object())
@@ -95,6 +105,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     try:
         graph_one = await agent_registry.get_agent("code_chat_agent", provider="openai", model="gpt-test")
         graph_two = await agent_registry.get_agent("code_chat_agent", provider="openai", model="gpt-test")
+        agent_resources, _ = agent_registry._agent_registry["code_chat_agent"]
     finally:
         agent_registry._agent_registry.pop("code_chat_agent", None)
         if existing is not None:
@@ -102,14 +113,18 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
 
     assert graph_one is fake_graph
     assert graph_two is fake_graph
+    assert isinstance(agent_resources, code_chat_agent.CodeChatAgentResources)
+    assert agent_resources.app is fake_graph
+    assert agent_resources.context7_runtime is context7_runtime
     validated_repo_manager, validated_vector_index = created["validate_bootstrap_ready"]
     assert validated_repo_manager is validated_vector_index.repo_manager
     assert created["tool_builder_args"] == (validated_repo_manager, validated_vector_index)
+    assert created["load_optional_context7_tools_calls"] == 1
     assert created["create_deep_agent_calls"] == 1
     assert created["subagent_agent_kwargs"]["model"] is llm
-    assert created["subagent_agent_kwargs"]["tools"] is tools
+    assert created["subagent_agent_kwargs"]["tools"] == [*local_tools, *context7_tools]
     assert created["deep_agent_kwargs"]["model"] is llm
-    assert created["deep_agent_kwargs"]["tools"] == []
+    assert created["deep_agent_kwargs"]["tools"] == context7_tools
     backend_factory = created["deep_agent_kwargs"]["backend"]
     assert callable(backend_factory)
     composite_backend = backend_factory(type("Runtime", (), {"state": {}})())
@@ -122,6 +137,64 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert repo_subagent["runnable"] is fake_subagent_graph
     repo_subagent["runnable"].invoke({"messages": []})
     assert created["llm_args"] == ("openai", "gpt-test")
+
+
+@pytest.mark.asyncio
+async def test_code_chat_agent_without_context7_uses_only_local_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = agent_registry._agent_registry.pop("code_chat_agent", None)
+    fake_graph = object()
+    created: dict[str, Any] = {}
+    llm = object()
+    local_tools = [object(), object()]
+
+    class StubRepoManager:
+        def __init__(self) -> None:
+            self.cache_dir = Path("/tmp/test-repos")
+
+    class StubVectorIndex:
+        def __init__(self, repo_manager: StubRepoManager) -> None:
+            self.repo_manager = repo_manager
+
+    async def fake_load_optional_context7_tools() -> None:
+        return None
+
+    def fake_build_code_chat_tools(*args: Any, **kwargs: Any) -> list[object]:
+        return local_tools
+
+    def fake_create_agent(**kwargs: Any) -> object:
+        created["subagent_agent_kwargs"] = kwargs
+        return object()
+
+    def fake_create_deep_agent(**kwargs: Any) -> object:
+        created["deep_agent_kwargs"] = kwargs
+        return fake_graph
+
+    monkeypatch.setattr(code_chat_agent, "RepoManager", StubRepoManager)
+    monkeypatch.setattr(code_chat_agent, "RepoVectorIndex", StubVectorIndex)
+    monkeypatch.setattr(code_chat_agent, "validate_bootstrap_ready", lambda *args: None)
+    monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", lambda **kwargs: llm)
+    monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
+    monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
+    monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
+    monkeypatch.setattr(code_chat_agent, "create_agent", fake_create_agent)
+    monkeypatch.setattr(code_chat_agent, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(code_chat_agent, "get_checkpointer", lambda: object())
+
+    try:
+        graph = await agent_registry.get_agent("code_chat_agent", provider="openai", model="gpt-test")
+        agent_resources, _ = agent_registry._agent_registry["code_chat_agent"]
+    finally:
+        agent_registry._agent_registry.pop("code_chat_agent", None)
+        if existing is not None:
+            agent_registry._agent_registry["code_chat_agent"] = existing
+
+    assert graph is fake_graph
+    assert isinstance(agent_resources, code_chat_agent.CodeChatAgentResources)
+    assert agent_resources.context7_runtime is None
+    assert created["subagent_agent_kwargs"]["tools"] == local_tools
+    assert created["deep_agent_kwargs"]["tools"] == []
 
 
 def test_read_only_filesystem_backend_rejects_writes(tmp_path: Path) -> None:

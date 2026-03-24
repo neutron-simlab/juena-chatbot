@@ -54,7 +54,7 @@ class AgentInputHandler:
         thread_id = thread_id or str(uuid4())
         user_id = user_id or str(uuid4())
         provider, model = _normalize_provider_model(provider, model)
-        
+
         configurable: dict[str, Any] = {
             "thread_id": thread_id,
             "user_id": user_id,

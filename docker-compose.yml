@@ -52,6 +52,11 @@ services:
       - MAX_TOKENS=${MAX_TOKENS:-10000}
       - TIMEOUT_SECONDS=${TIMEOUT_SECONDS:-60}
       - MAX_RETRIES=${MAX_RETRIES:-3}
+
+      # Context7 MCP (optional)
+      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY:-}
+      - CONTEXT7_MCP_URL=${CONTEXT7_MCP_URL:-https://mcp.context7.com/mcp}
+      - CONTEXT7_TIMEOUT_SECONDS=${CONTEXT7_TIMEOUT_SECONDS:-30}
       
       # LangSmith Tracing (optional)
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
