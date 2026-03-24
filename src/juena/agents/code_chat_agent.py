@@ -5,6 +5,7 @@ hybrid (keyword + embedding) search over local code and documentation.
 Registration happens at import time via ``register_agent_factory``.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -27,6 +28,7 @@ from juena.retrieval.repo_manager import RepoManager
 from juena.retrieval.vector_index import RepoVectorIndex
 from juena.server.agent_registry import register_agent_factory
 from juena.server.checkpointer import get_checkpointer
+from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
 from juena.tools.repo_search import (
     build_code_chat_tools,
 )
@@ -47,16 +49,28 @@ You are a code-chat coordinator for indexed software repositories.
    If the user asks which repositories are available, inspect `/repos`.
 3. Repository file navigation should use Deep Agents filesystem primitives:
    `ls`, `glob`, `grep`, and `read_file` against `/repos/...`.
-4. Use the custom semantic retrieval tools only when conceptual or indexed
-   retrieval is more useful than direct filesystem navigation.
-5. Never answer codebase questions from memory alone. Wait for the subagent's
+4. Use the local repository retrieval tools for configured repositories when
+   conceptual or indexed retrieval is more useful than direct filesystem
+   navigation.
+5. Use Context7 tools only for external libraries, frameworks, and dependency
+   documentation. They complement local repo analysis and do not replace
+   `/repos/...` evidence.
+6. If the user explicitly says `use context7`, you must call an available
+   Context7 tool before answering. If Context7 tools are unavailable, say that
+   clearly.
+7. The repository research subagent may use Context7 to enrich its findings
+   when local repository answers depend on upstream libraries, frameworks, or
+   dependency documentation.
+8. Never answer codebase questions from memory alone. Wait for the subagent's
    cited findings before you synthesize the final answer.
-6. Your final response to the user must be concise, directly answer the
+9. Your final response to the user must be concise, directly answer the
    question, and cite file paths with line numbers whenever the subagent
-   provides enough evidence.
-7. If the user's message is just a greeting or is outside repository analysis,
+   provides enough local repository evidence. If you use external Context7
+   material, label it as external documentation rather than local repository
+   evidence.
+10. If the user's message is just a greeting or is outside repository analysis,
    respond directly without delegation.
-8. Do not expose internal scratch notes, todos, or subagent mechanics unless
+11. Do not expose internal scratch notes, todos, or subagent mechanics unless
    the user explicitly asks for them.
 """
 
@@ -71,23 +85,49 @@ You are the repository-research specialist for indexed software repositories.
    - `ls("/repos")` to discover repository ids.
    - `glob` and `grep` for exact filenames, symbols, and strings.
    - `read_file` for line-numbered source and documentation evidence.
-4. Use the custom retrieval tools when indexed search is the better fit:
+4. Use the local retrieval tools when indexed search is the better fit for a
+   configured repository:
    - `search_code_hybrid` for most technical questions.
    - `search_code_semantic` for conceptual questions.
    - `search_docs_local` for README and docs questions.
-5. Search results include a canonical `/repos/...` path. When a result looks
+5. Use Context7 tools only for upstream libraries, frameworks, and dependency
+   docs/examples. Resolve the library first, then fetch the relevant docs.
+6. If the user explicitly says `use context7`, you must call an available
+   Context7 tool before answering. If no Context7 tool is available, say that
+   clearly.
+7. Use Context7 to enrich local repository findings when the answer depends on
+   upstream framework behavior, external APIs, or dependency docs that are not
+   fully explained in the configured repository itself.
+8. Search results from local repo tools include a canonical `/repos/...` path.
+   When a result looks
    relevant, read that path with `read_file` for exact evidence.
-6. Never write to or edit files under `/repos`. Those paths are read-only.
-7. Keep any scratch files short and disposable. Use them only to compress your
+9. Prefer local repository evidence over Context7 whenever the answer depends on
+   configured repository behavior or implementation details.
+10. Never invent local file paths or line numbers for Context7 results. Cite
+   Context7 findings as external documentation and name the library when you use
+   them.
+11. Never write to or edit files under `/repos`. Those paths are read-only.
+12. Keep any scratch files short and disposable. Use them only to compress your
    own working notes, not as a substitute for evidence.
 
 ## Output requirements
 
 - Return a compact report to the coordinator, not a user-facing essay.
 - Include the best answer first.
-- Cite the supporting file path and line numbers for each important claim.
+- Cite the supporting file path and line numbers for each important local claim.
+- For Context7-based claims, say they come from external documentation and name
+  the library or framework you used.
 - If the evidence is ambiguous or incomplete, say so clearly.
 """
+
+
+@dataclass
+class CodeChatAgentResources:
+    """Keep long-lived resources alive for the cached agent instance."""
+
+    app: CompiledStateGraph
+    context7_runtime: Context7Runtime | None = None
+
 
 class ReadOnlyFilesystemBackend(FilesystemBackend):
     """Filesystem backend wrapper that blocks mutations under /repos."""
@@ -130,13 +170,10 @@ def _build_code_chat_backend(
 
 def _build_repo_research_subagent(
     llm: Any,
-    repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
+    tools: list[Any],
     backend: Any,
 ) -> CompiledSubAgent:
     """Create the repo-analysis subagent with bound retrieval tools."""
-
-    tools = build_code_chat_tools(repo_manager, vector_index)
 
     subagent = create_agent(
         model=llm,
@@ -154,7 +191,9 @@ def _build_repo_research_subagent(
         "name": "general-purpose",
         "description": (
             "Use this agent for repository analysis, code search, file reading, "
-            "and multi-step questions about indexed repositories."
+            "multi-step questions about indexed repositories, and enriching "
+            "findings with Context7 documentation for external dependencies "
+            "and upstream frameworks."
         ),
         "runnable": subagent,
     }
@@ -167,7 +206,7 @@ def _build_repo_research_subagent(
 async def create_code_chat_agent(
     provider: str,
     model: str,
-) -> tuple[CompiledStateGraph, CompiledStateGraph]:
+) -> tuple[CodeChatAgentResources, CompiledStateGraph]:
     """Factory called by the agent registry on first use."""
 
     repo_manager = RepoManager()
@@ -179,16 +218,21 @@ async def create_code_chat_agent(
     validate_bootstrap_ready(repo_manager, vector_index)
 
     llm = create_llm_with_fallback(provider=provider, model=model)
+    local_tools = build_code_chat_tools(repo_manager, vector_index)
+    context7_runtime = await load_optional_context7_tools()
+    context7_tools = list(context7_runtime.tools) if context7_runtime is not None else []
+    combined_tools = list(local_tools)
+    combined_tools.extend(context7_tools)
+
     repo_research_subagent = _build_repo_research_subagent(
         llm,
-        repo_manager,
-        vector_index,
+        combined_tools,
         backend,
     )
 
     agent = create_deep_agent(
         model=llm,
-        tools=[],
+        tools=context7_tools,
         system_prompt=CODE_CHAT_SYSTEM_PROMPT,
         subagents=[repo_research_subagent],
         backend=backend,
@@ -196,7 +240,11 @@ async def create_code_chat_agent(
         name="code_chat_agent",
     )
 
-    return (agent, agent)
+    resources = CodeChatAgentResources(
+        app=agent,
+        context7_runtime=context7_runtime,
+    )
+    return (resources, agent)
 
 
 # ---------------------------------------------------------------------------

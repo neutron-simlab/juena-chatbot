@@ -93,6 +93,11 @@ class Config:
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "10000"))
     TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "60"))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+
+    # Context7 MCP (optional external library/framework documentation tools)
+    CONTEXT7_API_KEY = os.getenv("CONTEXT7_API_KEY")
+    CONTEXT7_MCP_URL = os.getenv("CONTEXT7_MCP_URL", "https://mcp.context7.com/mcp")
+    CONTEXT7_TIMEOUT_SECONDS = int(os.getenv("CONTEXT7_TIMEOUT_SECONDS", "30"))
     
     # =============================================================================
     # SERVER CONFIGURATION

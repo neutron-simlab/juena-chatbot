@@ -25,6 +25,7 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, La
   - read-only access to cloned repositories under `/repos/<repo_id>/`
   - hybrid retrieval for code and documentation
   - semantic search over persistent vector indices
+  - optional Context7 MCP access for external library/framework docs and code examples
 
 On a fresh UI chat, the welcome message introduces both agents and lists the repositories available to `code_chat_agent`.
 
@@ -136,6 +137,26 @@ At least one chat provider must be configured in `.env`.
 If the Blablador embedding settings are missing, indexing falls back to Chroma's default embedding function.
 
 Relevant settings are documented in [`env.example`](env.example).
+
+## Context7 MCP
+
+`code_chat_agent` can optionally load Context7 tools for external dependency
+documentation and code examples.
+
+- Context7 is separate from local repository indexing.
+- Juena uses one shared Context7 MCP server connection, not one server per
+  library.
+- Context7 is intended for popular upstream libraries/frameworks, while
+  configured repositories still come from [`config/repositories.yaml`](config/repositories.yaml)
+  and are cited from `/repos/...`.
+- If `CONTEXT7_API_KEY` is not set, `code_chat_agent` keeps working with only
+  local repository tools.
+
+Optional environment variables:
+
+- `CONTEXT7_API_KEY`
+- `CONTEXT7_MCP_URL` (default: `https://mcp.context7.com/mcp`)
+- `CONTEXT7_TIMEOUT_SECONDS` (default: `30`)
 
 ## Local Development
 
