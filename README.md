@@ -4,39 +4,60 @@
   <img src="app/assets/logo.png" alt="JüNA logo" width="180"/>
 </div>
 
-JüNA is a Docker-first multi-agent chatbot service with a FastAPI backend, a Streamlit chat UI, persistent conversation state, and repo-aware retrieval for code and documentation questions.
+JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, LangGraph agents, persistent SQLite state, and a repository-aware code-chat workflow.
 
-## What It Does
+## Overview
 
-- Runs a web UI on port `9501` and an API on port `8080`
-- Supports multiple agents behind one server
-- Streams responses over Server-Sent Events
-- Persists LangGraph checkpoints and chat history in SQLite
-- Clones and indexes configured repositories for repo-aware Q&A
-- Supports OpenAI and Blablador providers
+- FastAPI API on `8080` and Streamlit UI on `9501`
+- Two built-in agents behind one server
+- SSE streaming for chat responses
+- SQLite persistence for LangGraph checkpoints and chat history
+- Repository bootstrap and vector indexing for code-aware retrieval
+- OpenAI and Blablador model support
+
+## Included Agents
+
+- `react_agent`
+  The default general-purpose assistant. Bare `/invoke` and `/stream` requests go here unless you specify another agent id.
+
+- `code_chat_agent`
+  A repository-analysis agent for indexed code and docs. It combines:
+  - read-only access to cloned repositories under `/repos/<repo_id>/`
+  - hybrid retrieval for code and documentation
+  - semantic search over persistent vector indices
+
+On a fresh UI chat, the welcome message introduces both agents and lists the repositories available to `code_chat_agent`.
 
 ## Quick Start
 
-1. Create your environment file:
+1. Copy the environment template:
 
    ```bash
    cp env.example .env
    ```
 
-2. Edit `.env` and configure at least one LLM provider.
+2. Edit `.env` and configure at least one chat model provider.
 
-3. Start the app:
+3. Optional: update [`config/repositories.yaml`](config/repositories.yaml) if you want `code_chat_agent` to index different repositories.
+
+4. Start the stack:
 
    ```bash
    docker compose up --build -d
    ```
 
-4. Open the services:
+5. Watch bootstrap and startup logs:
+
+   ```bash
+   docker compose logs -f juena-chatbot
+   ```
+
+6. Open the services:
    - Streamlit UI: <http://localhost:9501>
    - FastAPI server: <http://localhost:8080>
    - OpenAPI docs: <http://localhost:8080/docs>
 
-5. Optional verification:
+7. Optional verification:
 
    ```bash
    curl http://localhost:8080/health
@@ -44,62 +65,160 @@ JüNA is a Docker-first multi-agent chatbot service with a FastAPI backend, a St
    curl http://localhost:8080/repositories
    ```
 
-Docker volumes persist logs, SQLite databases, cloned repositories, and vector indices across restarts.
+`docker compose up --build -d` is detached, so bootstrap progress will not appear inline in the compose output. Use `docker compose logs -f juena-chatbot` to watch indexing progress.
 
-## Available Agents
+## Startup and Bootstrap
 
-- `react_agent`
-  Default general assistant registered by the server.
+Repository preparation happens before the app starts serving requests.
 
-- `code_chat_agent`
-  Repo-aware assistant for searching indexed repositories, reading files, and answering implementation questions with retrieval-first behavior.
+- The Docker entrypoint runs `python -m juena.retrieval.bootstrap` before starting Streamlit or FastAPI.
+- `main.py` also runs the same bootstrap path when started directly, unless `JUENA_BOOTSTRAP_DONE=1` is already set.
+- Bootstrap fails fast. If any configured repository cannot sync or index, the service does not finish startup.
 
-If you call `/invoke` or `/stream` without an agent ID, the server uses `react_agent`. To target a specific agent, use `/{agent_id}/invoke` or `/{agent_id}/stream`.
+Bootstrap behavior for each configured repository:
 
-## Repository Indexing
+1. clone the repo on first run, or refresh it on later runs
+2. inspect the current git revision
+3. check whether the saved index is stale
+4. rebuild the index only when it is missing, empty, or outdated
 
-Repository metadata comes from [`config/repositories.yaml`](config/repositories.yaml).
+The current stale-index checks include:
 
-On startup, the service will:
+- repository revision changes
+- embedding configuration changes
+- indexing configuration changes
+- missing or empty vector collections
 
-1. clone or refresh each configured repository
-2. rebuild the local Chroma vector index
-3. only then start Streamlit and FastAPI
-
-During Docker startup you can watch bootstrap and indexing progress with:
-
-```bash
-docker compose logs -f juena-chatbot
-```
-
-The logs now include percentage progress for:
+Progress logging includes:
 
 - overall bootstrap progress across repositories
 - per-repository indexing progress across files
 
-For adding or tuning repositories, see [`HOW-TO-ADD-REPO.md`](HOW-TO-ADD-REPO.md).
+You can run bootstrap manually:
 
-Example request:
+```bash
+uv run python -m juena.retrieval.bootstrap
+```
+
+## Repository Configuration
+
+`code_chat_agent` only knows about repositories listed in [`config/repositories.yaml`](config/repositories.yaml).
+
+Each repository entry controls:
+
+- the repository id and display name
+- clone URL and branch
+- which files are indexed
+- which paths are treated as documentation
+- chunk size and overlap for embedding
+
+The current API discovery endpoint:
+
+```bash
+curl http://localhost:8080/repositories
+```
+
+returns the configured repository metadata that the UI also uses for the code-chat welcome.
+
+For a step-by-step guide to adding repositories, see [`HOW-TO-ADD-REPO.md`](HOW-TO-ADD-REPO.md).
+
+## Embeddings and Providers
+
+At least one chat provider must be configured in `.env`.
+
+- OpenAI can be used for chat models.
+- Blablador can be used for chat models.
+- Repository indexing can use Blablador's OpenAI-compatible embedding endpoint via:
+  - `BLABLADOR_API_KEY`
+  - `BLABLADOR_BASE_URL`
+  - `BLABLADOR_EMBEDDING_MODEL`
+
+If the Blablador embedding settings are missing, indexing falls back to Chroma's default embedding function.
+
+Relevant settings are documented in [`env.example`](env.example).
+
+## Local Development
+
+Docker is the recommended path, but you can also run the services locally.
+
+1. Install dependencies:
+
+   ```bash
+   uv sync --extra dev
+   ```
+
+2. Configure `.env`.
+
+3. Optional prewarm:
+
+   ```bash
+   uv run python -m juena.retrieval.bootstrap
+   ```
+
+4. Start the API:
+
+   ```bash
+   uv run python main.py
+   ```
+
+5. Start the UI in a second terminal:
+
+   ```bash
+   uv run streamlit run app/streamlit_app.py --server.port 9501
+   ```
+
+`main.py` already runs bootstrap automatically, so the explicit bootstrap command is mainly useful when you want to prebuild indices before starting the server.
+
+## API Reference
+
+- `GET /health`
+  Service health check.
+
+- `GET /agents`
+  Lists registered agents and the current default.
+
+- `GET /repositories`
+  Lists configured repositories for code chat.
+
+- `POST /invoke`
+  Invoke the default agent (`react_agent`).
+
+- `POST /stream`
+  Stream the default agent (`react_agent`).
+
+- `POST /{agent_id}/invoke`
+  Invoke a specific agent such as `code_chat_agent`.
+
+- `POST /{agent_id}/stream`
+  Stream a specific agent.
+
+- `POST /{agent_id}/restart`
+  Recreate the compiled graph for a specific agent.
+
+Example `code_chat_agent` request:
 
 ```bash
 curl -X POST http://localhost:8080/code_chat_agent/invoke \
   -H "Content-Type: application/json" \
-  -d '{"message":"List the available repositories and tell me what you can search."}'
+  -d '{"message":"What repositories are available, and where should I look for documentation?"}'
 ```
 
-## Useful Endpoints
+## Data and Persistence
 
-- `GET /health` checks whether the service is up
-- `GET /agents` lists registered agent IDs and the default agent
-- `GET /repositories` lists configured repository metadata
-- `POST /invoke` and `POST /stream` talk to the default agent
-- `POST /{agent_id}/invoke` and `POST /{agent_id}/stream` talk to a specific agent
+The stack persists state across restarts.
+
+- chat history: `data/db/chats.sqlite`
+- LangGraph checkpoints: `data/db/checkpoints.sqlite`
+- cloned repositories: `data/repos`
+- vector indices: `data/vector_index`
+
+Docker volumes preserve those paths by default.
 
 ## Notes
 
-- `.env` is loaded from the repo root by default
-- chat history and checkpoints are stored in SQLite
-- repo cache and vector index paths are configurable with environment variables
+- `.env` is loaded from the repository root by default.
+- In Docker, the entrypoint also supports `/etc/juena/.env`.
+- If you intentionally change the embedding model for code-chat indexing, rebuild the vector index before relying on old collections.
 
 ## License
 
