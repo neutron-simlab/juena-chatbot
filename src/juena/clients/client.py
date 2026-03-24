@@ -50,6 +50,28 @@ class AgentClient:
         """Update the agent to use for requests."""
         self.agent = agent
 
+    def list_repositories(self) -> list[dict[str, Any]]:
+        """Return configured repository metadata from the server."""
+        try:
+            response = httpx.get(
+                f"{self.base_url}/repositories",
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(f"Error: {e}")
+
+        try:
+            payload = response.json()
+        except ValueError as e:
+            raise AgentClientError(f"Error: {e}")
+
+        if not isinstance(payload, list):
+            raise AgentClientError("Error: Invalid repository response from server")
+
+        return payload
+
     async def ainvoke(
         self,
         message: str,

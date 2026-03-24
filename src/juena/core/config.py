@@ -69,6 +69,7 @@ class Config:
     BLABLADOR_API_KEY = os.getenv("BLABLADOR_API_KEY")
     BLABLADOR_BASE_URL = os.getenv("BLABLADOR_BASE_URL")
     BLABLADOR_DEFAULT_MODEL = os.getenv("BLABLADOR_DEFAULT_MODEL", "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025")
+    BLABLADOR_EMBEDDING_MODEL = os.getenv("BLABLADOR_EMBEDDING_MODEL", "alias-qwen3-8b-embeddings")
     # Optional: Comma-separated list of available Blablador models to show in UI
     # If not set, all models from BlabladorModelName enum will be shown
     BLABLADOR_AVAILABLE_MODELS = os.getenv("BLABLADOR_AVAILABLE_MODELS")

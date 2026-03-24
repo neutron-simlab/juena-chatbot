@@ -4,6 +4,7 @@ Chat interface for Streamlit app.
 import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
 from juena.schema.server import ChatMessage
+from juena.server.agent_registry import DEFAULT_AGENT
 from app.ui_components import (
     finalize_streaming_message,
     render_header_with_logo,
@@ -27,6 +28,56 @@ def save_message_to_storage(thread_id: str, message: ChatMessage) -> None:
     except Exception as e:
         # Don't block UI if storage fails
         print(f"Warning: Failed to save message to storage: {e}")
+
+
+def _format_repository_line(repository: dict) -> str | None:
+    """Return a concise repository bullet for the intro message."""
+    repo_id = str(repository.get("id", "")).strip()
+    if not repo_id:
+        return None
+
+    name = str(repository.get("name", "")).strip()
+    if name and name.casefold() != repo_id.casefold():
+        return f"- `{repo_id}`: {name}"
+    return f"- `{repo_id}`"
+
+
+def build_agent_intro_message(client: AgentClient) -> ChatMessage:
+    """Build the local introductory assistant message for fresh chats."""
+    repo_lines: list[str]
+
+    try:
+        repositories = client.list_repositories()
+    except Exception:
+        repo_lines = ["- Repository metadata is unavailable right now."]
+    else:
+        repo_lines = [
+            line
+            for repository in repositories
+            if (line := _format_repository_line(repository)) is not None
+        ]
+        if not repo_lines:
+            repo_lines = ["- No indexed repositories are currently available."]
+
+    intro_lines = [
+        "Hello! There are currently two agents available:",
+        "",
+        (
+            f"- `{DEFAULT_AGENT}`: default starting agent for general-purpose "
+            "Q&A and simple helper tasks."
+        ),
+        (
+            "- `code_chat_agent`: specialized for repository analysis, code "
+            "search, file reading, and multi-step questions about indexed "
+            "repositories."
+        ),
+        "",
+        "Available repositories for `code_chat_agent`:",
+        *repo_lines,
+        "",
+        "Use the sidebar to switch agents at any time.",
+    ]
+    return ChatMessage(type="ai", content="\n".join(intro_lines))
 
 
 def process_stream_chunk(
@@ -101,6 +152,7 @@ def stream_and_display_response(
         message_placeholder: Streamlit placeholder for streaming display
         should_rerun: Whether to rerun after streaming completes
     """
+    initial_message_count = len(st.session_state.messages)
     response_text = ""
     received_complete_message = False
     
@@ -129,7 +181,7 @@ def stream_and_display_response(
             ai_message = ChatMessage(type="ai", content=response_text)
             st.session_state.messages.append(ai_message)
             save_message_to_storage(st.session_state.thread_id, ai_message)
-        elif not response_text and st.session_state.messages:
+        elif not response_text and len(st.session_state.messages) > initial_message_count:
             # If no response text accumulated, check for last message
             last_msg = st.session_state.messages[-1]
             if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
@@ -162,7 +214,12 @@ def render_chat_interface() -> None:
         and not st.session_state.messages
         and not st.session_state.get("welcome_initialized", False)
     ):
+        intro_message = build_agent_intro_message(st.session_state.client)
+        st.session_state.messages.append(intro_message)
+        save_message_to_storage(st.session_state.thread_id, intro_message)
         st.session_state.welcome_initialized = True
+        render_message(intro_message, show_system=st.session_state.show_system_messages)
+
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             stream_and_display_response("Start", message_placeholder)

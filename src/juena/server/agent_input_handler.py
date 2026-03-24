@@ -10,7 +10,6 @@ from uuid import UUID, uuid4
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
 from juena.server.agent_registry import _normalize_provider_model
@@ -24,7 +23,6 @@ class AgentInputHandler:
     @staticmethod
     async def prepare_input(
         user_input: str,
-        agent: CompiledStateGraph,
         thread_id: str | None = None,
         user_id: str | None = None,
         run_id: UUID | None = None,
@@ -40,7 +38,6 @@ class AgentInputHandler:
         
         Args:
             user_input: User input message
-            agent: The compiled state graph
             thread_id: Optional thread ID for conversation continuity
             user_id: Optional user ID for cross-thread conversations
             run_id: Optional run ID, will generate if not provided
@@ -81,5 +78,5 @@ class AgentInputHandler:
             "input": input_data,
             "config": config,
         }
-        
+
         return kwargs, run_id

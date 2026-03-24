@@ -5,7 +5,7 @@ This module provides functions for creating, retrieving, and restarting agents.
 Supports multiple agent types through a factory pattern. Users must register
 their own agent factories before using agents.
 """
-from typing import Any, Callable, Optional, Awaitable
+from typing import Any, Callable, Awaitable
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
@@ -203,26 +203,6 @@ async def restart_agent(
         return await get_agent(agent_id, provider=provider, model=model)
     
     return _agent_registry[agent_id][1]
-
-
-def get_agent_instance(agent_id: str = DEFAULT_AGENT) -> Optional[AgentInstance]:
-    """
-    Get the agent instance from the registry.
-    
-    This is useful for accessing agent-specific methods without needing to create a new agent.
-    
-    Args:
-        agent_id: Agent identifier (defaults to DEFAULT_AGENT)
-    
-    Returns:
-        Agent instance if found, None otherwise
-    """
-    if agent_id in _agent_registry:
-        agent_instance, _ = _agent_registry[agent_id]
-        return agent_instance
-    return None
-
-
 def list_registered_agents() -> list[str]:
     """
     List all registered agent IDs.

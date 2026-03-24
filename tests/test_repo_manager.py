@@ -51,3 +51,11 @@ def test_list_repo_metadata(repo_config_path: Path):
     assert len(meta) == 1
     assert meta[0]["id"] == "fake-repo"
     assert meta[0]["source_url"].startswith("file://")
+
+
+def test_current_revision_returns_head_sha(repo_config_path: Path):
+    mgr = _make_manager(repo_config_path)
+    revision = mgr.current_revision("fake-repo")
+
+    assert len(revision) == 40
+    assert all(char in "0123456789abcdef" for char in revision)
