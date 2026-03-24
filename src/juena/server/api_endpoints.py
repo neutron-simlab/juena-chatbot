@@ -15,7 +15,12 @@ from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
-from juena.server.agent_registry import DEFAULT_AGENT, get_agent, restart_agent, list_registered_agents
+from juena.server.agent_registry import (
+    DEFAULT_AGENT,
+    get_agent,
+    list_registered_agents,
+    restart_agent,
+)
 from juena.schema.server import ChatMessage, StreamInput, UserInput
 from juena.core.config import global_config
 from juena.schema.llm_models import Provider, get_default_model_for_provider
@@ -73,10 +78,9 @@ async def message_generator(
         # Set thread_id as environment variable for tools that need it
         if user_input.thread_id:
             set_thread_id_env(user_input.thread_id)
-        
+
         kwargs, run_id = await AgentInputHandler.prepare_input(
             user_input.message,
-            agent,
             thread_id=user_input.thread_id,
             user_id=user_input.user_id,
             provider=provider,
@@ -159,10 +163,9 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
         # Set thread_id as environment variable for tools that need it
         if user_input.thread_id:
             set_thread_id_env(user_input.thread_id)
-        
+
         kwargs, run_id = await AgentInputHandler.prepare_input(
             user_input.message,
-            agent,
             thread_id=user_input.thread_id,
             user_id=user_input.user_id,
             provider=provider,

@@ -2,10 +2,23 @@
 
 from pathlib import Path
 
+import pytest
+
 from juena.retrieval.hybrid_search import hybrid_search
 from juena.retrieval.repo_config import load_repo_configs
 from juena.retrieval.repo_manager import RepoManager
+from juena.retrieval import vector_index as vector_index_module
 from juena.retrieval.vector_index import RepoVectorIndex
+
+
+@pytest.fixture(autouse=True)
+def _stub_embedding_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StubConfig:
+        BLABLADOR_API_KEY = None
+        BLABLADOR_BASE_URL = None
+        BLABLADOR_EMBEDDING_MODEL = "alias-qwen3-8b-embeddings"
+
+    monkeypatch.setattr(vector_index_module, "_get_config", lambda: StubConfig)
 
 
 def _setup(repo_config_path: Path):

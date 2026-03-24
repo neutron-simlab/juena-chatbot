@@ -47,11 +47,27 @@ class RepoManager:
     def repo_ids(self) -> list[str]:
         return [c.id for c in self._configs]
 
+    @property
+    def cache_dir(self) -> Path:
+        """Return the shared local cache directory for cloned repositories."""
+        return _cache_dir()
+
     def get_config(self, repo_id: str) -> RepoConfig | None:
         for c in self._configs:
             if c.id == repo_id:
                 return c
         return None
+
+    def local_root(self, repo_id: str) -> Path:
+        """Return the expected local cache path for *repo_id* without syncing it."""
+        cfg = self.get_config(repo_id)
+        if cfg is None:
+            raise ValueError(f"Unknown repo: {repo_id}")
+        return _cache_dir() / cfg.id
+
+    def has_local_root(self, repo_id: str) -> bool:
+        """Return whether *repo_id* already exists in the local cache."""
+        return self.local_root(repo_id).is_dir()
 
     def resolve_root(self, repo_id: str) -> Path:
         """Return the absolute root directory for *repo_id*."""
@@ -66,7 +82,7 @@ class RepoManager:
         if not url:
             raise ValueError(f"Repo {cfg.id}: source.url is required")
 
-        dest = _cache_dir() / cfg.id
+        dest = self.local_root(repo_id)
         if dest.exists():
             self._git_pull(dest, cfg.source.branch)
         else:
@@ -75,6 +91,27 @@ class RepoManager:
 
         self._roots[repo_id] = dest
         return dest
+
+    def current_revision(self, repo_id: str) -> str:
+        """Return the current HEAD revision for *repo_id*."""
+        root = self.resolve_root(repo_id)
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.error(
+                "git rev-parse failed for %s (exit %d):\nstdout: %s\nstderr: %s",
+                repo_id,
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
+            raise RuntimeError(
+                f"git rev-parse failed for {repo_id} (exit {result.returncode}): {result.stderr.strip()}"
+            )
+        return result.stdout.strip()
 
     # ------------------------------------------------------------------
     # Git operations

@@ -8,7 +8,7 @@ to process and convert LangGraph streaming events into chat messages.
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
-from langgraph.types import Interrupt
+from langgraph.types import Interrupt, Overwrite
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 
@@ -33,6 +33,21 @@ class UpdatesStreamHandler:
         self.config = config
         self.run_id = run_id
         self.user_input_message = user_input_message
+
+    @staticmethod
+    def _normalize_update_messages(update_messages: Any) -> list[BaseMessage | tuple]:
+        """Normalize LangGraph update payloads into a message list."""
+
+        if isinstance(update_messages, Overwrite):
+            update_messages = update_messages.value
+
+        if update_messages is None:
+            return []
+        if isinstance(update_messages, list):
+            return update_messages
+        if isinstance(update_messages, (BaseMessage, tuple)):
+            return [update_messages]
+        return list(update_messages) if hasattr(update_messages, "__iter__") else []
     
     def process_updates(
         self,
@@ -61,8 +76,7 @@ class UpdatesStreamHandler:
             # Extract messages from updates
             updates = updates or {}
             update_messages = updates.get("messages", [])
-            
-            new_messages.extend(update_messages)
+            new_messages.extend(self._normalize_update_messages(update_messages))
         
         return new_messages
 

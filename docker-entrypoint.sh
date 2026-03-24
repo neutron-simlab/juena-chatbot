@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # Function to handle shutdown
@@ -8,8 +8,8 @@ cleanup() {
     exit 0
 }
 
-# Trap signals for graceful shutdown
-trap cleanup SIGTERM SIGINT EXIT
+# Trap signals for graceful shutdown (EXIT is not POSIX across all shells)
+trap cleanup TERM INT
 
 # Create required directories
 mkdir -p /data/logs
@@ -21,7 +21,7 @@ echo "✅ Database directory: /data/db"
 # Activate virtual environment if it exists (for uv)
 if [ -f "/app/.venv/bin/activate" ]; then
     echo "Activating virtual environment..."
-    source /app/.venv/bin/activate
+    . /app/.venv/bin/activate
 fi
 
 # Load environment file if specified
@@ -34,6 +34,12 @@ elif [ -f "/app/.env" ]; then
 else
     echo "ℹ️  No .env file found, using environment variables"
 fi
+
+# Bootstrap repositories before starting any services.
+echo "Bootstrapping repositories and vector indices..."
+python -m juena.retrieval.bootstrap
+export JUENA_BOOTSTRAP_DONE=1
+echo "✅ Repository bootstrap completed"
 
 # Start Streamlit in the background
 echo "Starting Streamlit UI on port 9501..."

@@ -16,21 +16,54 @@
 #   docs_paths    – paths inside the repo treated as documentation
 
 repositories:
-  - id: chat-langchain
-    name: Chat LangChain
-    description: "Documentation assistant built with LangGraph, LangChain Agents, and middleware."
+
+  # - id: langgraph
+  #   name: LangGraph
+  #   description: "Framework for building stateful, multi-actor LLM applications."
+  #   source:
+  #     url: https://github.com/langchain-ai/langgraph.git
+  #     branch: main
+  #   include_globs:
+  #     - "**/*.py"
+  #     - "**/*.md"
+  #   exclude_globs:
+  #     - "**/node_modules/**"
+  #     - "**/.git/**"
+  #     - "**/__pycache__/**"
+  #   max_file_bytes: 524288
+  #   chunk_size: 1500
+  #   chunk_overlap: 200
+  #   docs_paths:
+  #     - "README.md"
+  #     - "docs/"
+
+  - id: datreat
+    name: Datreat
+    description: "Fortran codebase with a different structure than Python projects (index and answer from source + docs)."
     source:
-      url: https://github.com/langchain-ai/chat-langchain.git
+      url: https://github.com/birkenfeld/datreat.git
       branch: master
     include_globs:
-      - "**/*.py"
+      - "**/*.f"
+      - "**/*.F"
+      - "**/*.for"
+      - "**/*.FOR"
+      - "**/*.f90"
+      - "**/*.F90"
+      - "**/*.f95"
+      - "**/*.F95"
+      - "**/*.f03"
+      - "**/*.F03"
+      - "**/*.inc"
+      - "**/*.INC"
       - "**/*.md"
-      - "**/*.json"
-      - "**/*.yaml"
-      - "**/*.yml"
-      - "**/*.toml"
       - "**/*.txt"
       - "**/*.rst"
+      - "**/*.tex"
+      - "**/Makefile"
+      - "**/makefile"
+      - "**/*.mk"
+      - "**/*.MK"
     exclude_globs:
       - "**/node_modules/**"
       - "**/.git/**"
@@ -38,28 +71,34 @@ repositories:
       - "**/.venv/**"
       - "**/dist/**"
       - "**/build/**"
-      - "**/*.egg-info/**"
+      - "**/*.o"
+      - "**/*.a"
+      - "**/*.so"
     max_file_bytes: 524288          # 512 KB
     chunk_size: 1500
     chunk_overlap: 200
     docs_paths:
       - "README.md"
-      - "docs/"
+      - "doc/"
 
-  # ── Example: index another remote repo ────────────────────────────
-  - id: langgraph
-    name: LangGraph
-    description: "Framework for building stateful, multi-actor LLM applications."
+  - id: jscatter
+    name: jscatter
+    description: "Python software for X-ray and neutron scattering analysis, fitting, and plotting."
     source:
-      url: https://github.com/langchain-ai/langgraph.git
+      url: https://gitlab.com/biehl/jscatter.git
       branch: main
     include_globs:
       - "**/*.py"
       - "**/*.md"
+      - "**/*.rst"
+      - "**/*.txt"
     exclude_globs:
       - "**/node_modules/**"
       - "**/.git/**"
       - "**/__pycache__/**"
+      - "**/.venv/**"
+      - "**/dist/**"
+      - "**/build/**"
     max_file_bytes: 524288
     chunk_size: 1500
     chunk_overlap: 200

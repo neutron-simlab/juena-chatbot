@@ -60,13 +60,22 @@ If you call `/invoke` or `/stream` without an agent ID, the server uses `react_a
 
 Repository metadata comes from [`config/repositories.yaml`](config/repositories.yaml).
 
-The first time `code_chat_agent` is used, it will:
+On startup, the service will:
 
 1. clone or refresh each configured repository
-2. build a local Chroma vector index
-3. expose repo search tools to the agent
+2. rebuild the local Chroma vector index
+3. only then start Streamlit and FastAPI
 
-That first request can be slower than later requests because indexing happens on demand.
+During Docker startup you can watch bootstrap and indexing progress with:
+
+```bash
+docker compose logs -f juena-chatbot
+```
+
+The logs now include percentage progress for:
+
+- overall bootstrap progress across repositories
+- per-repository indexing progress across files
 
 For adding or tuning repositories, see [`HOW-TO-ADD-REPO.md`](HOW-TO-ADD-REPO.md).
 

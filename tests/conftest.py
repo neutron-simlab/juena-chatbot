@@ -74,5 +74,7 @@ def repo_config_path(tmp_path: Path, tmp_repo: Path):
     p.write_text(yaml.dump(cfg))
 
     os.environ["REPO_CACHE_DIR"] = str(tmp_path / "clones")
+    os.environ["VECTOR_INDEX_DIR"] = str(tmp_path / "vector_index")
     yield p
     os.environ.pop("REPO_CACHE_DIR", None)
+    os.environ.pop("VECTOR_INDEX_DIR", None)

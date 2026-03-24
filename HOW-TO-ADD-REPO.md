@@ -187,27 +187,26 @@ You should see `code_chat_agent` in the `agents` list.
 
 ## Step 5: Trigger Clone and Index Build
 
-The new repo is not fully usable until `code_chat_agent` is actually created.
-That happens on the first request to the agent.
+Clone and indexing now happen during startup, before Streamlit and FastAPI come
+up. That means the repo should already be ready once the container is healthy.
 
-Example:
+To watch bootstrap and indexing progress in Docker:
 
 ```bash
-curl -X POST http://localhost:8080/code_chat_agent/invoke \
-  -H "Content-Type: application/json" \
-  -d '{"message":"List the available repositories and tell me what you can search."}'
+docker compose logs -f juena-chatbot
 ```
 
-What this first request does:
+The logs include:
 
-- initializes `code_chat_agent`
-- clones each configured repo if needed
-- builds a vector index for repos that do not already have one
+- bootstrap progress across repositories
+- per-repository indexing progress as percentages
 
-The first request can be noticeably slower than later ones. That is normal.
+Example progress lines:
 
-You can also do this from the Streamlit UI by selecting `code_chat_agent` and
-asking a question about the repo.
+```text
+Bootstrap progress: 33% (1/3 repositories completed)
+Indexing progress for repo langgraph: 40% (120/300 files, 980 chunks)
+```
 
 ## Choosing Good Settings
 
