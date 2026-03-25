@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator, Sequence
 from typing import Any
 
 import httpx
@@ -15,6 +15,28 @@ from juena.schema.server import (
 
 class AgentClientError(Exception):
     pass
+
+
+def _provider_value(provider: str | Provider | None) -> str | None:
+    if provider is None:
+        return None
+    if isinstance(provider, Provider):
+        return provider.value
+    return provider
+
+
+def _http_error_message(exc: httpx.HTTPError) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+            if detail:
+                return f"Error: {detail}"
+    return f"Error: {exc}"
 
 
 class AgentClient:
@@ -45,6 +67,53 @@ class AgentClient:
         if self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
+
+    def _build_attachment_payloads(
+        self,
+        attachments: Sequence[Any] | None,
+    ) -> list[tuple[str, tuple[str, bytes, str]]]:
+        payloads: list[tuple[str, tuple[str, bytes, str]]] = []
+        for index, attachment in enumerate(attachments or [], start=1):
+            filename = str(getattr(attachment, "name", "") or f"attachment_{index}.txt")
+            content_type = str(
+                getattr(attachment, "type", None)
+                or getattr(attachment, "content_type", None)
+                or "text/plain"
+            )
+            if hasattr(attachment, "getvalue"):
+                content = attachment.getvalue()
+            elif hasattr(attachment, "read"):
+                content = attachment.read()
+                seek = getattr(attachment, "seek", None)
+                if callable(seek):
+                    seek(0)
+            else:
+                raise AgentClientError(f"Unsupported attachment object for '{filename}'")
+
+            if not isinstance(content, bytes):
+                raise AgentClientError(f"Attachment '{filename}' did not provide bytes")
+            payloads.append(("attachments", (filename, content, content_type)))
+        return payloads
+
+    def _build_file_request_data(
+        self,
+        message: str,
+        model: str | None,
+        provider: str | Provider | None,
+        thread_id: str | None,
+        user_id: str | None,
+    ) -> dict[str, str]:
+        data = {"message": message}
+        provider_value = _provider_value(provider)
+        if thread_id:
+            data["thread_id"] = thread_id
+        if user_id:
+            data["user_id"] = user_id
+        if model:
+            data["model"] = model
+        if provider_value:
+            data["provider"] = provider_value
+        return data
 
     def update_agent(self, agent: str) -> None:
         """Update the agent to use for requests."""
@@ -80,6 +149,7 @@ class AgentClient:
         thread_id: str | None = None,
         user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        attachments: Sequence[Any] | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent asynchronously. Only the final message is returned.
@@ -97,32 +167,46 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        request = UserInput(message=message)
-        if thread_id:
-            request.thread_id = thread_id
-        if model:
-            request.model = model  # type: ignore[assignment]
-        if provider:
-            # Convert string to Provider enum if needed
-            if isinstance(provider, str):
-                request.provider = Provider(provider)
-            else:
-                request.provider = provider
-        if agent_config:
-            request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(
-                    f"{self.base_url}/{self.agent}/invoke",
-                    json=request.model_dump(),
-                    headers=self._headers,
-                    timeout=self.timeout,
-                )
+                if attachments:
+                    response = await client.post(
+                        f"{self.base_url}/{self.agent}/invoke_with_files",
+                        data=self._build_file_request_data(
+                            message,
+                            model,
+                            provider,
+                            thread_id,
+                            user_id,
+                        ),
+                        files=self._build_attachment_payloads(attachments),
+                        headers=self._headers,
+                        timeout=self.timeout,
+                    )
+                else:
+                    request = UserInput(message=message)
+                    if thread_id:
+                        request.thread_id = thread_id
+                    if model:
+                        request.model = model  # type: ignore[assignment]
+                    if provider:
+                        if isinstance(provider, str):
+                            request.provider = Provider(provider)
+                        else:
+                            request.provider = provider
+                    if agent_config:
+                        request.agent_config = agent_config
+                    if user_id:
+                        request.user_id = user_id
+                    response = await client.post(
+                        f"{self.base_url}/{self.agent}/invoke",
+                        json=request.model_dump(),
+                        headers=self._headers,
+                        timeout=self.timeout,
+                    )
                 response.raise_for_status()
             except httpx.HTTPError as e:
-                raise AgentClientError(f"Error: {e}")
+                raise AgentClientError(_http_error_message(e))
 
         return ChatMessage.model_validate(response.json())
 
@@ -134,6 +218,7 @@ class AgentClient:
         thread_id: str | None = None,
         user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        attachments: Sequence[Any] | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent synchronously. Only the final message is returned.
@@ -151,31 +236,45 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        request = UserInput(message=message)
-        if thread_id:
-            request.thread_id = thread_id
-        if model:
-            request.model = model  # type: ignore[assignment]
-        if provider:
-            # Convert string to Provider enum if needed
-            if isinstance(provider, str):
-                request.provider = Provider(provider)
-            else:
-                request.provider = provider
-        if agent_config:
-            request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         try:
-            response = httpx.post(
-                f"{self.base_url}/{self.agent}/invoke",
-                json=request.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            )
+            if attachments:
+                response = httpx.post(
+                    f"{self.base_url}/{self.agent}/invoke_with_files",
+                    data=self._build_file_request_data(
+                        message,
+                        model,
+                        provider,
+                        thread_id,
+                        user_id,
+                    ),
+                    files=self._build_attachment_payloads(attachments),
+                    headers=self._headers,
+                    timeout=self.timeout,
+                )
+            else:
+                request = UserInput(message=message)
+                if thread_id:
+                    request.thread_id = thread_id
+                if model:
+                    request.model = model  # type: ignore[assignment]
+                if provider:
+                    if isinstance(provider, str):
+                        request.provider = Provider(provider)
+                    else:
+                        request.provider = provider
+                if agent_config:
+                    request.agent_config = agent_config
+                if user_id:
+                    request.user_id = user_id
+                response = httpx.post(
+                    f"{self.base_url}/{self.agent}/invoke",
+                    json=request.model_dump(),
+                    headers=self._headers,
+                    timeout=self.timeout,
+                )
             response.raise_for_status()
         except httpx.HTTPError as e:
-            raise AgentClientError(f"Error: {e}")
+            raise AgentClientError(_http_error_message(e))
 
         return ChatMessage.model_validate(response.json())
 
@@ -233,6 +332,7 @@ class AgentClient:
         thread_id: str | None = None,
         user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        attachments: Sequence[Any] | None = None,
         stream_tokens: bool = True,
     ) -> Generator[ChatMessage | str | dict, None, None]:
         """
@@ -257,29 +357,40 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        request = StreamInput(message=message, stream_tokens=stream_tokens)
-        if thread_id:
-            request.thread_id = thread_id
-        if user_id:
-            request.user_id = user_id
-        if model:
-            request.model = model  # type: ignore[assignment]
-        if provider:
-            # Convert string to Provider enum if needed
-            if isinstance(provider, str):
-                request.provider = Provider(provider)
-            else:
-                request.provider = provider
-        if agent_config:
-            request.agent_config = agent_config
         try:
-            with httpx.stream(
-                "POST",
-                f"{self.base_url}/{self.agent}/stream",
-                json=request.model_dump(),
-                headers=self._headers,
-                timeout=self.timeout,
-            ) as response:
+            stream_kwargs: dict[str, Any] = {
+                "headers": self._headers,
+                "timeout": self.timeout,
+            }
+            if attachments:
+                stream_kwargs["data"] = self._build_file_request_data(
+                    message,
+                    model,
+                    provider,
+                    thread_id,
+                    user_id,
+                )
+                stream_kwargs["files"] = self._build_attachment_payloads(attachments)
+                url = f"{self.base_url}/{self.agent}/stream_with_files"
+            else:
+                request = StreamInput(message=message, stream_tokens=stream_tokens)
+                if thread_id:
+                    request.thread_id = thread_id
+                if user_id:
+                    request.user_id = user_id
+                if model:
+                    request.model = model  # type: ignore[assignment]
+                if provider:
+                    if isinstance(provider, str):
+                        request.provider = Provider(provider)
+                    else:
+                        request.provider = provider
+                if agent_config:
+                    request.agent_config = agent_config
+                stream_kwargs["json"] = request.model_dump()
+                url = f"{self.base_url}/{self.agent}/stream"
+
+            with httpx.stream("POST", url, **stream_kwargs) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
                     if line.strip():
@@ -288,7 +399,7 @@ class AgentClient:
                             break
                         yield parsed
         except httpx.HTTPError as e:
-            raise AgentClientError(f"Error: {e}")
+            raise AgentClientError(_http_error_message(e))
 
     async def astream(
         self,
@@ -298,6 +409,7 @@ class AgentClient:
         thread_id: str | None = None,
         user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        attachments: Sequence[Any] | None = None,
         stream_tokens: bool = True,
     ) -> AsyncGenerator[ChatMessage | str | dict, None]:
         """
@@ -322,30 +434,40 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        request = StreamInput(message=message, stream_tokens=stream_tokens)
-        if thread_id:
-            request.thread_id = thread_id
-        if model:
-            request.model = model  # type: ignore[assignment]
-        if provider:
-            # Convert string to Provider enum if needed
-            if isinstance(provider, str):
-                request.provider = Provider(provider)
-            else:
-                request.provider = provider
-        if agent_config:
-            request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         async with httpx.AsyncClient() as client:
             try:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/{self.agent}/stream",
-                    json=request.model_dump(),
-                    headers=self._headers,
-                    timeout=self.timeout,
-                ) as response:
+                stream_kwargs: dict[str, Any] = {
+                    "headers": self._headers,
+                    "timeout": self.timeout,
+                }
+                if attachments:
+                    stream_kwargs["data"] = self._build_file_request_data(
+                        message,
+                        model,
+                        provider,
+                        thread_id,
+                        user_id,
+                    )
+                    stream_kwargs["files"] = self._build_attachment_payloads(attachments)
+                    url = f"{self.base_url}/{self.agent}/stream_with_files"
+                else:
+                    request = StreamInput(message=message, stream_tokens=stream_tokens)
+                    if thread_id:
+                        request.thread_id = thread_id
+                    if model:
+                        request.model = model  # type: ignore[assignment]
+                    if provider:
+                        if isinstance(provider, str):
+                            request.provider = Provider(provider)
+                        else:
+                            request.provider = provider
+                    if agent_config:
+                        request.agent_config = agent_config
+                    if user_id:
+                        request.user_id = user_id
+                    stream_kwargs["json"] = request.model_dump()
+                    url = f"{self.base_url}/{self.agent}/stream"
+                async with client.stream("POST", url, **stream_kwargs) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if line.strip():
@@ -354,7 +476,7 @@ class AgentClient:
                                 break
                             yield parsed
             except httpx.HTTPError as e:
-                raise AgentClientError(f"Error: {e}")
+                raise AgentClientError(_http_error_message(e))
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """
