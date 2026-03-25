@@ -20,6 +20,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     llm = object()
     local_tools = [object(), object(), object()]
     context7_tools = [object(), object()]
+    tavily_tool = object()
     context7_runtime = SimpleNamespace(client=object(), tools=context7_tools)
 
     class StubRepoManager:
@@ -52,6 +53,12 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
             created.get("load_optional_context7_tools_calls", 0) + 1
         )
         return context7_runtime
+
+    def fake_load_optional_tavily_tool() -> object:
+        created["load_optional_tavily_tool_calls"] = (
+            created.get("load_optional_tavily_tool_calls", 0) + 1
+        )
+        return tavily_tool
 
     class FakeSubagentGraph:
         def invoke(
@@ -98,6 +105,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
     monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
+    monkeypatch.setattr(code_chat_agent, "load_optional_tavily_tool", fake_load_optional_tavily_tool)
     monkeypatch.setattr(code_chat_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(code_chat_agent, "create_deep_agent", fake_create_deep_agent)
     monkeypatch.setattr(code_chat_agent, "get_checkpointer", lambda: object())
@@ -120,11 +128,12 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert validated_repo_manager is validated_vector_index.repo_manager
     assert created["tool_builder_args"] == (validated_repo_manager, validated_vector_index)
     assert created["load_optional_context7_tools_calls"] == 1
+    assert created["load_optional_tavily_tool_calls"] == 1
     assert created["create_deep_agent_calls"] == 1
     assert created["subagent_agent_kwargs"]["model"] is llm
     assert created["subagent_agent_kwargs"]["tools"] == [*local_tools, *context7_tools]
     assert created["deep_agent_kwargs"]["model"] is llm
-    assert created["deep_agent_kwargs"]["tools"] == context7_tools
+    assert created["deep_agent_kwargs"]["tools"] == [*context7_tools, tavily_tool]
     backend_factory = created["deep_agent_kwargs"]["backend"]
     assert callable(backend_factory)
     composite_backend = backend_factory(type("Runtime", (), {"state": {}})())
@@ -161,6 +170,9 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     async def fake_load_optional_context7_tools() -> None:
         return None
 
+    def fake_load_optional_tavily_tool() -> None:
+        return None
+
     def fake_build_code_chat_tools(*args: Any, **kwargs: Any) -> list[object]:
         return local_tools
 
@@ -179,6 +191,7 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
     monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
+    monkeypatch.setattr(code_chat_agent, "load_optional_tavily_tool", fake_load_optional_tavily_tool)
     monkeypatch.setattr(code_chat_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(code_chat_agent, "create_deep_agent", fake_create_deep_agent)
     monkeypatch.setattr(code_chat_agent, "get_checkpointer", lambda: object())
@@ -240,3 +253,8 @@ def test_code_chat_prompts_cover_staged_user_inputs() -> None:
     assert "/inputs/" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
     assert "chat response" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
     assert "instead of editing staged files" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Use Tavily for information that is not available from the configured local" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "outside-world information beyond local repositories and Context7" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "For mixed questions, combine the subagent's local repository findings" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "Tavily web search is not available in this subagent" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "coordinator can use Tavily web search" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
