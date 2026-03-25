@@ -29,6 +29,7 @@ from juena.retrieval.vector_index import RepoVectorIndex
 from juena.server.agent_registry import register_agent_factory
 from juena.server.checkpointer import get_checkpointer
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
+from juena.tools.tavily import load_optional_tavily_tool
 from juena.tools.repo_search import (
     build_code_chat_tools,
 )
@@ -56,29 +57,41 @@ You are a code-chat coordinator for indexed software repositories.
 6. Use the local repository retrieval tools for configured repositories when
    conceptual or indexed retrieval is more useful than direct filesystem
    navigation.
-7. Use Context7 tools only for external libraries, frameworks, and dependency
+7. Use Tavily for information that is not available from the configured local
+   repositories or from Context7. This includes non-repository web questions,
+   current events, live facts, and external factual claims that would otherwise
+   come from model memory alone.
+8. Use Context7 tools only for external libraries, frameworks, and dependency
    documentation. They complement local repo analysis and do not replace
    `/repos/...` evidence.
-8. If the user explicitly says `use context7`, you must call an available
+9. If the user explicitly says `use context7`, you must call an available
    Context7 tool before answering. If Context7 tools are unavailable, say that
    clearly.
-9. The repository research subagent may use Context7 to enrich its findings
-   when local repository answers depend on upstream libraries, frameworks, or
-   dependency documentation.
-10. Never answer codebase questions from memory alone. Wait for the subagent's
+10. If the user explicitly asks you to search the web, or if the answer needs
+    outside-world information beyond local repositories and Context7, call
+    Tavily before you answer. If Tavily is unavailable, say that clearly.
+11. The repository research subagent may use Context7 to enrich its findings
+    when local repository answers depend on upstream libraries, frameworks, or
+    dependency documentation.
+12. Never answer codebase questions from memory alone. Wait for the subagent's
    cited findings before you synthesize the final answer.
-11. Your final response to the user must be concise, directly answer the
-   question, and cite file paths with line numbers whenever the subagent
-   provides enough local repository evidence. If you use external Context7
-   material, label it as external documentation rather than local repository
-   evidence.
-12. If the user's message is just a greeting or is outside repository analysis,
-   respond directly without delegation.
-13. Do not expose internal scratch notes, todos, or subagent mechanics unless
-   the user explicitly asks for them.
-14. Treat `/inputs/...` as read-only user evidence. Never write the user's
-   solution into staged files. If the user asks for a fix, provide the
-   proposed code changes directly in your chat response.
+13. For mixed questions, combine the subagent's local repository findings with
+    Tavily results when external facts are also required.
+14. Your final response to the user must be concise, directly answer the
+    question, and cite file paths with line numbers whenever the subagent
+    provides enough local repository evidence. If you use Tavily, include
+    source links and label the material as web search. If you use Context7,
+    label it as external documentation rather than local repository evidence.
+15. If the user's message is just a greeting, respond directly without
+    delegation. For factual answers outside repository analysis, prefer
+    Tavily-grounded web results over unsupported memory.
+16. Keep Tavily searches focused. Start with one precise query and refine only
+    if the first result set is insufficient.
+17. Do not expose internal scratch notes, todos, or subagent mechanics unless
+    the user explicitly asks for them.
+18. Treat `/inputs/...` as read-only user evidence. Never write the user's
+    solution into staged files. If the user asks for a fix, provide the
+    proposed code changes directly in your chat response.
 """
 
 CODE_CHAT_RESEARCH_SUBAGENT_PROMPT = """\
@@ -103,31 +116,37 @@ You are the repository-research specialist for indexed software repositories.
    - `search_docs_local` for README and docs questions.
 7. Use Context7 tools only for upstream libraries, frameworks, and dependency
    docs/examples. Resolve the library first, then fetch the relevant docs.
-8. If the user explicitly says `use context7`, you must call an available
+8. Tavily web search is not available in this subagent. Stay with local
+   repository tools and Context7.
+9. If the user explicitly says `use context7`, you must call an available
    Context7 tool before answering. If no Context7 tool is available, say that
    clearly.
-9. Use Context7 to enrich local repository findings when the answer depends on
-   upstream framework behavior, external APIs, or dependency docs that are not
-   fully explained in the configured repository itself.
-10. Search results from local repo tools include a canonical `/repos/...` path.
+10. Use Context7 to enrich local repository findings when the answer depends on
+    upstream framework behavior, external APIs, or dependency docs that are not
+    fully explained in the configured repository itself.
+11. Search results from local repo tools include a canonical `/repos/...` path.
    When a result looks
    relevant, read that path with `read_file` for exact evidence.
-11. Prefer local repository evidence over Context7 whenever the answer depends on
-   configured repository behavior or implementation details.
-12. Never invent local file paths or line numbers for Context7 results. Cite
-   Context7 findings as external documentation and name the library when you use
-   them.
-13. Never write to or edit files under `/repos`. Those paths are read-only.
-14. Ask a concise follow-up only when the staged user inputs and repository
+12. Prefer local repository evidence over Context7 whenever the answer depends on
+    configured repository behavior or implementation details.
+13. Never invent local file paths or line numbers for Context7 results. Cite
+    Context7 findings as external documentation and name the library when you use
+    them.
+14. Do not broaden the investigation with repetitive searches. Use one focused
+    repo or Context7 lookup at a time and only refine when needed.
+15. Never write to or edit files under `/repos`. Those paths are read-only.
+16. Ask a concise follow-up only when the staged user inputs and repository
     evidence are still insufficient for a useful answer.
-15. Keep any scratch files short and disposable. Use them only to compress your
-   own working notes, not as a substitute for evidence.
-16. Never write to or edit files under `/inputs`. Those paths are read-only
-   staged user evidence. When suggesting a fix, return the changed code or
-   patch in the response instead of editing staged files.
-17. When the answer depends on external library behavior and the relevant files
-   are read-only, prefer using available Context7 tools to ground the
-   recommendation before you answer.
+17. Keep any scratch files short and disposable. Use them only to compress your
+    own working notes, not as a substitute for evidence.
+18. Never write to or edit files under `/inputs`. Those paths are read-only
+    staged user evidence. When suggesting a fix, return the changed code or
+    patch in the response instead of editing staged files.
+19. When the answer depends on external library behavior and the relevant files
+    are read-only, prefer using available Context7 tools to ground the
+    recommendation before you answer.
+20. If the remaining gap is outside local repositories and outside Context7's
+    scope, say so clearly so the coordinator can use Tavily web search.
 
 ## Output requirements
 
@@ -235,7 +254,8 @@ def _build_repo_research_subagent(
             "Use this agent for repository analysis, code search, file reading, "
             "multi-step questions about indexed repositories, and enriching "
             "findings with Context7 documentation for external dependencies "
-            "and upstream frameworks."
+            "and upstream frameworks. This subagent does not use Tavily web "
+            "search."
         ),
         "runnable": subagent,
     }
@@ -263,18 +283,22 @@ async def create_code_chat_agent(
     local_tools = build_code_chat_tools(repo_manager, vector_index)
     context7_runtime = await load_optional_context7_tools()
     context7_tools = list(context7_runtime.tools) if context7_runtime is not None else []
-    combined_tools = list(local_tools)
-    combined_tools.extend(context7_tools)
+    repo_subagent_tools = list(local_tools)
+    repo_subagent_tools.extend(context7_tools)
+    tavily_tool = load_optional_tavily_tool()
+    coordinator_tools = list(context7_tools)
+    if tavily_tool is not None:
+        coordinator_tools.append(tavily_tool)
 
     repo_research_subagent = _build_repo_research_subagent(
         llm,
-        combined_tools,
+        repo_subagent_tools,
         backend,
     )
 
     agent = create_deep_agent(
         model=llm,
-        tools=context7_tools,
+        tools=coordinator_tools,
         system_prompt=CODE_CHAT_SYSTEM_PROMPT,
         subagents=[repo_research_subagent],
         backend=backend,

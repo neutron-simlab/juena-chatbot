@@ -57,6 +57,9 @@ services:
       - CONTEXT7_API_KEY=${CONTEXT7_API_KEY:-}
       - CONTEXT7_MCP_URL=${CONTEXT7_MCP_URL:-https://mcp.context7.com/mcp}
       - CONTEXT7_TIMEOUT_SECONDS=${CONTEXT7_TIMEOUT_SECONDS:-30}
+
+      # Tavily web search (optional)
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       
       # LangSmith Tracing (optional)
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
