@@ -33,6 +33,7 @@ from juena.server.errors import (
     ChatbotServerError
 )
 from juena.server.agent_input_handler import AgentInputHandler
+from juena.server.checkpointer import get_checkpointer
 from juena.server.code_chat_inputs import prepare_code_chat_turn_inputs
 from juena.server.streaming import StreamEventProcessor
 
@@ -115,7 +116,7 @@ async def _prepare_agent_invocation(
                 provider=provider,
                 model=model,
                 message_override=prepared_inputs.message_override,
-                initial_files=prepared_inputs.files_update,
+                initial_files=prepared_inputs.files_update or None,
             )
             effective_message = prepared_inputs.message_override
 
@@ -467,6 +468,25 @@ async def stream_with_files(
         message_generator(user_input, agent_id, attachments=attachments),
         media_type="text/event-stream",
     )
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str) -> dict[str, Any]:
+    """Delete all persisted LangGraph state for a conversation thread."""
+
+    try:
+        await get_checkpointer().adelete_thread(thread_id)
+        return {
+            "status": "success",
+            "thread_id": thread_id,
+            "message": f"Thread {thread_id} deleted successfully",
+        }
+    except RuntimeError as e:
+        logger.error("Checkpointer unavailable while deleting thread %s: %s", thread_id, e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    except Exception as e:
+        logger.error("Failed to delete thread %s: %s", thread_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete thread state") from e
 
 
 @router.post("/{agent_id}/restart")

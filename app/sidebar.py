@@ -9,6 +9,7 @@ import textwrap
 
 import httpx
 
+from juena.clients.client import AgentClientError
 from juena.schema.llm_models import Provider
 from juena.core.llms_providers import (
     get_available_providers,
@@ -45,6 +46,30 @@ def _format_chat_history_title(chat: Chat, max_chars: int = 22) -> tuple[str, st
         return title, title
 
     return textwrap.shorten(title, width=max_chars, placeholder="..."), title
+
+
+def _delete_chat_with_server_state(storage, thread_id: str, *, is_current: bool) -> tuple[bool, str | None]:
+    """Delete both the server-side thread state and the local chat history."""
+
+    client = st.session_state.get("client")
+    if client is None or not st.session_state.get("server_connected", False):
+        return False, "Server connection is required to delete the persisted conversation."
+
+    try:
+        client.delete_thread(thread_id)
+    except AgentClientError as exc:
+        return False, f"Failed to delete conversation state: {exc}"
+
+    storage.delete_chat(thread_id)
+
+    if is_current:
+        new_thread_id = str(uuid4())
+        storage.upsert_chat(Chat(thread_id=new_thread_id))
+        st.session_state.thread_id = new_thread_id
+        st.session_state.messages = []
+        st.session_state.welcome_initialized = False
+
+    return True, None
 
 
 def render_sidebar() -> None:
@@ -291,15 +316,15 @@ def render_sidebar() -> None:
                             key=f"delete_{chat.thread_id}",
                             use_container_width=True,
                         ):
-                            # Delete chat from storage
-                            storage.delete_chat(chat.thread_id)
-
-                            # If deleting the current chat, reset to a fresh thread
-                            if is_current:
-                                st.session_state.thread_id = str(uuid4())
-                                st.session_state.messages = []
-                                st.session_state.welcome_initialized = False
-                            st.rerun()
+                            deleted, error_message = _delete_chat_with_server_state(
+                                storage,
+                                chat.thread_id,
+                                is_current=is_current,
+                            )
+                            if deleted:
+                                st.rerun()
+                            if error_message:
+                                st.error(error_message)
         else:
             st.caption("No saved conversations yet.")
         
