@@ -186,3 +186,25 @@ def test_stream_uses_multipart_endpoint_when_attachments_are_present(
     assert captured["kwargs"]["files"] == [
         ("attachments", ("trace.log", b"ERROR: boom\n", "text/plain"))
     ]
+
+
+def test_delete_thread_uses_thread_cleanup_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_delete(url: str, *, headers: dict[str, str], timeout: float | None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return _FakeResponse({"status": "success", "thread_id": "thread-1"})
+
+    monkeypatch.setattr(client_module.httpx, "delete", fake_delete)
+
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="react_agent", timeout=5.0)
+    payload = client.delete_thread("thread-1")
+
+    assert payload == {"status": "success", "thread_id": "thread-1"}
+    assert captured == {
+        "url": "http://localhost:8080/threads/thread-1",
+        "headers": {},
+        "timeout": 5.0,
+    }

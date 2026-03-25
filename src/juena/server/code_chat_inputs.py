@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Any, Sequence
 
-from deepagents.backends.utils import create_file_data
+from deepagents.backends.utils import create_file_data, file_data_to_string
 from fastapi import UploadFile
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -50,6 +50,7 @@ TEXT_READABLE_FILE_TYPES = [
 _ALLOWED_SUFFIXES = {f".{suffix}" for suffix in TEXT_READABLE_FILE_TYPES}
 _INPUTS_PREFIX = "/inputs/"
 _UPLOADS_PREFIX = "/inputs/uploads/"
+_UPLOADS_MANIFEST_PATH = "/inputs/uploads_manifest.md"
 _FENCED_CODE_RE = re.compile(r"```(?P<lang>[A-Za-z0-9_#+.-]*)\n(?P<body>.*?)```", re.DOTALL)
 _ERROR_LINE_RE = re.compile(
     r"(Traceback \(most recent call last\):|^\s*File \".*\", line \d+|^\s*at .+\(.+:\d+\)|"
@@ -142,14 +143,18 @@ def is_text_readable_filename(filename: str | None) -> bool:
     return Path(filename or "").suffix.lower() in _ALLOWED_SUFFIXES
 
 
-def _dedupe_staged_name(filename: str, seen: dict[str, int]) -> str:
+def _dedupe_staged_name(filename: str, taken_names: set[str]) -> str:
     stem = Path(filename).stem or "upload"
     suffix = Path(filename).suffix
-    count = seen.get(filename, 0)
-    seen[filename] = count + 1
-    if count == 0:
-        return filename
-    return f"{stem}_{count + 1}{suffix}"
+    candidate = filename
+    index = 2
+
+    while candidate in taken_names:
+        candidate = f"{stem}_{index}{suffix}"
+        index += 1
+
+    taken_names.add(candidate)
+    return candidate
 
 
 def _decode_upload_text(raw: bytes, filename: str) -> str:
@@ -168,6 +173,8 @@ def _decode_upload_text(raw: bytes, filename: str) -> str:
 
 async def normalize_uploaded_attachments(
     attachments: Sequence[UploadFile] | None,
+    *,
+    existing_upload_paths: Sequence[str] | None = None,
 ) -> tuple[list[UploadedAttachment], dict[str, Any]]:
     """Validate uploads and stage them under ``/inputs/uploads``."""
 
@@ -179,7 +186,11 @@ async def normalize_uploaded_attachments(
 
     files_update: dict[str, Any] = {}
     normalized: list[UploadedAttachment] = []
-    seen_names: dict[str, int] = {}
+    taken_names = {
+        Path(path).name
+        for path in (existing_upload_paths or [])
+        if isinstance(path, str) and path.startswith(_UPLOADS_PREFIX)
+    }
 
     for index, upload in enumerate(uploads, start=1):
         original_name = upload.filename or f"upload_{index}.txt"
@@ -191,7 +202,7 @@ async def normalize_uploaded_attachments(
                 "Only text-readable code, config, docs, notebook, and log files are allowed."
             )
 
-        staged_name = _dedupe_staged_name(sanitized_name, seen_names)
+        staged_name = _dedupe_staged_name(sanitized_name, taken_names)
         raw = await upload.read()
         text = _decode_upload_text(raw, original_name)
         staged_path = f"{_UPLOADS_PREFIX}{staged_name}"
@@ -347,23 +358,172 @@ async def list_existing_input_paths(
     )
 
 
+async def get_existing_input_files(
+    agent: CompiledStateGraph,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Return the current staged ``/inputs`` files for the active thread."""
+
+    try:
+        state: Any = await agent.aget_state(config=config)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Failed to inspect existing staged inputs: %s", exc)
+        return {}
+
+    values = getattr(state, "values", {}) or {}
+    files = values.get("files", {}) or {}
+    return {
+        path: file_data
+        for path, file_data in files.items()
+        if isinstance(path, str) and path.startswith(_INPUTS_PREFIX)
+    }
+
+
+def _is_persistent_input_path(path: str) -> bool:
+    return path.startswith(_UPLOADS_PREFIX) or path == _UPLOADS_MANIFEST_PATH
+
+
+def _format_upload_manifest_entry(
+    index: int,
+    *,
+    staged_path: str,
+    original_filename: str,
+    char_count: int,
+) -> str:
+    return (
+        f"{index}. `{staged_path}` "
+        f"(from {original_filename}, {char_count} chars)"
+    )
+
+
+def build_uploads_manifest(
+    existing_files: dict[str, Any],
+    existing_upload_paths: Sequence[str],
+    new_uploads: Sequence[UploadedAttachment],
+) -> tuple[str, str | None] | None:
+    """Create or update the persistent thread upload manifest."""
+
+    existing_manifest = existing_files.get(_UPLOADS_MANIFEST_PATH)
+    created_at = None
+    if isinstance(existing_manifest, dict):
+        created_at = existing_manifest.get("created_at")
+        existing_manifest_text = file_data_to_string(existing_manifest).rstrip()
+    else:
+        existing_manifest_text = ""
+
+    if existing_manifest_text and not new_uploads:
+        return None
+
+    if existing_manifest_text:
+        start_index = len(existing_upload_paths) + 1
+        appended_entries = [
+            _format_upload_manifest_entry(
+                start_index + index,
+                staged_path=upload.staged_path,
+                original_filename=upload.original_filename,
+                char_count=upload.char_count,
+            )
+            for index, upload in enumerate(new_uploads)
+        ]
+        return "\n".join([existing_manifest_text, *appended_entries]), created_at
+
+    entries: list[str] = []
+    upload_by_path = {upload.staged_path: upload for upload in new_uploads}
+
+    for index, path in enumerate(
+        [*sorted(existing_upload_paths), *(upload.staged_path for upload in new_uploads if upload.staged_path not in existing_upload_paths)],
+        start=1,
+    ):
+        upload = upload_by_path.get(path)
+        if upload is not None:
+            entries.append(
+                _format_upload_manifest_entry(
+                    index,
+                    staged_path=upload.staged_path,
+                    original_filename=upload.original_filename,
+                    char_count=upload.char_count,
+                )
+            )
+            continue
+
+        file_data = existing_files.get(path)
+        char_count = len(file_data_to_string(file_data)) if isinstance(file_data, dict) else 0
+        entries.append(
+            _format_upload_manifest_entry(
+                index,
+                staged_path=path,
+                original_filename=Path(path).name,
+                char_count=char_count,
+            )
+        )
+
+    if not entries:
+        return None
+
+    lines = [
+        "# Persistent chat uploads",
+        "",
+        "Files uploaded in this chat remain available until the chat is deleted.",
+        "",
+        *entries,
+    ]
+    return "\n".join(lines), created_at
+
+
 def build_inputs_manifest(
     raw_message: str,
     attachments: Sequence[UploadedAttachment],
     pasted_context: PastedCodeContext | None,
+    *,
+    has_thread_uploads: bool,
 ) -> str:
     """Build the short staged-input manifest injected into agent history."""
 
     summary = pasted_context.user_goal if pasted_context and pasted_context.user_goal else raw_message
-    lines = [
-        "The user provided turn-scoped inputs under `/inputs` for this message.",
-        "Inspect `/inputs` before answering.",
-        "",
-        f"User request: {_compact_summary(summary)}",
-        "",
-        "Staged files:",
-        "- /inputs/current_message.txt",
-    ]
+    lines: list[str] = []
+
+    if has_thread_uploads:
+        lines.extend(
+            [
+                "Persistent uploaded files for this chat are available under `/inputs/uploads/`.",
+                f"Inspect `{_UPLOADS_MANIFEST_PATH}` to see every upload in this thread.",
+            ]
+        )
+
+    if attachments or pasted_context is not None:
+        lines.extend(
+            [
+                "This message also staged turn-scoped helper files under `/inputs`.",
+                "Inspect `/inputs` before answering.",
+            ]
+        )
+    elif has_thread_uploads:
+        lines.append("Inspect `/inputs/uploads/` before answering if the user refers to uploaded material.")
+
+    lines.extend(
+        [
+            "",
+            f"User request: {_compact_summary(summary)}",
+        ]
+    )
+
+    if has_thread_uploads:
+        lines.extend(
+            [
+                "",
+                "Persistent files:",
+                f"- {_UPLOADS_MANIFEST_PATH}",
+            ]
+        )
+
+    if attachments or pasted_context is not None:
+        lines.extend(
+            [
+                "",
+                "Current turn files:",
+                "- /inputs/current_message.txt",
+            ]
+        )
 
     if pasted_context and pasted_context.contains_code:
         lines.append(f"- {staged_code_path(pasted_context)}")
@@ -394,11 +554,30 @@ async def prepare_code_chat_turn_inputs(
 ) -> PreparedCodeChatInputs | None:
     """Prepare staged ``/inputs`` files and a manifest for one code-chat turn."""
 
-    existing_paths = await list_existing_input_paths(agent, config)
-    files_update: dict[str, Any | None] = {path: None for path in existing_paths}
+    existing_files = await get_existing_input_files(agent, config)
+    existing_upload_paths = sorted(
+        path for path in existing_files if path.startswith(_UPLOADS_PREFIX)
+    )
+    files_update: dict[str, Any | None] = {
+        path: None
+        for path in existing_files
+        if not _is_persistent_input_path(path)
+    }
 
-    uploaded, uploaded_updates = await normalize_uploaded_attachments(attachments)
+    uploaded, uploaded_updates = await normalize_uploaded_attachments(
+        attachments,
+        existing_upload_paths=existing_upload_paths,
+    )
     files_update.update(uploaded_updates)
+    has_thread_uploads = bool(existing_upload_paths or uploaded)
+
+    uploads_manifest = build_uploads_manifest(existing_files, existing_upload_paths, uploaded)
+    if uploads_manifest is not None:
+        manifest_content, manifest_created_at = uploads_manifest
+        files_update[_UPLOADS_MANIFEST_PATH] = create_file_data(
+            manifest_content,
+            created_at=manifest_created_at,
+        )
 
     pasted_context = extract_pasted_code_context(message)
     if uploaded or pasted_context is not None:
@@ -408,8 +587,14 @@ async def prepare_code_chat_turn_inputs(
         if pasted_context and pasted_context.contains_error:
             files_update["/inputs/current_error.txt"] = create_file_data(pasted_context.error_text)
 
+    if uploaded or pasted_context is not None or has_thread_uploads:
         return PreparedCodeChatInputs(
-            message_override=build_inputs_manifest(message, uploaded, pasted_context),
+            message_override=build_inputs_manifest(
+                message,
+                uploaded,
+                pasted_context,
+                has_thread_uploads=has_thread_uploads,
+            ),
             files_update=files_update,
         )
 

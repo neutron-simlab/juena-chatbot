@@ -253,8 +253,12 @@ def test_code_chat_prompts_cover_staged_user_inputs() -> None:
     assert "/inputs/" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
     assert "chat response" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
     assert "instead of editing staged files" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
-    assert "Use Tavily for information that is not available from the configured local" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
-    assert "outside-world information beyond local repositories and Context7" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
-    assert "For mixed questions, combine the subagent's local repository findings" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "For coding questions, inspect local indexed repositories first." in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "Use Context7 tools next" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "Use Tavily only as a last resort after local repositories and Context7" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "local repositories first," in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "Context7 second, Tavily only" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
     assert "Tavily web search is not available in this subagent" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Exhaust local repository evidence before consulting external sources." in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
     assert "coordinator can use Tavily web search" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "last resort" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT

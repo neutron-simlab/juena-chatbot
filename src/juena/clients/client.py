@@ -510,6 +510,21 @@ class AgentClient:
         if isinstance(message, dict) and self.is_token_message(message):
             return message.get("content")
         return None
+
+    def delete_thread(self, thread_id: str) -> dict[str, Any]:
+        """Delete all persisted server-side state for a conversation thread."""
+
+        try:
+            response = httpx.delete(
+                f"{self.base_url}/threads/{thread_id}",
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+
+        return response.json()
     
     def restart(
         self,

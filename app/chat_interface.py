@@ -77,10 +77,11 @@ def build_agent_intro_message(client: AgentClient) -> ChatMessage:
         ),
         (
             "- `code_chat_agent`: specialized for repository analysis, code "
-            "search, file reading, multi-step questions about indexed "
-            "repositories, optional Context7 docs for external libraries, and "
-            "optional coordinator-level Tavily web search for non-repository "
-            "questions."
+            "search, file reading, and multi-step questions about indexed "
+            "repositories. It checks local indexed repos first, then optional "
+            "Context7 docs for external libraries, and only then uses "
+            "coordinator-level Tavily web search if the coding context is "
+            "still insufficient or the question is non-repository."
         ),
         "",
         "Available repositories for `code_chat_agent`:",

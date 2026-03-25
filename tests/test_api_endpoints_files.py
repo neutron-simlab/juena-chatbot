@@ -61,12 +61,13 @@ def test_invoke_with_files_stages_inputs_and_returns_chat_message(monkeypatch) -
     assert payload["thread_id"] == "thread-1"
 
     assert fake_agent.last_kwargs is not None
-    assert fake_agent.last_kwargs["input"]["messages"][0].content.startswith(
-        "The user provided turn-scoped inputs under `/inputs`"
+    assert "Persistent uploaded files for this chat are available under `/inputs/uploads/`." in (
+        fake_agent.last_kwargs["input"]["messages"][0].content
     )
     assert fake_agent.last_kwargs["input"]["files"]["/inputs/old.txt"] is None
     assert "/inputs/current_message.txt" in fake_agent.last_kwargs["input"]["files"]
     assert "/inputs/uploads/snippet.py" in fake_agent.last_kwargs["input"]["files"]
+    assert "/inputs/uploads_manifest.md" in fake_agent.last_kwargs["input"]["files"]
 
 
 def test_invoke_with_files_rejects_unsupported_file_types(monkeypatch) -> None:
@@ -86,3 +87,24 @@ def test_invoke_with_files_rejects_unsupported_file_types(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert "unsupported extension" in response.json()["detail"]
+
+
+def test_delete_thread_endpoint_removes_persisted_state(monkeypatch) -> None:
+    deleted: dict[str, str] = {}
+
+    class _FakeCheckpointer:
+        async def adelete_thread(self, thread_id: str) -> None:
+            deleted["thread_id"] = thread_id
+
+    monkeypatch.setattr(api_endpoints, "get_checkpointer", lambda: _FakeCheckpointer())
+
+    client = _build_test_client()
+    response = client.delete("/threads/thread-123")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "success",
+        "thread_id": "thread-123",
+        "message": "Thread thread-123 deleted successfully",
+    }
+    assert deleted == {"thread_id": "thread-123"}
