@@ -47,31 +47,38 @@ You are a code-chat coordinator for indexed software repositories.
    file reading out of the coordinator thread whenever possible.
 2. Configured repositories are mounted read-only at `/repos/<repo_id>/`.
    If the user asks which repositories are available, inspect `/repos`.
-3. Repository file navigation should use Deep Agents filesystem primitives:
+3. If `/inputs/` exists, inspect it before searching repositories. Treat
+   `/inputs/...` as turn-scoped user-provided code, logs, configs, or docs.
+4. Repository file navigation should use Deep Agents filesystem primitives:
    `ls`, `glob`, `grep`, and `read_file` against `/repos/...`.
-4. Use the local repository retrieval tools for configured repositories when
+5. Use paginated `read_file` calls for large staged input files instead of
+   trying to ingest them all at once.
+6. Use the local repository retrieval tools for configured repositories when
    conceptual or indexed retrieval is more useful than direct filesystem
    navigation.
-5. Use Context7 tools only for external libraries, frameworks, and dependency
+7. Use Context7 tools only for external libraries, frameworks, and dependency
    documentation. They complement local repo analysis and do not replace
    `/repos/...` evidence.
-6. If the user explicitly says `use context7`, you must call an available
+8. If the user explicitly says `use context7`, you must call an available
    Context7 tool before answering. If Context7 tools are unavailable, say that
    clearly.
-7. The repository research subagent may use Context7 to enrich its findings
+9. The repository research subagent may use Context7 to enrich its findings
    when local repository answers depend on upstream libraries, frameworks, or
    dependency documentation.
-8. Never answer codebase questions from memory alone. Wait for the subagent's
+10. Never answer codebase questions from memory alone. Wait for the subagent's
    cited findings before you synthesize the final answer.
-9. Your final response to the user must be concise, directly answer the
+11. Your final response to the user must be concise, directly answer the
    question, and cite file paths with line numbers whenever the subagent
    provides enough local repository evidence. If you use external Context7
    material, label it as external documentation rather than local repository
    evidence.
-10. If the user's message is just a greeting or is outside repository analysis,
+12. If the user's message is just a greeting or is outside repository analysis,
    respond directly without delegation.
-11. Do not expose internal scratch notes, todos, or subagent mechanics unless
+13. Do not expose internal scratch notes, todos, or subagent mechanics unless
    the user explicitly asks for them.
+14. Treat `/inputs/...` as read-only user evidence. Never write the user's
+   solution into staged files. If the user asks for a fix, provide the
+   proposed code changes directly in your chat response.
 """
 
 CODE_CHAT_RESEARCH_SUBAGENT_PROMPT = """\
@@ -80,35 +87,47 @@ You are the repository-research specialist for indexed software repositories.
 ## Required workflow
 
 1. Always search first. Do not answer from memory.
-2. Discover available repositories by listing `/repos`.
-3. For exact repository navigation, use filesystem tools on `/repos/...`:
+2. If `/inputs/` exists, inspect it before searching repositories. Treat it as
+   user-provided evidence for the current turn.
+3. Discover available repositories by listing `/repos`.
+4. For exact repository navigation, use filesystem tools on `/repos/...`:
    - `ls("/repos")` to discover repository ids.
    - `glob` and `grep` for exact filenames, symbols, and strings.
    - `read_file` for line-numbered source and documentation evidence.
-4. Use the local retrieval tools when indexed search is the better fit for a
+5. For large staged user files, page through `/inputs/...` with `read_file`
+   offsets and use `grep` before reading more.
+6. Use the local retrieval tools when indexed search is the better fit for a
    configured repository:
    - `search_code_hybrid` for most technical questions.
    - `search_code_semantic` for conceptual questions.
    - `search_docs_local` for README and docs questions.
-5. Use Context7 tools only for upstream libraries, frameworks, and dependency
+7. Use Context7 tools only for upstream libraries, frameworks, and dependency
    docs/examples. Resolve the library first, then fetch the relevant docs.
-6. If the user explicitly says `use context7`, you must call an available
+8. If the user explicitly says `use context7`, you must call an available
    Context7 tool before answering. If no Context7 tool is available, say that
    clearly.
-7. Use Context7 to enrich local repository findings when the answer depends on
+9. Use Context7 to enrich local repository findings when the answer depends on
    upstream framework behavior, external APIs, or dependency docs that are not
    fully explained in the configured repository itself.
-8. Search results from local repo tools include a canonical `/repos/...` path.
+10. Search results from local repo tools include a canonical `/repos/...` path.
    When a result looks
    relevant, read that path with `read_file` for exact evidence.
-9. Prefer local repository evidence over Context7 whenever the answer depends on
+11. Prefer local repository evidence over Context7 whenever the answer depends on
    configured repository behavior or implementation details.
-10. Never invent local file paths or line numbers for Context7 results. Cite
+12. Never invent local file paths or line numbers for Context7 results. Cite
    Context7 findings as external documentation and name the library when you use
    them.
-11. Never write to or edit files under `/repos`. Those paths are read-only.
-12. Keep any scratch files short and disposable. Use them only to compress your
+13. Never write to or edit files under `/repos`. Those paths are read-only.
+14. Ask a concise follow-up only when the staged user inputs and repository
+    evidence are still insufficient for a useful answer.
+15. Keep any scratch files short and disposable. Use them only to compress your
    own working notes, not as a substitute for evidence.
+16. Never write to or edit files under `/inputs`. Those paths are read-only
+   staged user evidence. When suggesting a fix, return the changed code or
+   patch in the response instead of editing staged files.
+17. When the answer depends on external library behavior and the relevant files
+   are read-only, prefer using available Context7 tools to ground the
+   recommendation before you answer.
 
 ## Output requirements
 
@@ -149,6 +168,26 @@ class ReadOnlyFilesystemBackend(FilesystemBackend):
         return EditResult(error=f"Cannot edit read-only repository path '{file_path}'.")
 
 
+class ReadOnlyStateBackend(StateBackend):
+    """Ephemeral state backend wrapper that blocks mutations under /inputs."""
+
+    def write(
+        self,
+        file_path: str,
+        content: str,
+    ) -> WriteResult:
+        return WriteResult(error=f"Cannot write to read-only staged input path '{file_path}'.")
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        return EditResult(error=f"Cannot edit read-only staged input path '{file_path}'.")
+
+
 def _build_code_chat_backend(
     repo_cache_root: Path,
 ) -> Callable[[ToolRuntime[Any]], CompositeBackend]:
@@ -162,7 +201,10 @@ def _build_code_chat_backend(
     def backend_factory(runtime: ToolRuntime[Any]) -> CompositeBackend:
         return CompositeBackend(
             default=StateBackend(runtime),
-            routes={"/repos/": repos_backend},
+            routes={
+                "/inputs/": ReadOnlyStateBackend(runtime),
+                "/repos/": repos_backend,
+            },
         )
 
     return backend_factory

@@ -1,12 +1,20 @@
 """
 Chat interface for Streamlit app.
 """
+from typing import Any
+
 import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
 from juena.schema.server import ChatMessage
 from juena.server.agent_registry import DEFAULT_AGENT
+from juena.server.code_chat_inputs import (
+    CHAT_INPUT_MAX_CHARS,
+    CHAT_INPUT_MAX_UPLOAD_MB,
+    TEXT_READABLE_FILE_TYPES,
+)
 from app.ui_components import (
     finalize_streaming_message,
+    render_chat_input_styles,
     render_header_with_logo,
     render_message,
     render_streaming_token,
@@ -137,10 +145,58 @@ def process_stream_chunk(
     return response_text, received_complete_message
 
 
+def _allow_chat_attachments() -> bool:
+    """Return whether the active agent should accept file attachments."""
+
+    return getattr(st.session_state, "selected_agent", DEFAULT_AGENT) == "code_chat_agent"
+
+
+def _normalize_chat_submission(submission: Any) -> tuple[str, list[Any]]:
+    """Normalize Streamlit chat input into text plus attached files."""
+
+    if submission is None:
+        return "", []
+    if isinstance(submission, str):
+        return submission, []
+    text = str(getattr(submission, "text", "") or "")
+    files = list(getattr(submission, "files", []) or [])
+    return text, files
+
+
+def _format_user_submission(text: str, attachments: list[Any]) -> str:
+    """Render the local user-message content shown in chat history."""
+
+    attachment_names = [str(getattr(attachment, "name", "attachment")) for attachment in attachments]
+    if text and attachment_names:
+        return text + "\n\nAttachments:\n" + "\n".join(f"- {name}" for name in attachment_names)
+    if attachment_names:
+        return "Uploaded files:\n" + "\n".join(f"- {name}" for name in attachment_names)
+    return text
+
+
+def _chat_input_kwargs() -> dict[str, Any]:
+    """Return keyword arguments for the main Streamlit chat input."""
+
+    kwargs: dict[str, Any] = {
+        "placeholder": "Type your message here...",
+        "max_chars": CHAT_INPUT_MAX_CHARS,
+    }
+    if _allow_chat_attachments():
+        kwargs.update(
+            {
+                "accept_file": "multiple",
+                "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
+                "file_type": TEXT_READABLE_FILE_TYPES,
+            }
+        )
+    return kwargs
+
+
 def stream_and_display_response(
     message: str,
     message_placeholder,
-    should_rerun: bool = True
+    should_rerun: bool = True,
+    attachments: list[Any] | None = None,
 ) -> None:
     """
     Stream a response from the agent and display it.
@@ -163,6 +219,7 @@ def stream_and_display_response(
             user_id=st.session_state.user_id,
             provider=st.session_state.selected_provider,
             model=st.session_state.selected_model,
+            attachments=attachments,
             stream_tokens=True,
         ):
             response_text, received_complete_message = process_stream_chunk(
@@ -206,6 +263,7 @@ def render_chat_interface() -> None:
     """Render the main chat interface including header, message history, and input."""
     # Render header
     render_header_with_logo()
+    render_chat_input_styles()
     
     # Auto-trigger initial welcome from server when connected and history is empty
     if (
@@ -229,12 +287,19 @@ def render_chat_interface() -> None:
         render_message(message, show_system=st.session_state.show_system_messages)
 
     # Chat input
-    if prompt := st.chat_input("Type your message here..."):
+    submission = st.chat_input(**_chat_input_kwargs())
+    if submission is not None:
+        prompt, attachments = _normalize_chat_submission(submission)
+        if not prompt and not attachments:
+            return
         if not st.session_state.client:
             st.error("Server not connected. Please check server status in the sidebar.")
         else:
             # Add user message
-            user_message = ChatMessage(type="human", content=prompt)
+            user_message = ChatMessage(
+                type="human",
+                content=_format_user_submission(prompt, attachments),
+            )
             st.session_state.messages.append(user_message)
             save_message_to_storage(st.session_state.thread_id, user_message)
             render_message(user_message)
@@ -242,4 +307,11 @@ def render_chat_interface() -> None:
             # Stream response
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
-                stream_and_display_response(prompt, message_placeholder)
+                if attachments:
+                    stream_and_display_response(
+                        prompt,
+                        message_placeholder,
+                        attachments=attachments,
+                    )
+                else:
+                    stream_and_display_response(prompt, message_placeholder)

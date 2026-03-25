@@ -10,10 +10,35 @@ from typing import Any, Dict, Optional
 
 from juena.schema.server import ChatMessage
 
+CHAT_INPUT_MIN_HEIGHT_REM = 7.5
+CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM = 5.5
+
 
 def render_header_with_logo() -> None:
     """Render a top header with logo if available."""
     st.title("JüNA Chatbot")
+
+
+def render_chat_input_styles() -> None:
+    """Inject lightweight CSS tweaks for a taller chat composer."""
+    st.markdown(
+        f"""
+        <style>
+        div[data-testid="stChatInput"] textarea {{
+            min-height: {CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM}rem !important;
+            padding-top: 0.75rem;
+            padding-bottom: 0.75rem;
+            line-height: 1.5;
+        }}
+
+        div[data-testid="stChatInput"] > div {{
+            min-height: {CHAT_INPUT_MIN_HEIGHT_REM}rem;
+            align-items: stretch;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_content(content: Any) -> None:

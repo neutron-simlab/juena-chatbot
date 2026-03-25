@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, object]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env["JUENA_ENV_PATH"] = str(REPO_ROOT / ".env.test.empty")
     env["OPENAI_API_KEY"] = "test-key"
     env["DEFAULT_PROVIDER"] = "openai"
     env["FALLBACK_PROVIDER"] = "openai"

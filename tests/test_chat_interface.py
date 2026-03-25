@@ -10,6 +10,7 @@ import pytest
 
 from juena.clients.client import AgentClientError
 from juena.schema.server import ChatMessage
+from juena.server.code_chat_inputs import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
 
 
 class _FakeTokenClient:
@@ -159,6 +160,7 @@ def test_build_agent_intro_message_falls_back_when_repositories_fail(monkeypatch
 def test_render_chat_interface_inserts_intro_and_preserves_start_kickoff(monkeypatch) -> None:
     chat_interface = _import_chat_interface(monkeypatch)
     render_header_mock = Mock()
+    render_chat_input_styles_mock = Mock()
     render_message_mock = Mock()
     save_mock = Mock()
     placeholder = Mock()
@@ -193,6 +195,7 @@ def test_render_chat_interface_inserts_intro_and_preserves_start_kickoff(monkeyp
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "render_header_with_logo", render_header_mock)
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
     monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
     monkeypatch.setattr(chat_interface, "stream_and_display_response", fake_stream)
@@ -206,6 +209,7 @@ def test_render_chat_interface_inserts_intro_and_preserves_start_kickoff(monkeyp
     assert "`react_agent`" in intro_message.content
     assert "- `datreat`" in intro_message.content
     render_header_mock.assert_called_once_with()
+    render_chat_input_styles_mock.assert_called_once_with()
     render_message_mock.assert_called_once_with(intro_message, show_system=False)
     save_mock.assert_called_once_with("thread-1", intro_message)
     assert stream_calls == [("Start", placeholder, True)]
@@ -214,6 +218,7 @@ def test_render_chat_interface_inserts_intro_and_preserves_start_kickoff(monkeyp
 def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(monkeypatch) -> None:
     chat_interface = _import_chat_interface(monkeypatch)
     render_header_mock = Mock()
+    render_chat_input_styles_mock = Mock()
     render_message_mock = Mock()
     save_mock = Mock()
     stream_mock = Mock()
@@ -238,6 +243,7 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "render_header_with_logo", render_header_mock)
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
     monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
     monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
@@ -245,7 +251,100 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
     chat_interface.render_chat_interface()
 
     render_header_mock.assert_called_once_with()
+    render_chat_input_styles_mock.assert_called_once_with()
     render_message_mock.assert_called_once_with(existing_message, show_system=False)
     save_mock.assert_not_called()
     stream_mock.assert_not_called()
     assert session_state.messages == [existing_message]
+
+
+def test_render_chat_interface_uses_attachment_enabled_chat_input_for_code_chat_agent(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    chat_input_mock = Mock(return_value=None)
+    render_chat_input_styles_mock = Mock()
+    session_state = _SessionState(
+        server_connected=True,
+        client=Mock(),
+        messages=[ChatMessage(type="ai", content="Existing response")],
+        welcome_initialized=True,
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        selected_agent="code_chat_agent",
+        show_system_messages=False,
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(),
+        chat_input=chat_input_mock,
+    )
+
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
+    monkeypatch.setattr(chat_interface, "render_message", Mock())
+    monkeypatch.setattr(chat_interface, "save_message_to_storage", Mock())
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+
+    chat_interface.render_chat_interface()
+
+    chat_input_mock.assert_called_once_with(
+        placeholder="Type your message here...",
+        max_chars=CHAT_INPUT_MAX_CHARS,
+        accept_file="multiple",
+        max_upload_size=CHAT_INPUT_MAX_UPLOAD_MB,
+        file_type=[
+            "py", "js", "ts", "java", "c", "cpp", "rs", "go", "sh", "md", "txt",
+            "log", "json", "yaml", "yml", "toml", "ini", "cfg", "csv", "sql",
+            "html", "css", "xml", "ipynb",
+        ],
+    )
+    render_chat_input_styles_mock.assert_called_once_with()
+
+
+def test_render_chat_interface_streams_attachments_for_code_chat_agent(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    render_message_mock = Mock()
+    render_chat_input_styles_mock = Mock()
+    save_mock = Mock()
+    stream_mock = Mock()
+    attachment = SimpleNamespace(name="snippet.py")
+    submission = SimpleNamespace(text="please inspect", files=[attachment])
+    session_state = _SessionState(
+        server_connected=True,
+        client=Mock(),
+        messages=[],
+        welcome_initialized=True,
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        selected_agent="code_chat_agent",
+        show_system_messages=False,
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(),
+        chat_input=Mock(return_value=submission),
+        error=Mock(),
+    )
+
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
+    monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
+    monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+
+    chat_interface.render_chat_interface()
+
+    assert session_state.messages[0].content == "please inspect\n\nAttachments:\n- snippet.py"
+    render_message_mock.assert_called_once_with(session_state.messages[0])
+    save_mock.assert_called_once_with("thread-1", session_state.messages[0])
+    stream_mock.assert_called_once()
+    render_chat_input_styles_mock.assert_called_once_with()
+    assert stream_mock.call_args.args[:2] == ("please inspect", fake_st.empty.return_value)
+    assert stream_mock.call_args.kwargs["attachments"] == [attachment]

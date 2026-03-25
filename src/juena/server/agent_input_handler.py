@@ -28,6 +28,8 @@ class AgentInputHandler:
         run_id: UUID | None = None,
         provider: str | None = None,
         model: str | None = None,
+        message_override: str | None = None,
+        initial_files: dict[str, Any | None] | None = None,
     ) -> tuple[dict[str, Any], UUID]:
         """
         Prepare input for agent invocation.
@@ -43,6 +45,8 @@ class AgentInputHandler:
             run_id: Optional run ID, will generate if not provided
             provider: Optional LLM provider (openai/blablador); normalized to default if None
             model: Optional LLM model name; normalized to provider default if None
+            message_override: Optional alternate human-message content to inject
+            initial_files: Optional Deep Agents state filesystem updates
             
         Returns:
             Tuple of (kwargs for agent invocation, run_id)
@@ -69,10 +73,12 @@ class AgentInputHandler:
         # Prepare input - always add as human message
         # LangGraph will automatically resume from checkpoint
         input_data = {
-            "messages": [HumanMessage(content=user_input)],
+            "messages": [HumanMessage(content=message_override or user_input)],
             "thread_id": thread_id,
             "user_id": user_id,
         }
+        if initial_files is not None:
+            input_data["files"] = initial_files
         
         kwargs = {
             "input": input_data,

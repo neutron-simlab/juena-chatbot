@@ -130,6 +130,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     composite_backend = backend_factory(type("Runtime", (), {"state": {}})())
     assert isinstance(composite_backend, code_chat_agent.CompositeBackend)
     assert isinstance(composite_backend.default, code_chat_agent.StateBackend)
+    assert isinstance(composite_backend.routes["/inputs/"], code_chat_agent.ReadOnlyStateBackend)
     assert isinstance(composite_backend.routes["/repos/"], code_chat_agent.ReadOnlyFilesystemBackend)
     assert composite_backend.routes["/repos/"].cwd == created["repo_cache_dir"].resolve()
     repo_subagent = created["deep_agent_kwargs"]["subagents"][0]
@@ -209,6 +210,19 @@ def test_read_only_filesystem_backend_rejects_writes(tmp_path: Path) -> None:
     assert "read-only repository path" in edit_result.error
 
 
+def test_read_only_state_backend_rejects_writes() -> None:
+    runtime = type("Runtime", (), {"state": {"files": {"/inputs/current_code.py": {"content": ["print('x')"]}}}})()
+    backend = code_chat_agent.ReadOnlyStateBackend(runtime)
+
+    write_result = backend.write("/inputs/new.txt", "hello")
+    edit_result = backend.edit("/inputs/current_code.py", "print('x')", "print('y')")
+
+    assert write_result.error is not None
+    assert "read-only staged input path" in write_result.error
+    assert edit_result.error is not None
+    assert "read-only staged input path" in edit_result.error
+
+
 def test_code_chat_backend_exposes_repo_cache_under_repos_prefix(tmp_path: Path) -> None:
     (tmp_path / "repo-a").mkdir()
     (tmp_path / "repo-b").mkdir()
@@ -219,3 +233,10 @@ def test_code_chat_backend_exposes_repo_cache_under_repos_prefix(tmp_path: Path)
     paths = sorted(info["path"] for info in composite_backend.ls_info("/repos"))
 
     assert paths == ["/repos/repo-a/", "/repos/repo-b/"]
+
+
+def test_code_chat_prompts_cover_staged_user_inputs() -> None:
+    assert "/inputs/" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "/inputs/" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "chat response" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "instead of editing staged files" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
