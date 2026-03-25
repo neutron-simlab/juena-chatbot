@@ -72,12 +72,15 @@ def build_agent_intro_message(client: AgentClient) -> ChatMessage:
         "",
         (
             f"- `{DEFAULT_AGENT}`: default starting agent for general-purpose "
-            "Q&A and simple helper tasks."
+            "Q&A, simple helper tasks, and optional Tavily web search for "
+            "current or external facts."
         ),
         (
             "- `code_chat_agent`: specialized for repository analysis, code "
-            "search, file reading, and multi-step questions about indexed "
-            "repositories."
+            "search, file reading, multi-step questions about indexed "
+            "repositories, optional Context7 docs for external libraries, and "
+            "optional coordinator-level Tavily web search for non-repository "
+            "questions."
         ),
         "",
         "Available repositories for `code_chat_agent`:",

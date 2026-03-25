@@ -98,6 +98,9 @@ class Config:
     CONTEXT7_API_KEY = os.getenv("CONTEXT7_API_KEY")
     CONTEXT7_MCP_URL = os.getenv("CONTEXT7_MCP_URL", "https://mcp.context7.com/mcp")
     CONTEXT7_TIMEOUT_SECONDS = int(os.getenv("CONTEXT7_TIMEOUT_SECONDS", "30"))
+
+    # Tavily web search (optional external web search tool)
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
     
     # =============================================================================
     # SERVER CONFIGURATION

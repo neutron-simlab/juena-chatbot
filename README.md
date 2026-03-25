@@ -14,11 +14,15 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, La
 - SQLite persistence for LangGraph checkpoints and chat history
 - Repository bootstrap and vector indexing for code-aware retrieval
 - OpenAI and Blablador model support
+- Optional Tavily web search
 
 ## Included Agents
 
 - `react_agent`
-  The default general-purpose assistant. Bare `/invoke` and `/stream` requests go here unless you specify another agent id.
+  The default general-purpose assistant. Bare `/invoke` and `/stream`
+  requests go here unless you specify another agent id. When `TAVILY_API_KEY`
+  is configured, it can also use Tavily web search for current or external
+  facts.
 
 - `code_chat_agent`
   A repository-analysis agent for indexed code and docs. It combines:
@@ -26,6 +30,7 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, La
   - hybrid retrieval for code and documentation
   - semantic search over persistent vector indices
   - optional Context7 MCP access for external library/framework docs and code examples
+  - optional coordinator-level Tavily web search for non-repository or current-event questions
 
 On a fresh UI chat, the welcome message introduces both agents and lists the repositories available to `code_chat_agent`.
 
@@ -157,6 +162,17 @@ Optional environment variables:
 - `CONTEXT7_API_KEY`
 - `CONTEXT7_MCP_URL` (default: `https://mcp.context7.com/mcp`)
 - `CONTEXT7_TIMEOUT_SECONDS` (default: `30`)
+
+## Tavily Web Search
+
+`react_agent` can optionally use Tavily for web search. `code_chat_agent`
+can also use Tavily at the coordinator level for non-repository or current web
+questions, while its repository-research subagent stays limited to local repo
+tools plus Context7.
+
+Optional environment variables:
+
+- `TAVILY_API_KEY`
 
 ## Local Development
 

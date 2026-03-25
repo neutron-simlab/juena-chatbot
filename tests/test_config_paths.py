@@ -28,6 +28,7 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
         "CONTEXT7_API_KEY",
         "CONTEXT7_MCP_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
+        "TAVILY_API_KEY",
     ):
         env.pop(key, None)
 
@@ -49,6 +50,7 @@ print("JSON::" + json.dumps({
     "context7_api_key": global_config.CONTEXT7_API_KEY,
     "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
     "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
+    "tavily_api_key": global_config.TAVILY_API_KEY,
 }))
 """
     result = subprocess.run(
@@ -101,3 +103,4 @@ def test_context7_defaults_are_parsed() -> None:
     assert snapshot["context7_api_key"] is None
     assert snapshot["context7_mcp_url"] == "https://mcp.context7.com/mcp"
     assert snapshot["context7_timeout_seconds"] == 30
+    assert snapshot["tavily_api_key"] is None
