@@ -138,8 +138,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert callable(backend_factory)
     composite_backend = backend_factory(type("Runtime", (), {"state": {}})())
     assert isinstance(composite_backend, code_chat_agent.CompositeBackend)
-    assert isinstance(composite_backend.default, code_chat_agent.StateBackend)
-    assert isinstance(composite_backend.routes["/inputs/"], code_chat_agent.ReadOnlyStateBackend)
+    assert isinstance(composite_backend.default, code_chat_agent.ReadOnlyStateBackend)
     assert isinstance(composite_backend.routes["/repos/"], code_chat_agent.ReadOnlyFilesystemBackend)
     assert composite_backend.routes["/repos/"].cwd == created["repo_cache_dir"].resolve()
     repo_subagent = created["deep_agent_kwargs"]["subagents"][0]
@@ -229,11 +228,13 @@ def test_read_only_state_backend_rejects_writes() -> None:
 
     write_result = backend.write("/inputs/new.txt", "hello")
     edit_result = backend.edit("/inputs/current_code.py", "print('x')", "print('y')")
+    scratch_write = backend.write("/scratch.txt", "hello")
 
     assert write_result.error is not None
     assert "read-only staged input path" in write_result.error
     assert edit_result.error is not None
     assert "read-only staged input path" in edit_result.error
+    assert scratch_write.path == "/scratch.txt"
 
 
 def test_code_chat_backend_exposes_repo_cache_under_repos_prefix(tmp_path: Path) -> None:
@@ -246,6 +247,46 @@ def test_code_chat_backend_exposes_repo_cache_under_repos_prefix(tmp_path: Path)
     paths = sorted(info["path"] for info in composite_backend.ls_info("/repos"))
 
     assert paths == ["/repos/repo-a/", "/repos/repo-b/"]
+
+
+def test_code_chat_backend_exposes_staged_inputs_under_inputs_prefix(tmp_path: Path) -> None:
+    runtime = type(
+        "Runtime",
+        (),
+        {
+            "state": {
+                "files": {
+                    "/inputs/current_message.txt": {
+                        "content": ["please inspect this file"],
+                        "created_at": "c",
+                        "modified_at": "m",
+                    },
+                    "/inputs/uploads/example.py": {
+                        "content": ["print('x')"],
+                        "created_at": "c",
+                        "modified_at": "m",
+                    },
+                    "/scratch.txt": {
+                        "content": ["temporary note"],
+                        "created_at": "c",
+                        "modified_at": "m",
+                    },
+                }
+            }
+        },
+    )()
+    backend_factory = code_chat_agent._build_code_chat_backend(tmp_path)
+    composite_backend = backend_factory(runtime)
+
+    root_paths = sorted(info["path"] for info in composite_backend.ls_info("/"))
+    input_paths = sorted(info["path"] for info in composite_backend.ls_info("/inputs"))
+    upload_paths = sorted(info["path"] for info in composite_backend.ls_info("/inputs/uploads"))
+
+    assert root_paths == ["/inputs/", "/repos/", "/scratch.txt"]
+    assert input_paths == ["/inputs/current_message.txt", "/inputs/uploads/"]
+    assert upload_paths == ["/inputs/uploads/example.py"]
+    assert "please inspect this file" in composite_backend.read("/inputs/current_message.txt")
+    assert "print('x')" in composite_backend.read("/inputs/uploads/example.py")
 
 
 def test_code_chat_prompts_cover_staged_user_inputs() -> None:
