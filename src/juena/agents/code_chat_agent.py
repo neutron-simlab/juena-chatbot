@@ -200,12 +200,17 @@ class ReadOnlyFilesystemBackend(FilesystemBackend):
 class ReadOnlyStateBackend(StateBackend):
     """Ephemeral state backend wrapper that blocks mutations under /inputs."""
 
+    def _is_read_only_path(self, file_path: str) -> bool:
+        return file_path == "/inputs" or file_path.startswith("/inputs/")
+
     def write(
         self,
         file_path: str,
         content: str,
     ) -> WriteResult:
-        return WriteResult(error=f"Cannot write to read-only staged input path '{file_path}'.")
+        if self._is_read_only_path(file_path):
+            return WriteResult(error=f"Cannot write to read-only staged input path '{file_path}'.")
+        return super().write(file_path, content)
 
     def edit(
         self,
@@ -214,7 +219,9 @@ class ReadOnlyStateBackend(StateBackend):
         new_string: str,
         replace_all: bool = False,  # noqa: FBT001, FBT002
     ) -> EditResult:
-        return EditResult(error=f"Cannot edit read-only staged input path '{file_path}'.")
+        if self._is_read_only_path(file_path):
+            return EditResult(error=f"Cannot edit read-only staged input path '{file_path}'.")
+        return super().edit(file_path, old_string, new_string, replace_all=replace_all)
 
 
 def _build_code_chat_backend(
@@ -229,9 +236,8 @@ def _build_code_chat_backend(
 
     def backend_factory(runtime: ToolRuntime[Any]) -> CompositeBackend:
         return CompositeBackend(
-            default=StateBackend(runtime),
+            default=ReadOnlyStateBackend(runtime),
             routes={
-                "/inputs/": ReadOnlyStateBackend(runtime),
                 "/repos/": repos_backend,
             },
         )
