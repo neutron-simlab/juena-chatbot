@@ -86,6 +86,34 @@ def test_process_stream_chunk_ai_message_uses_finalize_renderer(monkeypatch) -> 
     save_mock.assert_called_once_with("thread-1", chunk)
 
 
+def test_process_stream_chunk_ai_message_preserves_raw_math_for_finalize_renderer(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    finalize_mock = Mock()
+    save_mock = Mock()
+    message_placeholder = Mock()
+    messages: list[ChatMessage] = []
+    chunk = ChatMessage(type="ai", content=r"Result: \(a^2+b^2=c^2\)")
+
+    monkeypatch.setattr(chat_interface, "finalize_streaming_message", finalize_mock)
+    monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
+
+    response_text, received_complete = chat_interface.process_stream_chunk(
+        chunk=chunk,
+        client=Mock(),
+        response_text="",
+        received_complete_message=False,
+        message_placeholder=message_placeholder,
+        messages=messages,
+        thread_id="thread-1",
+    )
+
+    assert response_text == r"Result: \(a^2+b^2=c^2\)"
+    assert received_complete is True
+    assert messages == [chunk]
+    finalize_mock.assert_called_once_with(message_placeholder, r"Result: \(a^2+b^2=c^2\)")
+    save_mock.assert_called_once_with("thread-1", chunk)
+
+
 def test_stream_and_display_response_token_only_completion_uses_finalize_renderer(monkeypatch) -> None:
     chat_interface = _import_chat_interface(monkeypatch)
     finalize_mock = Mock()
@@ -125,6 +153,51 @@ def test_stream_and_display_response_token_only_completion_uses_finalize_rendere
     assert len(session_state.messages) == 1
     assert session_state.messages[0].type == "ai"
     assert session_state.messages[0].content == "Hello"
+    save_mock.assert_called_once_with("thread-1", session_state.messages[0])
+
+
+def test_stream_and_display_response_token_only_math_completion_keeps_raw_text(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    finalize_mock = Mock()
+    save_mock = Mock()
+    render_streaming_token_mock = Mock()
+    message_placeholder = Mock()
+    session_state = SimpleNamespace(
+        client=_FakeTokenClient(
+            [
+                {"type": "token", "content": r"Equation: \("},
+                {"type": "token", "content": r"a+b\)"},
+            ]
+        ),
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        messages=[],
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        rerun=Mock(),
+        error=Mock(),
+    )
+
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "finalize_streaming_message", finalize_mock)
+    monkeypatch.setattr(chat_interface, "render_streaming_token", render_streaming_token_mock)
+    monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
+
+    chat_interface.stream_and_display_response(
+        "hello",
+        message_placeholder,
+        should_rerun=False,
+    )
+
+    assert [call.args for call in render_streaming_token_mock.call_args_list] == [
+        (r"Equation: \(", message_placeholder),
+        (r"Equation: \(a+b\)", message_placeholder),
+    ]
+    finalize_mock.assert_called_once_with(message_placeholder, r"Equation: \(a+b\)")
+    assert session_state.messages[0].content == r"Equation: \(a+b\)"
     save_mock.assert_called_once_with("thread-1", session_state.messages[0])
 
 
@@ -351,3 +424,45 @@ def test_render_chat_interface_streams_attachments_for_code_chat_agent(monkeypat
     render_chat_input_styles_mock.assert_called_once_with()
     assert stream_mock.call_args.args[:2] == ("please inspect", fake_st.empty.return_value)
     assert stream_mock.call_args.kwargs["attachments"] == [attachment]
+
+
+def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    render_message_mock = Mock()
+    save_mock = Mock()
+    stream_mock = Mock()
+    submission = r"Show \(a^2+b^2=c^2\)"
+    session_state = _SessionState(
+        server_connected=True,
+        client=Mock(),
+        messages=[],
+        welcome_initialized=True,
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        selected_agent="react_agent",
+        show_system_messages=False,
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(),
+        chat_input=Mock(return_value=submission),
+        error=Mock(),
+    )
+
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
+    monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
+    monkeypatch.setattr(chat_interface, "save_message_to_storage", save_mock)
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+
+    chat_interface.render_chat_interface()
+
+    assert len(session_state.messages) == 1
+    assert session_state.messages[0].content == submission
+    render_message_mock.assert_called_once_with(session_state.messages[0])
+    save_mock.assert_called_once_with("thread-1", session_state.messages[0])
+    assert stream_mock.call_args.args[:2] == (submission, fake_st.empty.return_value)
