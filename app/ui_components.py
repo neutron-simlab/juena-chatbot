@@ -5,9 +5,11 @@ This module provides functions for rendering chat messages and content
 with consistent styling across the application.
 """
 import json
-import streamlit as st
 from typing import Any, Dict, Optional
 
+import streamlit as st
+
+from app.math_rendering import content_contains_math_markup, normalize_math_markdown
 from juena.schema.server import ChatMessage
 
 CHAT_INPUT_MIN_HEIGHT_REM = 7.5
@@ -60,7 +62,7 @@ def render_content(content: Any) -> None:
             # Render as markdown
             content_str = str(content) if content else ""
             if content_str.strip():
-                st.markdown(content_str)
+                st.markdown(normalize_math_markdown(content_str))
 
 
 def should_collapse_tool_payload(custom_data: Optional[Dict[str, Any]]) -> bool:
@@ -104,7 +106,10 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
     if message.type == "human":
         # User messages - simple display
         with st.chat_message("user"):
-            st.write(message.content)
+            if content_contains_math_markup(message.content):
+                render_content(message.content)
+            else:
+                st.write(message.content)
     
     elif message.type == "ai":
         # AI messages
