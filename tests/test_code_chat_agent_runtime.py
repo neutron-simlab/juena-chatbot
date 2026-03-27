@@ -44,8 +44,17 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
         created["llm_args"] = (provider, model)
         return llm
 
-    def fake_build_code_chat_tools(repo_manager: StubRepoManager, vector_index: StubVectorIndex) -> list[object]:
-        created["tool_builder_args"] = (repo_manager, vector_index)
+    class StubSparseIndex:
+        def __init__(self, repo_manager: StubRepoManager) -> None:
+            self.repo_manager = repo_manager
+            created["sparse_index"] = self
+
+    def fake_build_code_chat_tools(
+        repo_manager: StubRepoManager,
+        vector_index: StubVectorIndex,
+        sparse_index: StubSparseIndex | None = None,
+    ) -> list[object]:
+        created["tool_builder_args"] = (repo_manager, vector_index, sparse_index)
         return local_tools
 
     async def fake_load_optional_context7_tools() -> object:
@@ -100,6 +109,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(code_chat_agent, "RepoManager", StubRepoManager)
     monkeypatch.setattr(code_chat_agent, "RepoVectorIndex", StubVectorIndex)
+    monkeypatch.setattr(code_chat_agent, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(code_chat_agent, "validate_bootstrap_ready", fake_validate_bootstrap_ready)
     monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", fake_create_llm_with_fallback)
     monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
@@ -126,7 +136,10 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert agent_resources.context7_runtime is context7_runtime
     validated_repo_manager, validated_vector_index = created["validate_bootstrap_ready"]
     assert validated_repo_manager is validated_vector_index.repo_manager
-    assert created["tool_builder_args"] == (validated_repo_manager, validated_vector_index)
+    tb_rm, tb_vi, tb_si = created["tool_builder_args"]
+    assert tb_rm is validated_repo_manager
+    assert tb_vi is validated_vector_index
+    assert tb_si is created["sparse_index"]
     assert created["load_optional_context7_tools_calls"] == 1
     assert created["load_optional_tavily_tool_calls"] == 1
     assert created["create_deep_agent_calls"] == 1
@@ -183,8 +196,13 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
         created["deep_agent_kwargs"] = kwargs
         return fake_graph
 
+    class StubSparseIndex:
+        def __init__(self, repo_manager: StubRepoManager) -> None:
+            self.repo_manager = repo_manager
+
     monkeypatch.setattr(code_chat_agent, "RepoManager", StubRepoManager)
     monkeypatch.setattr(code_chat_agent, "RepoVectorIndex", StubVectorIndex)
+    monkeypatch.setattr(code_chat_agent, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(code_chat_agent, "validate_bootstrap_ready", lambda *args: None)
     monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", lambda **kwargs: llm)
     monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())

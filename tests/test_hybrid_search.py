@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from juena.retrieval.hybrid_search import hybrid_search
-from juena.retrieval.repo_config import load_repo_configs
-from juena.retrieval.repo_manager import RepoManager
-from juena.retrieval import vector_index as vector_index_module
-from juena.retrieval.vector_index import RepoVectorIndex
+from juena.indexing.repo_config import load_repo_configs
+from juena.indexing.repo_manager import RepoManager
+from juena.indexing import vector_index as vector_index_module
+from juena.indexing.vector_index import RepoVectorIndex
 
 
 @pytest.fixture(autouse=True)
@@ -45,4 +45,4 @@ def test_hybrid_source_label(repo_config_path: Path):
     mgr, vi = _setup(repo_config_path)
     hits = hybrid_search(mgr, vi, "fake-repo", "greet", max_results=10)
     for h in hits:
-        assert h.source in ("keyword", "semantic", "both")
+        assert h.source in ("sparse", "semantic", "both")

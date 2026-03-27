@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import List
 
 from juena.core.log import get_logger
-from juena.retrieval.repo_manager import RepoManager
+from juena.indexing.repo_manager import RepoManager
 
 logger = get_logger(__name__)
 

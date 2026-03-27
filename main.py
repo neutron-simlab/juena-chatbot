@@ -8,7 +8,7 @@ import os
 import uvicorn
 
 from juena.core.config import global_config
-from juena.retrieval.bootstrap import BOOTSTRAP_DONE_ENV, bootstrap_repositories
+from juena.indexing.bootstrap import BOOTSTRAP_DONE_ENV, bootstrap_repositories
 
 # Import agent registrations – each module self-registers via register_agent_factory
 import juena.agents.react_agent       # default agent
