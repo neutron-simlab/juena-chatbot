@@ -1610,7 +1610,6 @@ dependencies = [
     { name = "chonkie", extra = ["code"] },
     { name = "chromadb" },
     { name = "deepagents" },
-    { name = "evaluate" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langchain", extra = ["openai"] },
@@ -1625,15 +1624,16 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "streamlit" },
-    { name = "trectools" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
 dev = [
+    { name = "evaluate" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-mock" },
+    { name = "trectools" },
 ]
 
 [package.metadata]
@@ -1642,7 +1642,7 @@ requires-dist = [
     { name = "chonkie", extras = ["code"], specifier = ">=1.6.1" },
     { name = "chromadb", specifier = ">=0.6.0" },
     { name = "deepagents", specifier = "==0.4.10" },
-    { name = "evaluate", specifier = ">=0.4.6" },
+    { name = "evaluate", marker = "extra == 'dev'", specifier = ">=0.4.6" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "langchain", extras = ["openai"], specifier = ">=1.0.0" },
@@ -1660,7 +1660,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "streamlit", specifier = ">=1.28.0" },
-    { name = "trectools", specifier = ">=0.0.50" },
+    { name = "trectools", marker = "extra == 'dev'", specifier = ">=0.0.50" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 provides-extras = ["dev"]
