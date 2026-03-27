@@ -37,7 +37,7 @@ fi
 
 # Bootstrap repositories before starting any services.
 echo "Bootstrapping repositories and vector indices..."
-python -m juena.retrieval.bootstrap
+python -m juena.indexing.bootstrap
 export JUENA_BOOTSTRAP_DONE=1
 echo "✅ Repository bootstrap completed"
 

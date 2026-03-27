@@ -25,7 +25,9 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, La
   facts.
 
 - `code_chat_agent`
-  A repository-analysis agent for indexed code and docs. It combines:
+  A repository-analysis workflow for indexed code and docs. It combines:
+  - a top-level coordinator that plans with todos and delegates repository investigation
+  - a dedicated repository expert subagent for local code search, file reading, and staged inputs
   - read-only access to cloned repositories under `/repos/<repo_id>/`
   - hybrid retrieval for code and documentation
   - semantic search over persistent vector indices
@@ -167,7 +169,7 @@ Optional environment variables:
 
 `react_agent` can optionally use Tavily for web search. `code_chat_agent`
 can also use Tavily at the coordinator level for non-repository or current web
-questions, while its repository-research subagent stays limited to local repo
+questions, while its repository expert subagent stays limited to local repo
 tools plus Context7.
 
 Optional environment variables:

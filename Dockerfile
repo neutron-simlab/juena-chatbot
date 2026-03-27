@@ -40,8 +40,8 @@
     # Make entrypoint script executable
     RUN chmod +x docker-entrypoint.sh
     
-    # Create directories for logs, data, and vector index
-    RUN mkdir -p /data/logs /data/repos /data/vector_index
+    # Create directories for logs, data, vector index, sparse index, and manifests
+    RUN mkdir -p /data/logs /data/repos /data/vector_index /data/sparse_index /data/manifests
     
     # Expose ports
     # 8080: FastAPI server

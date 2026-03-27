@@ -76,12 +76,13 @@ def build_agent_intro_message(client: AgentClient) -> ChatMessage:
             "current or external facts."
         ),
         (
-            "- `code_chat_agent`: specialized for repository analysis, code "
-            "search, file reading, and multi-step questions about indexed "
-            "repositories. It checks local indexed repos first, then optional "
-            "Context7 docs for external libraries, and only then uses "
-            "coordinator-level Tavily web search if the coding context is "
-            "still insufficient or the question is non-repository."
+            "- `code_chat_agent`: a coordinator for repository analysis and "
+            "multi-step code questions. It delegates local repo search, file "
+            "reading, and staged input inspection to a dedicated repository "
+            "expert subagent, then checks optional Context7 docs for external "
+            "libraries, and only then uses coordinator-level Tavily web "
+            "search if the coding context is still insufficient or the "
+            "question is non-repository."
         ),
         "",
         "Available repositories for `code_chat_agent`:",

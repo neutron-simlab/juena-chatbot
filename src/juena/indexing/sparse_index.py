@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -54,7 +55,8 @@ class RepoSparseIndex:
 
     def __init__(self, repo_manager: RepoManager) -> None:
         self._repo_manager = repo_manager
-        self._connections: dict[str, sqlite3.Connection] = {}
+        self._connections: dict[tuple[str, int], sqlite3.Connection] = {}
+        self._locks: dict[str, threading.RLock] = {}
         idx = _sparse_dir()
         idx.mkdir(parents=True, exist_ok=True)
         self._base_dir = idx
@@ -63,13 +65,24 @@ class RepoSparseIndex:
         safe = repo_id.replace("-", "_").replace(".", "_")[:50]
         return self._base_dir / f"sparse_{safe}.db"
 
+    @staticmethod
+    def _conn_key(repo_id: str) -> tuple[str, int]:
+        """Connection key scoped by repository and current thread id."""
+        return (repo_id, threading.get_ident())
+
     def _get_connection(self, repo_id: str) -> sqlite3.Connection:
-        if repo_id not in self._connections:
+        key = self._conn_key(repo_id)
+        if key not in self._connections:
             db = self._db_path(repo_id)
-            conn = sqlite3.connect(str(db))
+            conn = sqlite3.connect(str(db), check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
-            self._connections[repo_id] = conn
-        return self._connections[repo_id]
+            self._connections[key] = conn
+        return self._connections[key]
+
+    def _get_lock(self, repo_id: str) -> threading.RLock:
+        if repo_id not in self._locks:
+            self._locks[repo_id] = threading.RLock()
+        return self._locks[repo_id]
 
     def _ensure_tables(self, conn: sqlite3.Connection) -> None:
         conn.executescript("""
@@ -145,55 +158,59 @@ class RepoSparseIndex:
         Returns the number of rows indexed.
         """
         conn = self._get_connection(repo_id)
-        self._ensure_tables(conn)
+        lock = self._get_lock(repo_id)
+        with lock:
+            self._ensure_tables(conn)
 
-        if force:
-            conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
+            if force:
+                conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
+                conn.commit()
+
+            for chunk in chunks:
+                chunk_id = f"{repo_id}::{chunk['file_path']}::{chunk['chunk_index']}::{chunk['content_hash']}"
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO chunks
+                        (id, repo_id, file_path, chunk_index, is_doc, content_hash, content)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chunk_id,
+                        repo_id,
+                        chunk["file_path"],
+                        chunk["chunk_index"],
+                        int(chunk.get("is_doc", False)),
+                        chunk["content_hash"],
+                        chunk["content"],
+                    ),
+                )
+
+            if repo_revision:
+                conn.execute(
+                    "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+                    ("repo_revision", repo_revision),
+                )
+
             conn.commit()
 
-        for chunk in chunks:
-            chunk_id = f"{repo_id}::{chunk['file_path']}::{chunk['chunk_index']}::{chunk['content_hash']}"
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO chunks
-                    (id, repo_id, file_path, chunk_index, is_doc, content_hash, content)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    chunk_id,
-                    repo_id,
-                    chunk["file_path"],
-                    chunk["chunk_index"],
-                    int(chunk.get("is_doc", False)),
-                    chunk["content_hash"],
-                    chunk["content"],
-                ),
-            )
-
-        if repo_revision:
-            conn.execute(
-                "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
-                ("repo_revision", repo_revision),
-            )
-
-        conn.commit()
-
-        count = conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
-        ).fetchone()[0]
+            count = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
+            ).fetchone()[0]
         logger.info("Sparse-indexed %d chunks for repo %s", count, repo_id)
         return count
 
     def delete_file_chunks(self, repo_id: str, file_path: str) -> int:
         """Remove all chunks for a specific file. Returns rows deleted."""
         conn = self._get_connection(repo_id)
-        self._ensure_tables(conn)
-        cursor = conn.execute(
-            "DELETE FROM chunks WHERE repo_id = ? AND file_path = ?",
-            (repo_id, file_path),
-        )
-        conn.commit()
-        return cursor.rowcount
+        lock = self._get_lock(repo_id)
+        with lock:
+            self._ensure_tables(conn)
+            cursor = conn.execute(
+                "DELETE FROM chunks WHERE repo_id = ? AND file_path = ?",
+                (repo_id, file_path),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Searching
@@ -234,32 +251,34 @@ class RepoSparseIndex:
         Returns up to *max_results* ``SparseHit`` objects ordered by BM25 rank.
         """
         conn = self._get_connection(repo_id)
-        self._ensure_tables(conn)
+        lock = self._get_lock(repo_id)
+        with lock:
+            self._ensure_tables(conn)
 
-        fts_query = self._sanitize_fts5_query(query)
-        if not fts_query:
-            return []
+            fts_query = self._sanitize_fts5_query(query)
+            if not fts_query:
+                return []
 
-        doc_filter = "AND c.is_doc = 1" if docs_only else ""
-        sql = f"""
-            SELECT c.file_path,
-                   c.chunk_index,
-                   c.content,
-                   c.is_doc,
-                   rank
-            FROM chunks_fts f
-            JOIN chunks c ON c.rowid = f.rowid
-            WHERE chunks_fts MATCH ?
-              AND c.repo_id = ?
-              {doc_filter}
-            ORDER BY rank
-            LIMIT ?
-        """
-        try:
-            rows = conn.execute(sql, (fts_query, repo_id, max_results)).fetchall()
-        except sqlite3.OperationalError:
-            logger.debug("FTS5 query failed for %r – returning empty", fts_query)
-            return []
+            doc_filter = "AND c.is_doc = 1" if docs_only else ""
+            sql = f"""
+                SELECT c.file_path,
+                       c.chunk_index,
+                       c.content,
+                       c.is_doc,
+                       rank
+                FROM chunks_fts f
+                JOIN chunks c ON c.rowid = f.rowid
+                WHERE chunks_fts MATCH ?
+                  AND c.repo_id = ?
+                  {doc_filter}
+                ORDER BY rank
+                LIMIT ?
+            """
+            try:
+                rows = conn.execute(sql, (fts_query, repo_id, max_results)).fetchall()
+            except sqlite3.OperationalError:
+                logger.debug("FTS5 query failed for %r – returning empty", fts_query)
+                return []
 
         return [
             SparseHit(
@@ -281,28 +300,36 @@ class RepoSparseIndex:
         if not db.exists():
             return False
         conn = self._get_connection(repo_id)
-        try:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
-            ).fetchone()[0]
-            return count > 0
-        except sqlite3.OperationalError:
-            return False
+        lock = self._get_lock(repo_id)
+        with lock:
+            try:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
+                ).fetchone()[0]
+                return count > 0
+            except sqlite3.OperationalError:
+                return False
 
     def chunk_count(self, repo_id: str) -> int:
         conn = self._get_connection(repo_id)
-        self._ensure_tables(conn)
-        return conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
-        ).fetchone()[0]
+        lock = self._get_lock(repo_id)
+        with lock:
+            self._ensure_tables(conn)
+            return conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE repo_id = ?", (repo_id,)
+            ).fetchone()[0]
 
     def close(self, repo_id: str | None = None) -> None:
         """Close database connections."""
         if repo_id:
-            conn = self._connections.pop(repo_id, None)
-            if conn:
-                conn.close()
+            to_close = [key for key in self._connections if key[0] == repo_id]
+            for key in to_close:
+                conn = self._connections.pop(key, None)
+                if conn:
+                    conn.close()
+            self._locks.pop(repo_id, None)
         else:
             for conn in self._connections.values():
                 conn.close()
             self._connections.clear()
+            self._locks.clear()

@@ -11,3 +11,6 @@ load_repo_configs = _canonical.load_repo_configs
 RepoManager = _canonical.RepoManager
 RepoVectorIndex = _canonical.RepoVectorIndex
 RepoSparseIndex = _canonical.RepoSparseIndex
+
+if __name__ == "__main__":
+    raise SystemExit(main())
