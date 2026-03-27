@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from typing import cast
 
-from juena.retrieval.repo_manager import RepoManager
-from juena.retrieval.vector_index import RepoVectorIndex
+from juena.indexing.repo_manager import RepoManager
+from juena.indexing.sparse_index import RepoSparseIndex
+from juena.indexing.vector_index import RepoVectorIndex
 from juena.tools import repo_search
 
 
@@ -66,12 +67,15 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
     class StubVectorIndex:
         pass
 
+    class StubSparseIndex:
+        pass
+
     class StubHybridHit:
         def __init__(self) -> None:
             self.file_path = "src/service.py"
             self.content = content
             self.is_doc = False
-            self.keyword_rank = 1
+            self.sparse_rank = 1
             self.semantic_rank = 0
             self.rrf_score = 0.015873
             self.source = "both"
@@ -83,6 +87,7 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
             repo_search._search_code_hybrid(
                 cast(RepoManager, StubRepoManager()),
                 cast(RepoVectorIndex, StubVectorIndex()),
+                cast(RepoSparseIndex, StubSparseIndex()),
                 "repo-a",
                 "service",
                 max_results=2,
@@ -97,7 +102,7 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
             "file_path": "src/service.py",
             "path": "/repos/repo-a/src/service.py",
             "is_doc": False,
-            "keyword_rank": 1,
+            "sparse_rank": 1,
             "semantic_rank": 0,
             "rrf_score": 0.015873,
             "source": "both",

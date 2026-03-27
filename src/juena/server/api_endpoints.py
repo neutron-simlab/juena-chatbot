@@ -555,7 +555,7 @@ async def get_agents() -> dict[str, Any]:
 @router.get("/repositories")
 async def get_repositories() -> list[dict[str, Any]]:
     """Return metadata for all configured software repositories."""
-    from juena.retrieval.repo_manager import RepoManager
+    from juena.indexing.repo_manager import RepoManager
 
     mgr = RepoManager()
     return mgr.list_repo_metadata()

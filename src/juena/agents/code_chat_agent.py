@@ -23,9 +23,10 @@ from langchain.tools import ToolRuntime
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.llms_providers import create_llm_with_fallback
-from juena.retrieval.bootstrap import validate_bootstrap_ready
-from juena.retrieval.repo_manager import RepoManager
-from juena.retrieval.vector_index import RepoVectorIndex
+from juena.indexing.bootstrap import validate_bootstrap_ready
+from juena.indexing.repo_manager import RepoManager
+from juena.indexing.sparse_index import RepoSparseIndex
+from juena.indexing.vector_index import RepoVectorIndex
 from juena.server.agent_registry import register_agent_factory
 from juena.server.checkpointer import get_checkpointer
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
@@ -57,9 +58,10 @@ You are a code-chat coordinator for indexed software repositories.
    `ls`, `glob`, `grep`, and `read_file` against `/repos/...`.
 6. Use paginated `read_file` calls for large staged input files instead of
    trying to ingest them all at once.
-7. Use the local repository retrieval tools for configured repositories when
-   conceptual or indexed retrieval is more useful than direct filesystem
-   navigation.
+7. Use `search_code_hybrid` as the default retrieval tool for configured
+   repositories — it combines keyword and semantic search for the best recall.
+   Fall back to `search_code_semantic` for narrow conceptual follow-ups, or
+   `search_docs_local` for documentation-only queries.
 8. For coding questions, inspect local indexed repositories first. Do not use
    external sources until local repository evidence is insufficient.
 9. Use Context7 tools next for external libraries, frameworks, and dependency
@@ -117,11 +119,10 @@ You are the repository-research specialist for indexed software repositories.
    - `read_file` for line-numbered source and documentation evidence.
 6. For large staged user files, page through `/inputs/...` with `read_file`
    offsets and use `grep` before reading more.
-7. Use the local retrieval tools when indexed search is the better fit for a
-   configured repository:
-   - `search_code_hybrid` for most technical questions.
-   - `search_code_semantic` for conceptual questions.
-   - `search_docs_local` for README and docs questions.
+7. Use `search_code_hybrid` as the default search tool for all repository
+   questions — it combines keyword and semantic retrieval and achieves the
+   best recall.  Use `search_code_semantic` only for narrow conceptual
+   follow-ups, and `search_docs_local` for README and docs questions.
 8. Exhaust local repository evidence before consulting external sources.
 9. Use Context7 tools next for upstream libraries, frameworks, and dependency
    docs/examples. Resolve the library first, then fetch the relevant docs.
@@ -289,6 +290,7 @@ async def create_code_chat_agent(
 
     repo_manager = RepoManager()
     vector_index = RepoVectorIndex(repo_manager)
+    sparse_index = RepoSparseIndex(repo_manager)
     backend = _build_code_chat_backend(repo_manager.cache_dir)
 
     # Bootstrap is expected to happen before the server starts. The agent only
@@ -296,7 +298,7 @@ async def create_code_chat_agent(
     validate_bootstrap_ready(repo_manager, vector_index)
 
     llm = create_llm_with_fallback(provider=provider, model=model)
-    local_tools = build_code_chat_tools(repo_manager, vector_index)
+    local_tools = build_code_chat_tools(repo_manager, vector_index, sparse_index)
     context7_runtime = await load_optional_context7_tools()
     context7_tools = list(context7_runtime.tools) if context7_runtime is not None else []
     repo_subagent_tools = list(local_tools)

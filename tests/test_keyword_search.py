@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from juena.retrieval.keyword_search import keyword_search
-from juena.retrieval.repo_config import load_repo_configs
-from juena.retrieval.repo_manager import RepoManager
+from juena.indexing.repo_config import load_repo_configs
+from juena.indexing.repo_manager import RepoManager
 
 
 def _make_manager(repo_config_path: Path) -> RepoManager:

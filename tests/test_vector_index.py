@@ -8,10 +8,10 @@ import pytest
 from chromadb.api.types import DefaultEmbeddingFunction
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
-from juena.retrieval import vector_index as vector_index_module
-from juena.retrieval.repo_config import load_repo_configs
-from juena.retrieval.repo_manager import RepoManager
-from juena.retrieval.vector_index import RepoVectorIndex
+from juena.indexing import vector_index as vector_index_module
+from juena.indexing.repo_config import load_repo_configs
+from juena.indexing.repo_manager import RepoManager
+from juena.indexing.vector_index import RepoVectorIndex
 
 
 @pytest.fixture(autouse=True)

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from juena.retrieval.repo_config import RepoConfig, load_repo_configs
+from juena.indexing.repo_config import RepoConfig, load_repo_configs
 
 
 def test_load_single_repo(repo_config_path: Path):

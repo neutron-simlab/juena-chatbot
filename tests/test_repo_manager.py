@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from juena.retrieval.repo_config import load_repo_configs
-from juena.retrieval.repo_manager import RepoManager
+from juena.indexing.repo_config import load_repo_configs
+from juena.indexing.repo_manager import ManifestDiff, RepoManager, diff_manifests
 
 
 def _make_manager(repo_config_path: Path) -> RepoManager:
@@ -59,3 +59,29 @@ def test_current_revision_returns_head_sha(repo_config_path: Path):
 
     assert len(revision) == 40
     assert all(char in "0123456789abcdef" for char in revision)
+
+
+def test_build_manifest(repo_config_path: Path):
+    mgr = _make_manager(repo_config_path)
+    manifest = mgr.build_manifest("fake-repo")
+    assert "src/main.py" in manifest
+    assert len(manifest["src/main.py"]) == 16
+
+
+def test_diff_manifests_detects_changes():
+    old = {"a.py": "aaa", "b.py": "bbb", "deleted.py": "ddd"}
+    new = {"a.py": "aaa", "b.py": "bbb_changed", "added.py": "eee"}
+    diff = diff_manifests(old, new)
+    assert diff.added == ["added.py"]
+    assert diff.changed == ["b.py"]
+    assert diff.deleted == ["deleted.py"]
+    assert diff.has_changes
+
+
+def test_diff_manifests_no_changes():
+    m = {"a.py": "aaa", "b.py": "bbb"}
+    diff = diff_manifests(m, m)
+    assert not diff.has_changes
+    assert diff.added == []
+    assert diff.changed == []
+    assert diff.deleted == []
