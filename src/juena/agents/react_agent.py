@@ -10,6 +10,10 @@ from langgraph.graph.state import CompiledStateGraph
 from juena.core.llms_providers import create_llm_with_fallback
 from juena.server.agent_registry import register_agent_factory
 from juena.server.checkpointer import get_checkpointer
+from juena.server.runtime_model_middleware import (
+    RuntimeModelContext,
+    RuntimeModelMiddleware,
+)
 from juena.tools.tavily import load_optional_tavily_tool
 
 REACT_SYSTEM_PROMPT = """\
@@ -52,6 +56,8 @@ async def create_react_agent(
         model=llm,
         tools=tools,
         system_prompt=REACT_SYSTEM_PROMPT,
+        middleware=[RuntimeModelMiddleware()],
+        context_schema=RuntimeModelContext,
         checkpointer=get_checkpointer(),
         name="react_agent",
     )

@@ -27,7 +27,7 @@ class BlabladorModelName(StrEnum):
     """
 
     GPT_OSS = "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025"
-    MINIMAX_M25 = "1 - MiniMax-M2.5 - our best model as of February, 2026"
+    MINIMAX_M25 = "01 - MiniMax-M2.5 - our best model as of February, 2026"
 
 
 # Display name shown in UI for Blablador models (model id -> label)

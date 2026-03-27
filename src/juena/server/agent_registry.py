@@ -17,7 +17,8 @@ logger = get_logger(__name__)
 
 # Simple in-memory agent registry
 # Key format: agent_id -> tuple(AgentInstance, CompiledStateGraph)
-# Provider/model are now handled per-invocation via config.configurable
+# Provider/model are now handled per-invocation via runtime context
+# (with config.configurable kept as a compatibility fallback)
 # Storing both agent instance and app allows us to restart the graph with new config
 DEFAULT_AGENT = "react_agent"
 
@@ -90,7 +91,7 @@ async def get_agent(
     Get an agent by ID, creating it if it doesn't exist.
     
     Provider and model are used only for initial creation (to set default LLMs).
-    After creation, model selection can be handled per invocation via config.configurable.
+    After creation, model selection is handled per invocation via runtime context.
     
     Args:
         agent_id: Agent identifier (e.g., "my_agent")
@@ -151,7 +152,7 @@ async def restart_agent(
     Restart an agent by clearing its state/memory.
     
     This function clears conversation state/memory for a fresh start.
-    The graph itself is reused; model selection happens per-invocation via config.
+    The graph itself is reused; model selection happens per invocation.
     
     Args:
         agent_id: Agent identifier (e.g., "my_agent")

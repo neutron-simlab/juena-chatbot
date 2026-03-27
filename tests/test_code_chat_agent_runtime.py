@@ -10,6 +10,7 @@ import pytest
 
 from juena.agents import code_chat_agent
 from juena.server import agent_registry
+from juena.server.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
 
 
 @pytest.mark.asyncio
@@ -18,6 +19,8 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     fake_graph = object()
     created: dict[str, Any] = {"create_deep_agent_calls": 0}
     llm = object()
+    llm_subagent = object()
+    llm_summarizer = object()
     local_tools = [object(), object(), object()]
     context7_tools = [object(), object()]
     tavily_tool = object()
@@ -43,6 +46,19 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     def fake_create_llm_with_fallback(*, provider: str, model: str) -> object:
         created["llm_args"] = (provider, model)
         return llm
+
+    def fake_create_llm(*, provider: str, model: str, temperature: float = 0.0, **kwargs: Any) -> object:
+        created.setdefault("llm_factory_calls", []).append({
+            "provider": provider,
+            "model": model,
+            "temperature": temperature,
+            **kwargs,
+        })
+        if model == code_chat_agent.CODE_CHAT_SUBAGENT_MODEL:
+            return llm_subagent
+        if model == code_chat_agent.CODE_CHAT_SUMMARIZER_MODEL:
+            return llm_summarizer
+        raise AssertionError(f"Unexpected static model request: {model}")
 
     class StubSparseIndex:
         def __init__(self, repo_manager: StubRepoManager) -> None:
@@ -107,12 +123,17 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
         created["deep_agent_kwargs"] = kwargs
         return fake_graph
 
+    def fake_create_summarization_middleware(model: object, backend: object) -> object:
+        created["summarization_middleware_args"] = (model, backend)
+        return object()
+
     monkeypatch.setattr(code_chat_agent, "RepoManager", StubRepoManager)
     monkeypatch.setattr(code_chat_agent, "RepoVectorIndex", StubVectorIndex)
     monkeypatch.setattr(code_chat_agent, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(code_chat_agent, "validate_bootstrap_ready", fake_validate_bootstrap_ready)
     monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", fake_create_llm_with_fallback)
-    monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
+    monkeypatch.setattr(code_chat_agent.LLMFactory, "create_llm", fake_create_llm)
+    monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", fake_create_summarization_middleware)
     monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_tavily_tool", fake_load_optional_tavily_tool)
@@ -143,10 +164,30 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert created["load_optional_context7_tools_calls"] == 1
     assert created["load_optional_tavily_tool_calls"] == 1
     assert created["create_deep_agent_calls"] == 1
-    assert created["subagent_agent_kwargs"]["model"] is llm
+    assert created["subagent_agent_kwargs"]["model"] is llm_subagent
     assert created["subagent_agent_kwargs"]["tools"] == [*local_tools, *context7_tools]
+    assert created["subagent_agent_kwargs"]["context_schema"] is RuntimeModelContext
+    assert not any(
+        isinstance(middleware, RuntimeModelMiddleware)
+        for middleware in created["subagent_agent_kwargs"]["middleware"]
+    )
+    assert created["summarization_middleware_args"][0] is llm_summarizer
+    assert created["llm_factory_calls"] == [
+        {
+            "provider": "blablador",
+            "model": "alias-code",
+            "temperature": 0.0,
+        },
+        {
+            "provider": "blablador",
+            "model": "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025",
+            "temperature": 0.0,
+        },
+    ]
     assert created["deep_agent_kwargs"]["model"] is llm
     assert created["deep_agent_kwargs"]["tools"] == [*context7_tools, tavily_tool]
+    assert created["deep_agent_kwargs"]["context_schema"] is RuntimeModelContext
+    assert isinstance(created["deep_agent_kwargs"]["middleware"][0], RuntimeModelMiddleware)
     backend_factory = created["deep_agent_kwargs"]["backend"]
     assert callable(backend_factory)
     composite_backend = backend_factory(type("Runtime", (), {"state": {}})())
@@ -169,6 +210,8 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     fake_graph = object()
     created: dict[str, Any] = {}
     llm = object()
+    llm_subagent = object()
+    llm_summarizer = object()
     local_tools = [object(), object()]
 
     class StubRepoManager:
@@ -188,6 +231,19 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     def fake_build_code_chat_tools(*args: Any, **kwargs: Any) -> list[object]:
         return local_tools
 
+    def fake_create_llm(*, provider: str, model: str, temperature: float = 0.0, **kwargs: Any) -> object:
+        created.setdefault("llm_factory_calls", []).append({
+            "provider": provider,
+            "model": model,
+            "temperature": temperature,
+            **kwargs,
+        })
+        if model == code_chat_agent.CODE_CHAT_SUBAGENT_MODEL:
+            return llm_subagent
+        if model == code_chat_agent.CODE_CHAT_SUMMARIZER_MODEL:
+            return llm_summarizer
+        raise AssertionError(f"Unexpected static model request: {model}")
+
     def fake_create_agent(**kwargs: Any) -> object:
         created["subagent_agent_kwargs"] = kwargs
         return object()
@@ -195,6 +251,10 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     def fake_create_deep_agent(**kwargs: Any) -> object:
         created["deep_agent_kwargs"] = kwargs
         return fake_graph
+
+    def fake_create_summarization_middleware(model: object, backend: object) -> object:
+        created["summarization_middleware_args"] = (model, backend)
+        return object()
 
     class StubSparseIndex:
         def __init__(self, repo_manager: StubRepoManager) -> None:
@@ -205,7 +265,8 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     monkeypatch.setattr(code_chat_agent, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(code_chat_agent, "validate_bootstrap_ready", lambda *args: None)
     monkeypatch.setattr(code_chat_agent, "create_llm_with_fallback", lambda **kwargs: llm)
-    monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", lambda *args: object())
+    monkeypatch.setattr(code_chat_agent.LLMFactory, "create_llm", fake_create_llm)
+    monkeypatch.setattr(code_chat_agent, "create_summarization_middleware", fake_create_summarization_middleware)
     monkeypatch.setattr(code_chat_agent, "build_code_chat_tools", fake_build_code_chat_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_context7_tools", fake_load_optional_context7_tools)
     monkeypatch.setattr(code_chat_agent, "load_optional_tavily_tool", fake_load_optional_tavily_tool)
@@ -225,7 +286,28 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
     assert isinstance(agent_resources, code_chat_agent.CodeChatAgentResources)
     assert agent_resources.context7_runtime is None
     assert created["subagent_agent_kwargs"]["tools"] == local_tools
+    assert created["subagent_agent_kwargs"]["context_schema"] is RuntimeModelContext
+    assert created["subagent_agent_kwargs"]["model"] is llm_subagent
+    assert not any(
+        isinstance(middleware, RuntimeModelMiddleware)
+        for middleware in created["subagent_agent_kwargs"]["middleware"]
+    )
+    assert created["summarization_middleware_args"][0] is llm_summarizer
+    assert created["llm_factory_calls"] == [
+        {
+            "provider": "blablador",
+            "model": "alias-code",
+            "temperature": 0.0,
+        },
+        {
+            "provider": "blablador",
+            "model": "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025",
+            "temperature": 0.0,
+        },
+    ]
     assert created["deep_agent_kwargs"]["tools"] == []
+    assert created["deep_agent_kwargs"]["context_schema"] is RuntimeModelContext
+    assert isinstance(created["deep_agent_kwargs"]["middleware"][0], RuntimeModelMiddleware)
 
 
 def test_read_only_filesystem_backend_rejects_writes(tmp_path: Path) -> None:

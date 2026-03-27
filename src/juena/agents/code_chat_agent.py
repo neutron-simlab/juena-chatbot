@@ -22,18 +22,27 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain.tools import ToolRuntime
 from langgraph.graph.state import CompiledStateGraph
 
-from juena.core.llms_providers import create_llm_with_fallback
+from juena.core.llms_providers import LLMFactory, create_llm_with_fallback
 from juena.indexing.bootstrap import validate_bootstrap_ready
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.sparse_index import RepoSparseIndex
 from juena.indexing.vector_index import RepoVectorIndex
+from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent_registry import register_agent_factory
 from juena.server.checkpointer import get_checkpointer
+from juena.server.runtime_model_middleware import (
+    RuntimeModelContext,
+    RuntimeModelMiddleware,
+)
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
 from juena.tools.tavily import load_optional_tavily_tool
 from juena.tools.repo_search import (
     build_code_chat_tools,
 )
+
+CODE_CHAT_STATIC_PROVIDER = Provider.BLABLADOR.value
+CODE_CHAT_SUBAGENT_MODEL = "alias-code"
+CODE_CHAT_SUMMARIZER_MODEL = BlabladorModelName.GPT_OSS.value
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -247,32 +256,34 @@ def _build_code_chat_backend(
 
 
 def _build_repo_research_subagent(
-    llm: Any,
+    llm_subagent: Any,
+    llm_summarizer: Any,
     tools: list[Any],
     backend: Any,
 ) -> CompiledSubAgent:
     """Create the repo-analysis subagent with bound retrieval tools."""
 
     subagent = create_agent(
-        model=llm,
+        model=llm_subagent,
         tools=tools,
         system_prompt=CODE_CHAT_RESEARCH_SUBAGENT_PROMPT,
         middleware=[
             TodoListMiddleware(),
             FilesystemMiddleware(backend=backend),
-            create_summarization_middleware(llm, backend),
+            create_summarization_middleware(llm_summarizer, backend),
             PatchToolCallsMiddleware(),
         ],
+        context_schema=RuntimeModelContext,
         name="code_chat_repo_research_subagent",
     )
     return {
-        "name": "general-purpose",
+        "name": "repo-research-subagent",
         "description": (
             "Use this agent for repository analysis, code search, file reading, "
             "multi-step questions about indexed repositories, and enriching "
             "findings with Context7 documentation for external dependencies "
             "and upstream frameworks. This subagent does not use Tavily web "
-            "search."
+            "search. Also, always use the `search_code_hybrid` tool for repository search."
         ),
         "runnable": subagent,
     }
@@ -298,6 +309,16 @@ async def create_code_chat_agent(
     validate_bootstrap_ready(repo_manager, vector_index)
 
     llm = create_llm_with_fallback(provider=provider, model=model)
+    llm_subagent = LLMFactory.create_llm(
+        provider=CODE_CHAT_STATIC_PROVIDER,
+        model=CODE_CHAT_SUBAGENT_MODEL,
+        temperature=0.0,
+    )
+    llm_summarizer = LLMFactory.create_llm(
+        provider=CODE_CHAT_STATIC_PROVIDER,
+        model=CODE_CHAT_SUMMARIZER_MODEL,
+        temperature=0.0,
+    )
     local_tools = build_code_chat_tools(repo_manager, vector_index, sparse_index)
     context7_runtime = await load_optional_context7_tools()
     context7_tools = list(context7_runtime.tools) if context7_runtime is not None else []
@@ -309,7 +330,8 @@ async def create_code_chat_agent(
         coordinator_tools.append(tavily_tool)
 
     repo_research_subagent = _build_repo_research_subagent(
-        llm,
+        llm_subagent,
+        llm_summarizer,
         repo_subagent_tools,
         backend,
     )
@@ -318,8 +340,10 @@ async def create_code_chat_agent(
         model=llm,
         tools=coordinator_tools,
         system_prompt=CODE_CHAT_SYSTEM_PROMPT,
+        middleware=[RuntimeModelMiddleware()],
         subagents=[repo_research_subagent],
         backend=backend,
+        context_schema=RuntimeModelContext,
         checkpointer=get_checkpointer(),
         name="code_chat_agent",
     )

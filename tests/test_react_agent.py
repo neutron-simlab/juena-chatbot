@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from juena.agents import react_agent
+from juena.server.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
 
 
 @pytest.mark.asyncio
@@ -34,6 +35,9 @@ async def test_create_react_agent_uses_tavily_when_available(
     assert graph is fake_graph
     assert created["kwargs"]["model"] is llm
     assert created["kwargs"]["tools"] == [tavily_tool]
+    assert created["kwargs"]["context_schema"] is RuntimeModelContext
+    assert len(created["kwargs"]["middleware"]) == 1
+    assert isinstance(created["kwargs"]["middleware"][0], RuntimeModelMiddleware)
     assert "Tavily" in created["kwargs"]["system_prompt"]
     assert "one precise search query" in created["kwargs"]["system_prompt"]
     assert "Prefer Tavily-grounded answers over unverified model memory" in created["kwargs"]["system_prompt"]
@@ -63,3 +67,5 @@ async def test_create_react_agent_without_tavily_still_builds(
 
     assert graph is fake_graph
     assert created["kwargs"]["tools"] == []
+    assert created["kwargs"]["context_schema"] is RuntimeModelContext
+    assert isinstance(created["kwargs"]["middleware"][0], RuntimeModelMiddleware)

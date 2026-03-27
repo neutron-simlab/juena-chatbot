@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 
 from juena.core.log import get_logger
 from juena.server.agent_registry import _normalize_provider_model
+from juena.server.runtime_model_middleware import RuntimeModelContext
 
 logger = get_logger(__name__)
 
@@ -35,8 +36,8 @@ class AgentInputHandler:
         Prepare input for agent invocation.
         
         LangGraph automatically resumes from checkpoint when invoked with same thread_id.
-        Provider and model are placed in config.configurable so dynamic model
-        middleware can use them without restarting the graph.
+        Provider and model are placed in runtime context for LangChain middleware,
+        and also in config.configurable for compatibility with LangGraph consumers.
         
         Args:
             user_input: User input message
@@ -83,6 +84,12 @@ class AgentInputHandler:
         kwargs = {
             "input": input_data,
             "config": config,
+            "context": RuntimeModelContext(
+                provider=provider,
+                model=model,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
         }
 
         return kwargs, run_id
