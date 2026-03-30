@@ -7,9 +7,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
+from deepagents.middleware.summarization import create_summarization_middleware
 from deepagents.middleware.subagents import SubAgentMiddleware
+from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langgraph.checkpoint.memory import InMemorySaver
 
 from juena.agents import code_chat_agent
 from juena.server import agent_registry
@@ -191,7 +195,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     repo_backend_factory = created["summarization_middleware_args"][0][1]
     assert created["summarization_middleware_args"] == [
         (llm_summarizer, repo_backend_factory),
-        (llm_summarizer, code_chat_agent.ReadOnlyStateBackend),
+        (llm_summarizer, repo_backend_factory),
     ]
     assert created["llm_factory_calls"] == [
         {
@@ -212,6 +216,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
     assert composite_backend.routes["/repos/"].cwd == created["repo_cache_dir"].resolve()
     assert created["coordinator_agent_kwargs"]["model"] is llm
     assert created["coordinator_agent_kwargs"]["tools"] == [*context7_tools, tavily_tool]
+    assert created["coordinator_agent_kwargs"]["state_schema"] is FilesystemState
     assert created["coordinator_agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert any(
         isinstance(middleware, TodoListMiddleware)
@@ -234,6 +239,7 @@ async def test_code_chat_agent_reuses_compiled_resources(monkeypatch: pytest.Mon
         for middleware in created["coordinator_agent_kwargs"]["middleware"]
         if isinstance(middleware, SubAgentMiddleware)
     )
+    assert subagent_middleware._backend is repo_backend_factory
     repo_subagent = subagent_middleware._subagents[0]
     assert repo_subagent["name"] == code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_NAME
     assert repo_subagent["runnable"] is fake_subagent_graph
@@ -344,6 +350,8 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
         for middleware in created["subagent_agent_kwargs"]["middleware"]
     )
     assert created["summarization_middleware_args"][0][0] is llm_summarizer
+    assert created["summarization_middleware_args"][1][0] is llm_summarizer
+    assert created["summarization_middleware_args"][1][1] is created["summarization_middleware_args"][0][1]
     assert created["llm_factory_calls"] == [
         {
             "provider": "blablador",
@@ -357,6 +365,7 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
         },
     ]
     assert created["coordinator_agent_kwargs"]["tools"] == []
+    assert created["coordinator_agent_kwargs"]["state_schema"] is FilesystemState
     assert created["coordinator_agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert any(
         isinstance(middleware, TodoListMiddleware)
@@ -366,6 +375,12 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
         isinstance(middleware, SubAgentMiddleware)
         for middleware in created["coordinator_agent_kwargs"]["middleware"]
     )
+    subagent_middleware = next(
+        middleware
+        for middleware in created["coordinator_agent_kwargs"]["middleware"]
+        if isinstance(middleware, SubAgentMiddleware)
+    )
+    assert subagent_middleware._backend is created["summarization_middleware_args"][0][1]
     assert any(
         isinstance(middleware, RuntimeModelMiddleware)
         for middleware in created["coordinator_agent_kwargs"]["middleware"]
@@ -454,6 +469,70 @@ def test_code_chat_backend_exposes_staged_inputs_under_inputs_prefix(tmp_path: P
     assert upload_paths == ["/inputs/uploads/example.py"]
     assert "please inspect this file" in composite_backend.read("/inputs/current_message.txt")
     assert "print('x')" in composite_backend.read("/inputs/uploads/example.py")
+
+
+class _ToolCapableFakeListChatModel(FakeListChatModel):
+    def bind_tools(self, tools: Any, *, tool_choice: Any = None, **kwargs: Any) -> "_ToolCapableFakeListChatModel":
+        return self
+
+
+def test_code_chat_coordinator_persists_staged_inputs_in_graph_state() -> None:
+    class _UnusedSubagent:
+        def invoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> dict[str, Any]:
+            return {"messages": []}
+
+        async def ainvoke(
+            self,
+            input: Any,
+            config: Any | None = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            return {"messages": []}
+
+    agent = create_agent(
+        model=_ToolCapableFakeListChatModel(responses=["done"]),
+        tools=[],
+        middleware=[
+            TodoListMiddleware(),
+            SubAgentMiddleware(
+                backend=code_chat_agent.ReadOnlyStateBackend,
+                subagents=[
+                    {
+                        "name": code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_NAME,
+                        "description": "unused test subagent",
+                        "runnable": _UnusedSubagent(),
+                    }
+                ],
+            ),
+            create_summarization_middleware(
+                _ToolCapableFakeListChatModel(responses=["summary"]),
+                code_chat_agent.ReadOnlyStateBackend,
+            ),
+        ],
+        state_schema=FilesystemState,
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "thread-1", "user_id": "user-1"}}
+    staged_files = {
+        "/inputs/uploads/p_r_simulation.py": {
+            "content": ["print('uploaded')"],
+            "created_at": "c",
+            "modified_at": "m",
+        }
+    }
+
+    agent.invoke(
+        {
+            "messages": [("user", "inspect the uploaded file")],
+            "files": staged_files,
+        },
+        config=config,
+    )
+
+    state = agent.get_state(config)
+    values = getattr(state, "values", {}) or {}
+
+    assert values["files"] == staged_files
 
 
 def test_code_chat_prompts_cover_staged_user_inputs() -> None:

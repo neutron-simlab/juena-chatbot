@@ -12,7 +12,7 @@ from typing import Any
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.backends.protocol import EditResult, WriteResult
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgentMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
@@ -289,7 +289,7 @@ async def create_code_chat_agent(
     repo_manager = RepoManager()
     vector_index = RepoVectorIndex(repo_manager)
     sparse_index = RepoSparseIndex(repo_manager)
-    repo_backend = _build_code_chat_backend(repo_manager.cache_dir)
+    code_chat_backend = _build_code_chat_backend(repo_manager.cache_dir)
 
     # Bootstrap is expected to happen before the server starts. The agent only
     # validates that the local repo cache and vector indices already exist.
@@ -320,7 +320,7 @@ async def create_code_chat_agent(
         llm_subagent,
         llm_summarizer,
         repo_subagent_tools,
-        repo_backend,
+        code_chat_backend,
     )
 
     agent = create_agent(
@@ -330,13 +330,14 @@ async def create_code_chat_agent(
         middleware=[
             TodoListMiddleware(),
             SubAgentMiddleware(
-                backend=ReadOnlyStateBackend,
+                backend=code_chat_backend,
                 subagents=[repo_research_subagent],
             ),
-            create_summarization_middleware(llm_summarizer, ReadOnlyStateBackend),
+            create_summarization_middleware(llm_summarizer, code_chat_backend),
             PatchToolCallsMiddleware(),
             RuntimeModelMiddleware(),
         ],
+        state_schema=FilesystemState,
         context_schema=RuntimeModelContext,
         checkpointer=get_checkpointer(),
         name="code_chat_agent",
