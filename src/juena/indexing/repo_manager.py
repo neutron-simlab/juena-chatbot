@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
-import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,7 +70,8 @@ class RepoManager:
 
     def has_local_root(self, repo_id: str) -> bool:
         """Return whether *repo_id* already exists in the local cache."""
-        return self.local_root(repo_id).is_dir()
+        root = self.local_root(repo_id)
+        return root.is_dir() and (root / ".git").is_dir()
 
     def resolve_root(self, repo_id: str) -> Path:
         """Return the absolute root directory for *repo_id*."""
@@ -86,8 +87,20 @@ class RepoManager:
             raise ValueError(f"Repo {cfg.id}: source.url is required")
 
         dest = self.local_root(repo_id)
-        if dest.exists():
+        if (dest / ".git").is_dir():
+            self._git_set_origin_url(dest, url)
             self._git_pull(dest, cfg.source.branch)
+        elif dest.exists():
+            logger.warning(
+                "Removing non-git cache path for %s before cloning: %s",
+                cfg.id,
+                dest,
+            )
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+            self._git_clone(url, dest, cfg.source.branch)
         else:
             self._git_clone(url, dest, cfg.source.branch)
         logger.info("Resolved git repo %s -> %s", cfg.id, dest)
@@ -138,6 +151,13 @@ class RepoManager:
         RepoManager._run_git(
             ["git", "clone", "--depth", "1", "--branch", branch, url, str(dest)],
             f"clone {url}",
+        )
+
+    @staticmethod
+    def _git_set_origin_url(dest: Path, url: str) -> None:
+        RepoManager._run_git(
+            ["git", "-C", str(dest), "remote", "set-url", "origin", url],
+            f"set-origin {dest.name}",
         )
 
     @staticmethod

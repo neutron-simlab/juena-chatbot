@@ -319,6 +319,79 @@ repositories:
       - "README.md"
       - "docs/"
 
+  - id: sampledb
+    name: SampleDB
+    description: "Web-based sample and measurement metadata database built with Flask; index backend code, templates, configuration, and documentation."
+    source:
+      url: https://github.com/sciapp/sampledb.git
+      branch: develop
+    include_globs:
+      - "**/*.py"
+      - "**/*.pyi"
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.css"
+      - "**/*.scss"
+      - "**/*.html"
+      - "**/*.jinja"
+      - "**/*.j2"
+      - "**/*.md"
+      - "**/*.rst"
+      - "**/*.txt"
+      - "**/*.toml"
+      - "**/*.yaml"
+      - "**/*.yml"
+      - "**/*.json"
+      - "**/*.ini"
+      - "**/*.cfg"
+      - "**/*.po"
+      - "**/*.pot"
+      - "**/*.sql"
+      - "**/*.sh"
+      - "**/Dockerfile"
+      - "**/Makefile"
+      - "**/makefile"
+    exclude_globs:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/__pycache__/**"
+      - "**/.venv/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/*.egg-info/**"
+      - "**/.mypy_cache/**"
+      - "**/.pytest_cache/**"
+      - "**/.tox/**"
+      - "**/.cache/**"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.gif"
+      - "**/*.svg"
+      - "**/*.ico"
+      - "**/*.pdf"
+      - "**/*.zip"
+      - "**/*.tar"
+      - "**/*.gz"
+      - "**/*.bz2"
+      - "**/*.xz"
+      - "**/*.whl"
+      - "**/*.so"
+      - "**/*.dylib"
+      - "**/*.dll"
+      - "**/*.pyd"
+      - "**/*.exe"
+    max_file_bytes: 524288
+    chunk_size: 1500
+    chunk_overlap: 200
+    docs_paths:
+      - "README.md"
+      - "README.rst"
+      - "docs/"
+      - "doc/"
+
   - id: vitess
     name: VITESS
     description: "Virtual Instrumentation Tool for ESS. Software to simulate neutron scattering experiments and instrument components."

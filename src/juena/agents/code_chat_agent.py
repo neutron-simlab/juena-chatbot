@@ -24,7 +24,6 @@ from langgraph.graph.state import CompiledStateGraph
 from juena.core.llms_providers import LLMFactory, create_llm_with_fallback
 from juena.indexing.bootstrap import validate_bootstrap_ready
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.sparse_index import RepoSparseIndex
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent_registry import register_agent_factory
@@ -97,8 +96,8 @@ software repositories.
 1. Always search first. Do not answer from memory.
 2. Start repository investigation with `search_code_hybrid` unless the user is
    only asking which repositories exist. `search_code_hybrid` is the primary
-   tool because it combines FTS5 keyword retrieval with vector-semantic search
-   over the indexed repositories for the best recall.
+   tool because it performs semantic embedding search over the indexed
+   repositories for the best recall.
 3. After relevant hybrid hits appear, use filesystem tools on `/repos/...` to
    validate the result with exact evidence from the real files.
 4. If `/inputs/` exists, inspect it before or alongside repository search when
@@ -288,7 +287,6 @@ async def create_code_chat_agent(
 
     repo_manager = RepoManager()
     vector_index = RepoVectorIndex(repo_manager)
-    sparse_index = RepoSparseIndex(repo_manager)
     code_chat_backend = _build_code_chat_backend(repo_manager.cache_dir)
 
     # Bootstrap is expected to happen before the server starts. The agent only
@@ -306,7 +304,7 @@ async def create_code_chat_agent(
         model=CODE_CHAT_SUMMARIZER_MODEL,
         temperature=0.0,
     )
-    local_tools = build_code_chat_tools(repo_manager, vector_index, sparse_index)
+    local_tools = build_code_chat_tools(repo_manager, vector_index)
     context7_runtime = await load_optional_context7_tools()
     context7_tools = list(context7_runtime.tools) if context7_runtime is not None else []
     repo_subagent_tools = list(local_tools)

@@ -11,7 +11,6 @@ from langchain.tools import tool
 
 from juena.retrieval.hybrid_search import hybrid_search
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.sparse_index import RepoSparseIndex
 from juena.indexing.vector_index import RepoVectorIndex
 
 _PREVIEW_CHARS = 240
@@ -61,20 +60,16 @@ def _search_code_semantic(
 
 
 def _search_code_hybrid(
-    repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
-    sparse_index: RepoSparseIndex,
     repo_id: str,
     query: str,
     max_results: int = 10,
 ) -> str:
     hits = hybrid_search(
-        repo_manager,
         vector_index,
         repo_id,
         query,
         max_results=max_results,
-        sparse_index=sparse_index,
     )
     return json.dumps(
         [
@@ -83,10 +78,7 @@ def _search_code_hybrid(
                 "file_path": h.file_path,
                 "path": _repo_virtual_path(repo_id, h.file_path),
                 "is_doc": h.is_doc,
-                "sparse_rank": h.sparse_rank,
                 "semantic_rank": h.semantic_rank,
-                "rrf_score": round(h.rrf_score, 6),
-                "source": h.source,
                 "char_count": len(h.content),
                 "preview": _compact_preview(h.content),
             }
@@ -114,12 +106,8 @@ def _search_docs_local(
 def build_code_chat_tools(
     repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
-    sparse_index: RepoSparseIndex | None = None,
 ) -> list:
     """Create retrieval tools bound to the prepared repository resources."""
-
-    if sparse_index is None:
-        sparse_index = RepoSparseIndex(repo_manager)
 
     @tool
     def search_code_semantic(
@@ -148,11 +136,11 @@ def build_code_chat_tools(
         query: str,
         max_results: int = 10,
     ) -> str:
-        """Default search tool – hybrid retrieval combining FTS5 keyword and
-        semantic embedding search via Reciprocal Rank Fusion.
+        """Default search tool -- semantic embedding search over the indexed
+        repositories.
 
         Use this as the primary search for all repository questions.  It works
-        for exact symbol lookups, conceptual queries, and everything in between.
+        for conceptual queries, symbol lookups, and everything in between.
 
         Args:
             repo_id: Repository identifier visible under /repos/<repo_id>/.
@@ -160,13 +148,10 @@ def build_code_chat_tools(
             max_results: Maximum results to return.
 
         Returns a JSON array of hits with repo_id, file_path, path, preview,
-        is_doc, sparse_rank, semantic_rank, rrf_score, source, and char_count
-        fields.
+        is_doc, semantic_rank, and char_count fields.
         """
         return _search_code_hybrid(
-            repo_manager,
             vector_index,
-            sparse_index,
             repo_id,
             query,
             max_results=max_results,

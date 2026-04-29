@@ -207,7 +207,7 @@ class RepoVectorIndex:
         Build (or rebuild) the vector index for *repo_id*.
 
         When *collect_chunks* is ``True``, returns ``(count, chunks)`` where
-        *chunks* is a list of dicts suitable for feeding into the sparse index.
+        *chunks* is a list of chunk dicts.
         Otherwise returns just the chunk count.
         """
         cfg = self._repo_manager.get_config(repo_id)
