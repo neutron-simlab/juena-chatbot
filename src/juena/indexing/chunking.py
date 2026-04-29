@@ -158,6 +158,34 @@ def _generic_chunk(
     return result
 
 
+def _split_oversized_chunks(
+    chunks: list[dict[str, Any]],
+    chunk_size: int,
+    chunk_overlap: int,
+) -> list[dict[str, Any]]:
+    """Apply a hard size cap after parser-backed chunking."""
+    capped: list[dict[str, Any]] = []
+    safe_overlap = min(chunk_overlap, max(chunk_size - 1, 0))
+
+    for chunk in chunks:
+        text = chunk["text"]
+        token_count = chunk.get("token_count", len(text))
+        if len(text) <= chunk_size and token_count <= chunk_size:
+            capped.append(chunk)
+            continue
+
+        parent_start = chunk.get("start_index", 0)
+        for child in _generic_chunk(text, chunk_size, safe_overlap):
+            start_index = parent_start + child["start_index"]
+            capped.append({
+                **child,
+                "start_index": start_index,
+                "end_index": parent_start + child["end_index"],
+            })
+
+    return capped
+
+
 # ------------------------------------------------------------------
 # Enrichment
 # ------------------------------------------------------------------
@@ -223,6 +251,8 @@ def chunk_file(
 
     if not raw_chunks:
         raw_chunks = _generic_chunk(source, chunk_size, chunk_overlap)
+    else:
+        raw_chunks = _split_oversized_chunks(raw_chunks, chunk_size, chunk_overlap)
 
     results: list[IndexChunk] = []
     for idx, rc in enumerate(raw_chunks):

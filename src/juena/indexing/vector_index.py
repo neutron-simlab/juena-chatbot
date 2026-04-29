@@ -18,9 +18,9 @@ from typing import Any
 import chromadb
 from chromadb.api.types import DefaultEmbeddingFunction, Documents, EmbeddingFunction
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from juena.core.log import get_logger
+from juena.indexing.chunking import chunk_file
 from juena.indexing.repo_config import RepoConfig
 from juena.indexing.repo_manager import RepoManager
 
@@ -35,6 +35,8 @@ _INDEX_META_SCHEMA_VERSION = "juena:index_schema_version"
 _INDEX_META_REPO_REVISION = "juena:repo_revision"
 _INDEX_META_FINGERPRINT = "juena:index_fingerprint"
 _INDEX_META_EMBEDDING = "juena:embedding"
+_MAX_EMBEDDING_BATCH_SIZE = 64
+_EMBEDDING_REQUEST_CHAR_BUDGET = 16_000
 
 
 def _get_config():
@@ -58,10 +60,6 @@ def _index_dir() -> Path:
     return _find_workspace_root() / _DEFAULT_INDEX_DIR
 
 
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
 def _should_log_progress(
     processed_files: int,
     total_files: int,
@@ -78,6 +76,11 @@ def _should_log_progress(
         return True, next_progress_percent
 
     return False, next_progress_percent
+
+
+def _estimated_embedding_tokens(text: str) -> int:
+    """Conservative token estimate for batching embedding requests."""
+    return max(1, len(text))
 
 
 def _build_embedding_function() -> EmbeddingFunction[Documents]:
@@ -141,7 +144,6 @@ class RepoVectorIndex:
 
         payload = {
             "schema_version": _INDEX_SCHEMA_VERSION,
-            "embedding": self._embedding_descriptor,
             "include_globs": cfg.include_globs,
             "exclude_globs": cfg.exclude_globs,
             "max_file_bytes": cfg.max_file_bytes,
@@ -195,6 +197,40 @@ class RepoVectorIndex:
     # Indexing
     # ------------------------------------------------------------------
 
+    def build_file_chunks(
+        self,
+        repo_id: str,
+        rel_path: str,
+        *,
+        content: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Chunk a single file using the same pipeline as full builds."""
+        cfg = self._repo_manager.get_config(repo_id)
+        if cfg is None:
+            raise ValueError(f"Unknown repo: {repo_id}")
+
+        source = content if content is not None else self._repo_manager.read_file(repo_id, rel_path)
+        is_doc = self._is_doc_file(cfg, rel_path)
+        chunks = chunk_file(
+            source,
+            rel_path,
+            is_doc=is_doc,
+            chunk_size=cfg.chunk_size,
+            chunk_overlap=cfg.chunk_overlap,
+        )
+
+        return [
+            {
+                "repo_id": repo_id,
+                "file_path": chunk.file_path,
+                "chunk_index": chunk.chunk_index,
+                "is_doc": chunk.is_doc,
+                "content_hash": chunk.content_hash,
+                "content": chunk.text,
+            }
+            for chunk in chunks
+        ]
+
     def build_index(
         self,
         repo_id: str,
@@ -210,12 +246,10 @@ class RepoVectorIndex:
         *chunks* is a list of chunk dicts.
         Otherwise returns just the chunk count.
         """
-        cfg = self._repo_manager.get_config(repo_id)
-        if cfg is None:
+        if self._repo_manager.get_config(repo_id) is None:
             raise ValueError(f"Unknown repo: {repo_id}")
 
         repo_revision = repo_revision or self._repo_manager.current_revision(repo_id)
-        index_metadata = self._index_metadata(repo_id, repo_revision)
         creation_metadata = self._collection_creation_metadata(repo_id, repo_revision)
 
         if force:
@@ -225,21 +259,23 @@ class RepoVectorIndex:
 
         col = self._get_or_create_collection(repo_id, metadata=creation_metadata)
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=cfg.chunk_size,
-            chunk_overlap=cfg.chunk_overlap,
-            length_function=len,
-        )
-
         files = self._repo_manager.list_files(repo_id)
         total_files = len(files)
         total_chunks = 0
         batch_ids: list[str] = []
         batch_docs: list[str] = []
         batch_metas: list[dict[str, Any]] = []
+        batch_token_estimate = 0
         collected: list[dict[str, Any]] = [] if collect_chunks else []
-        BATCH_SIZE = 200
         next_progress_percent = _PROGRESS_STEP_PERCENT
+
+        def flush_batch() -> None:
+            nonlocal batch_ids, batch_docs, batch_metas, batch_token_estimate
+            if not batch_ids:
+                return
+            col.upsert(ids=batch_ids, documents=batch_docs, metadatas=batch_metas)
+            batch_ids, batch_docs, batch_metas = [], [], []
+            batch_token_estimate = 0
 
         if total_files == 0:
             logger.info(
@@ -257,33 +293,38 @@ class RepoVectorIndex:
         for processed_files, rel_path in enumerate(files, start=1):
             try:
                 content = self._repo_manager.read_file(repo_id, rel_path)
+                file_chunks = self.build_file_chunks(repo_id, rel_path, content=content)
             except Exception as exc:
                 logger.debug("Skipping %s/%s: %s", repo_id, rel_path, exc)
             else:
-                is_doc = self._is_doc_file(cfg, rel_path)
-                chunks = splitter.split_text(content)
-
-                for idx, chunk in enumerate(chunks):
-                    c_hash = _content_hash(chunk)
-                    chunk_id = f"{repo_id}::{rel_path}::{idx}::{c_hash}"
+                for chunk in file_chunks:
+                    chunk_id = (
+                        f"{repo_id}::{chunk['file_path']}::"
+                        f"{chunk['chunk_index']}::{chunk['content_hash']}"
+                    )
                     meta = {
                         "repo_id": repo_id,
-                        "file_path": rel_path,
-                        "chunk_index": idx,
-                        "is_doc": is_doc,
-                        "content_hash": c_hash,
+                        "file_path": chunk["file_path"],
+                        "chunk_index": chunk["chunk_index"],
+                        "is_doc": chunk["is_doc"],
+                        "content_hash": chunk["content_hash"],
                     }
+                    chunk_token_estimate = _estimated_embedding_tokens(chunk["content"])
+                    would_exceed_budget = (
+                        batch_ids
+                        and batch_token_estimate + chunk_token_estimate > _EMBEDDING_REQUEST_CHAR_BUDGET
+                    )
+                    if len(batch_ids) >= _MAX_EMBEDDING_BATCH_SIZE or would_exceed_budget:
+                        flush_batch()
+
                     batch_ids.append(chunk_id)
-                    batch_docs.append(chunk)
+                    batch_docs.append(chunk["content"])
                     batch_metas.append(meta)
+                    batch_token_estimate += chunk_token_estimate
                     total_chunks += 1
 
                     if collect_chunks:
-                        collected.append({**meta, "content": chunk})
-
-                    if len(batch_ids) >= BATCH_SIZE:
-                        col.upsert(ids=batch_ids, documents=batch_docs, metadatas=batch_metas)
-                        batch_ids, batch_docs, batch_metas = [], [], []
+                        collected.append({**meta, "content": chunk["content"]})
 
             should_log, next_progress_percent = _should_log_progress(
                 processed_files,
@@ -302,9 +343,9 @@ class RepoVectorIndex:
                 )
 
         if batch_ids:
-            col.upsert(ids=batch_ids, documents=batch_docs, metadatas=batch_metas)
+            flush_batch()
 
-        col.modify(metadata=index_metadata)
+        self.update_index_metadata(repo_id, repo_revision)
         logger.info("Indexed %d chunks for repo %s", total_chunks, repo_id)
         if collect_chunks:
             return total_chunks, collected
@@ -379,6 +420,28 @@ class RepoVectorIndex:
             return None
         return col.count()
 
+    def indexed_revision(self, repo_id: str) -> str | None:
+        col = self._get_collection_if_exists(repo_id)
+        if col is None:
+            return None
+        metadata = col.metadata or {}
+        revision = metadata.get(_INDEX_META_REPO_REVISION)
+        return revision if isinstance(revision, str) and revision else None
+
+    def update_index_metadata(self, repo_id: str, repo_revision: str) -> None:
+        """Advance stored index metadata after a successful sync."""
+        col = self._get_collection_if_exists(repo_id)
+        if col is None:
+            raise ValueError(f"Vector index missing for '{repo_id}'")
+
+        metadata = {
+            key: value
+            for key, value in (col.metadata or {}).items()
+            if key not in _COLLECTION_BASE_METADATA
+        }
+        metadata.update(self._index_metadata(repo_id, repo_revision))
+        col.modify(metadata=metadata)
+
     def delete_file_chunks(self, repo_id: str, file_path: str) -> int:
         """Remove all chunks for a specific file from the collection."""
         col = self._get_collection_if_exists(repo_id)
@@ -400,9 +463,29 @@ class RepoVectorIndex:
         ids = []
         docs = []
         metas = []
+        token_estimate = 0
+        total_upserted = 0
+
+        def flush_batch() -> None:
+            nonlocal ids, docs, metas, token_estimate, total_upserted
+            if not ids:
+                return
+            col.upsert(ids=ids, documents=docs, metadatas=metas)
+            total_upserted += len(ids)
+            ids, docs, metas = [], [], []
+            token_estimate = 0
+
         for chunk in chunks:
             c_hash = chunk["content_hash"]
             chunk_id = f"{repo_id}::{chunk['file_path']}::{chunk['chunk_index']}::{c_hash}"
+            chunk_token_estimate = _estimated_embedding_tokens(chunk["content"])
+            would_exceed_budget = (
+                ids
+                and token_estimate + chunk_token_estimate > _EMBEDDING_REQUEST_CHAR_BUDGET
+            )
+            if len(ids) >= _MAX_EMBEDDING_BATCH_SIZE or would_exceed_budget:
+                flush_batch()
+
             ids.append(chunk_id)
             docs.append(chunk["content"])
             metas.append({
@@ -412,9 +495,10 @@ class RepoVectorIndex:
                 "is_doc": chunk.get("is_doc", False),
                 "content_hash": c_hash,
             })
+            token_estimate += chunk_token_estimate
         if ids:
-            col.upsert(ids=ids, documents=docs, metadatas=metas)
-        return len(ids)
+            flush_batch()
+        return total_upserted
 
     def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
         col = self._get_collection_if_exists(repo_id)
@@ -428,13 +512,13 @@ class RepoVectorIndex:
         if metadata.get(_INDEX_META_SCHEMA_VERSION) != _INDEX_SCHEMA_VERSION:
             return "index metadata missing or outdated"
 
-        if metadata.get(_INDEX_META_REPO_REVISION) != repo_revision:
-            return "repository revision changed"
+        if metadata.get(_INDEX_META_EMBEDDING) != self._embedding_descriptor:
+            return "embedding configuration changed"
 
         if metadata.get(_INDEX_META_FINGERPRINT) != self._index_fingerprint(repo_id):
             return "index configuration changed"
 
-        if metadata.get(_INDEX_META_EMBEDDING) != self._embedding_descriptor:
-            return "embedding configuration changed"
+        if metadata.get(_INDEX_META_REPO_REVISION) != repo_revision:
+            return "repository revision changed"
 
         return None

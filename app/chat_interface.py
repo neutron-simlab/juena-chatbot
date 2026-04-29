@@ -38,16 +38,38 @@ def save_message_to_storage(thread_id: str, message: ChatMessage) -> None:
         print(f"Warning: Failed to save message to storage: {e}")
 
 
-def _format_repository_line(repository: dict) -> str | None:
-    """Return a concise repository bullet for the intro message."""
+def _escape_markdown_table_cell(value: str) -> str:
+    """Escape characters that would break a Markdown table cell."""
+    return value.replace("|", r"\|")
+
+
+def _format_repository_label(repository: dict) -> str | None:
+    """Return a concise repository label for the intro message."""
     repo_id = str(repository.get("id", "")).strip()
     if not repo_id:
         return None
 
     name = str(repository.get("name", "")).strip()
     if name and name.casefold() != repo_id.casefold():
-        return f"- `{repo_id}`: {name}"
-    return f"- `{repo_id}`"
+        return f"`{_escape_markdown_table_cell(repo_id)}`: {_escape_markdown_table_cell(name)}"
+    return f"`{_escape_markdown_table_cell(repo_id)}`"
+
+
+def _format_repository_table(repository_labels: list[str], *, columns: int = 3) -> list[str]:
+    """Render repository labels as a compact Markdown table."""
+    if not repository_labels:
+        return ["- No indexed repositories are currently available."]
+
+    header = " | ".join(["Repository"] * columns)
+    divider = " | ".join(["---"] * columns)
+    rows = [f"| {header} |", f"| {divider} |"]
+
+    for start in range(0, len(repository_labels), columns):
+        cells = repository_labels[start:start + columns]
+        cells.extend([""] * (columns - len(cells)))
+        rows.append("| " + " | ".join(cells) + " |")
+
+    return rows
 
 
 def build_agent_intro_message(client: AgentClient) -> ChatMessage:
@@ -59,13 +81,12 @@ def build_agent_intro_message(client: AgentClient) -> ChatMessage:
     except Exception:
         repo_lines = ["- Repository metadata is unavailable right now."]
     else:
-        repo_lines = [
-            line
+        repo_labels = [
+            label
             for repository in repositories
-            if (line := _format_repository_line(repository)) is not None
+            if (label := _format_repository_label(repository)) is not None
         ]
-        if not repo_lines:
-            repo_lines = ["- No indexed repositories are currently available."]
+        repo_lines = _format_repository_table(repo_labels)
 
     intro_lines = [
         "Hello! There are currently two agents available:",

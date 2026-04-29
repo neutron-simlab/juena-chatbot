@@ -217,8 +217,9 @@ def test_build_agent_intro_message_lists_agents_and_repositories(monkeypatch) ->
     assert "default starting agent" in message.content
     assert "Tavily" in message.content
     assert "Context7" in message.content
-    assert "- `datreat`" in message.content
-    assert "- `jscatter`" in message.content
+    assert "| Repository | Repository | Repository |" in message.content
+    assert "`datreat`" in message.content
+    assert "`jscatter`" in message.content
     assert "Use the sidebar to switch agents at any time." in message.content
 
 
@@ -283,7 +284,7 @@ def test_render_chat_interface_inserts_intro_and_preserves_start_kickoff(monkeyp
     intro_message = session_state.messages[0]
     assert "`react_agent`" in intro_message.content
     assert "Tavily" in intro_message.content
-    assert "- `datreat`" in intro_message.content
+    assert "| `datreat` |  |  |" in intro_message.content
     render_header_mock.assert_called_once_with()
     render_chat_input_styles_mock.assert_called_once_with()
     render_message_mock.assert_called_once_with(intro_message, show_system=False)

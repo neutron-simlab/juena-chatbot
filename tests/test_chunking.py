@@ -1,5 +1,6 @@
 """Tests for the chunking abstraction and enrichment layer."""
 
+from juena.indexing import chunking as chunking_module
 from juena.indexing.chunking import IndexChunk, chunk_file, _detect_language, _path_tokens
 
 
@@ -114,6 +115,26 @@ def test_chunk_indices_are_sequential():
     chunks = chunk_file(PYTHON_SOURCE, "src/main.py", chunk_size=50, chunk_overlap=10)
     indices = [c.chunk_index for c in chunks]
     assert indices == list(range(len(chunks)))
+
+
+def test_parser_chunks_are_hard_capped(monkeypatch):
+    oversized_text = "\n".join(f"line_{i} = {i}" for i in range(100))
+
+    def fake_chonkie_chunk(source: str, language: str, chunk_size: int):
+        return [{
+            "text": oversized_text,
+            "start_index": 0,
+            "end_index": len(oversized_text),
+            "token_count": len(oversized_text),
+        }]
+
+    monkeypatch.setattr(chunking_module, "_chonkie_chunk", fake_chonkie_chunk)
+
+    chunks = chunk_file(oversized_text, "src/main.py", chunk_size=120, chunk_overlap=20)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.text) <= 120 for chunk in chunks)
+    assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
 
 
 def test_path_tokens_populated():

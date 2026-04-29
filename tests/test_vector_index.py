@@ -37,6 +37,17 @@ def test_build_and_count(repo_config_path: Path):
     assert vi.collection_count_existing("fake-repo") == count
 
 
+def test_build_index_uses_same_chunk_pipeline_as_file_updates(repo_config_path: Path) -> None:
+    _, vi = _make_index(repo_config_path)
+    count, collected = vi.build_index("fake-repo", force=True, collect_chunks=True)
+
+    assert count == len(collected)
+    assert [c for c in collected if c["file_path"] == "src/main.py"] == vi.build_file_chunks(
+        "fake-repo",
+        "src/main.py",
+    )
+
+
 def test_semantic_search(repo_config_path: Path):
     _, vi = _make_index(repo_config_path)
     vi.build_index("fake-repo", force=True)
@@ -89,6 +100,33 @@ def test_index_staleness_reason_detects_revision_changes(
 
     assert updated_revision != initial_revision
     assert vi.index_staleness_reason("fake-repo", updated_revision) == "repository revision changed"
+
+
+def test_index_staleness_reason_prioritizes_config_changes_over_revision(
+    repo_config_path: Path,
+) -> None:
+    mgr, vi = _make_index(repo_config_path)
+    revision = mgr.current_revision("fake-repo")
+
+    vi.build_index("fake-repo", force=True, repo_revision=revision)
+
+    cfg = mgr.get_config("fake-repo")
+    assert cfg is not None
+    cfg.chunk_size += 1
+
+    assert vi.index_staleness_reason("fake-repo", "different-revision") == "index configuration changed"
+
+
+def test_update_index_metadata_advances_indexed_revision(repo_config_path: Path) -> None:
+    mgr, vi = _make_index(repo_config_path)
+    revision = mgr.current_revision("fake-repo")
+
+    vi.build_index("fake-repo", force=True, repo_revision=revision)
+    assert vi.indexed_revision("fake-repo") == revision
+
+    vi.update_index_metadata("fake-repo", "next-revision")
+
+    assert vi.indexed_revision("fake-repo") == "next-revision"
 
 
 def test_build_index_logs_percentage_progress(
