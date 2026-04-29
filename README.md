@@ -77,30 +77,28 @@ On a fresh UI chat, the welcome message introduces both agents and lists the rep
 
 ## Startup and Bootstrap
 
-Repository preparation happens before the app starts serving requests.
+Bootstrap runs before the app starts serving requests.
 
 - The Docker entrypoint runs `python -m juena.retrieval.bootstrap` before starting Streamlit or FastAPI.
-- `main.py` also runs the same bootstrap path when started directly, unless `JUENA_BOOTSTRAP_DONE=1` is already set.
-- Bootstrap fails fast. If any configured repository cannot sync or index, the service does not finish startup.
+- `main.py` runs the same bootstrap path when started directly, unless `JUENA_BOOTSTRAP_DONE=1` is already set.
+- Bootstrap fails fast: if any configured repository cannot sync or index, startup stops.
 
-Bootstrap behavior for each configured repository:
+For each repository, bootstrap:
 
-1. clone the repo on first run, or refresh it on later runs
-2. inspect the current git revision
-3. check whether the saved index is stale
-4. rebuild the index only when it is missing, empty, or outdated
+1. clones or refreshes the repo
+2. reads the current revision
+3. checks whether the index is stale
+4. selectively reindexes changed files when possible
+5. falls back to a full rebuild when the index is missing, empty, config/embedding settings changed, or incremental sync is unsafe
 
-The current stale-index checks include:
+Selective reindexing uses `git diff` from the indexed revision to the current revision:
 
-- repository revision changes
-- embedding configuration changes
-- indexing configuration changes
-- missing or empty vector collections
+- delete chunks for removed or renamed-out files
+- re-embed only added, changed, and renamed-in files
+- update metadata only when no indexed files changed
+- fall back to manifest diffing or a full rebuild when needed
 
-Progress logging includes:
-
-- overall bootstrap progress across repositories
-- per-repository indexing progress across files
+Logs show overall repository progress and per-repository file progress.
 
 You can run bootstrap manually:
 
@@ -175,72 +173,6 @@ tools plus Context7.
 Optional environment variables:
 
 - `TAVILY_API_KEY`
-
-## Local Development
-
-Docker is the recommended path, but you can also run the services locally.
-
-1. Install dependencies:
-
-   ```bash
-   uv sync --extra dev
-   ```
-
-2. Configure `.env`.
-
-3. Optional prewarm:
-
-   ```bash
-   uv run python -m juena.retrieval.bootstrap
-   ```
-
-4. Start the API:
-
-   ```bash
-   uv run python main.py
-   ```
-
-5. Start the UI in a second terminal:
-
-   ```bash
-   uv run streamlit run app/streamlit_app.py --server.port 9501
-   ```
-
-`main.py` already runs bootstrap automatically, so the explicit bootstrap command is mainly useful when you want to prebuild indices before starting the server.
-
-## API Reference
-
-- `GET /health`
-  Service health check.
-
-- `GET /agents`
-  Lists registered agents and the current default.
-
-- `GET /repositories`
-  Lists configured repositories for code chat.
-
-- `POST /invoke`
-  Invoke the default agent (`react_agent`).
-
-- `POST /stream`
-  Stream the default agent (`react_agent`).
-
-- `POST /{agent_id}/invoke`
-  Invoke a specific agent such as `code_chat_agent`.
-
-- `POST /{agent_id}/stream`
-  Stream a specific agent.
-
-- `POST /{agent_id}/restart`
-  Recreate the compiled graph for a specific agent.
-
-Example `code_chat_agent` request:
-
-```bash
-curl -X POST http://localhost:8080/code_chat_agent/invoke \
-  -H "Content-Type: application/json" \
-  -d '{"message":"What repositories are available, and where should I look for documentation?"}'
-```
 
 ## Data and Persistence
 

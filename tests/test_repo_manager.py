@@ -1,5 +1,7 @@
 """Tests for RepoManager: git clone, file listing, file reading."""
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -122,6 +124,63 @@ def test_build_manifest(repo_config_path: Path):
     assert len(manifest["src/main.py"]) == 16
 
 
+def test_diff_revision_files_detects_rename(repo_config_path: Path, tmp_repo: Path):
+    mgr = _make_manager(repo_config_path)
+    initial_revision = mgr.current_revision("fake-repo")
+    clone_root = mgr.resolve_root("fake-repo")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    (tmp_repo / "src" / "utils.py").rename(tmp_repo / "src" / "helpers.py")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "commit", "-m", "rename utils"], cwd=tmp_repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(clone_root), "fetch", "--depth", "1", "origin", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone_root), "reset", "--hard", "origin/main"], check=True, capture_output=True)
+
+    updated_revision = mgr.current_revision("fake-repo")
+    diff = mgr.diff_revision_files("fake-repo", initial_revision, updated_revision)
+
+    assert diff.added == []
+    assert diff.changed == []
+    assert diff.deleted == []
+    assert diff.renamed == [("src/utils.py", "src/helpers.py")]
+    assert diff.as_manifest_diff().added == ["src/helpers.py"]
+    assert diff.as_manifest_diff().deleted == ["src/utils.py"]
+
+
+def test_diff_revision_files_ignores_non_indexed_changes(repo_config_path: Path, tmp_repo: Path):
+    mgr = _make_manager(repo_config_path)
+    initial_revision = mgr.current_revision("fake-repo")
+    clone_root = mgr.resolve_root("fake-repo")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    (tmp_repo / "artifact.bin").write_bytes(b"\x00\x01\x02")
+    subprocess.run(["git", "add", "artifact.bin"], cwd=tmp_repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "commit", "-m", "add artifact"], cwd=tmp_repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(clone_root), "fetch", "--depth", "1", "origin", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone_root), "reset", "--hard", "origin/main"], check=True, capture_output=True)
+
+    updated_revision = mgr.current_revision("fake-repo")
+    diff = mgr.diff_revision_files("fake-repo", initial_revision, updated_revision)
+
+    assert not diff.has_changes
+    assert diff.added == []
+    assert diff.changed == []
+    assert diff.deleted == []
+    assert diff.renamed == []
+
+
 def test_diff_manifests_detects_changes():
     old = {"a.py": "aaa", "b.py": "bbb", "deleted.py": "ddd"}
     new = {"a.py": "aaa", "b.py": "bbb_changed", "added.py": "eee"}
@@ -130,5 +189,4 @@ def test_diff_manifests_detects_changes():
     assert diff.changed == ["b.py"]
     assert diff.deleted == ["deleted.py"]
     assert diff.has_changes
-
 
