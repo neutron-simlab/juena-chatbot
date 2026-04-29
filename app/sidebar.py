@@ -335,10 +335,10 @@ def render_sidebar() -> None:
         st.subheader("About")
         st.info(
             """
-            **JüNA Chatbot Template** is a general-purpose chatbot framework
+            **JüNA Chatbot** is a production-ready neutron science chatbot
             built with LangGraph, FastAPI, and Streamlit.
             
-            You can plug in your own LangGraph agents to create
-            custom chatbot applications.
+            It supports custom LangGraph agents to power
+            tailored neutron science chatbot experiences.
             """
         )

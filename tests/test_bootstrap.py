@@ -19,25 +19,6 @@ def _repo_config(repo_id: str) -> RepoConfig:
     )
 
 
-class StubSparseIndex:
-    def __init__(self, repo_manager: object) -> None:
-        self.build_calls: list[str] = []
-
-    def build_index(
-        self,
-        repo_id: str,
-        chunks: list,
-        *,
-        force: bool = False,
-        repo_revision: str | None = None,
-    ) -> int:
-        self.build_calls.append(repo_id)
-        return len(chunks)
-
-    def delete_file_chunks(self, repo_id: str, file_path: str) -> int:
-        return 0
-
-
 def test_bootstrap_repositories_rebuilds_stale_indices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -90,7 +71,6 @@ def test_bootstrap_repositories_rebuilds_stale_indices(
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: {})
     monkeypatch.setattr(bootstrap, "_save_manifest", lambda repo_id, manifest: None)
 
@@ -152,7 +132,6 @@ def test_bootstrap_repositories_raises_immediately_on_failure(
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(bootstrap, "_save_manifest", lambda repo_id, manifest: None)
 
     with pytest.raises(RuntimeError, match="index failed"):
@@ -207,7 +186,6 @@ def test_bootstrap_repositories_skips_rebuild_for_fresh_indices(
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "RepoSparseIndex", StubSparseIndex)
 
     results = bootstrap.bootstrap_repositories()
 
@@ -220,7 +198,6 @@ def test_bootstrap_incremental_when_manifest_exists(
 ) -> None:
     """When prior manifest exists and revision changed, incremental path is used."""
     configs = [_repo_config("repo-a")]
-    created: dict[str, object] = {}
     incremental_called: list[str] = []
     saved_manifests: dict[str, dict] = {}
 
@@ -230,7 +207,6 @@ def test_bootstrap_incremental_when_manifest_exists(
     class StubRepoManager:
         def __init__(self, configs_arg: list[RepoConfig]) -> None:
             self.repo_ids = [cfg.id for cfg in configs_arg]
-            created["repo_manager"] = self
 
         def resolve_root(self, repo_id: str) -> Path:
             return Path(f"/tmp/{repo_id}")
@@ -244,7 +220,6 @@ def test_bootstrap_incremental_when_manifest_exists(
     class StubVectorIndex:
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.repo_manager = repo_manager
-            created["vector_index"] = self
 
         def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
             return "repository revision changed"
@@ -252,7 +227,7 @@ def test_bootstrap_incremental_when_manifest_exists(
         def collection_count_existing(self, repo_id: str) -> int | None:
             return 10
 
-    def fake_incremental(rm, vi, si, repo_id, diff, rev):
+    def fake_incremental(rm, vi, repo_id, diff, rev):
         incremental_called.append(repo_id)
         assert isinstance(diff, ManifestDiff)
         assert "added.py" in diff.added
@@ -263,7 +238,6 @@ def test_bootstrap_incremental_when_manifest_exists(
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "RepoSparseIndex", StubSparseIndex)
     monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: old_manifest)
     monkeypatch.setattr(bootstrap, "_save_manifest", lambda repo_id, m: saved_manifests.update({repo_id: m}))
     monkeypatch.setattr(bootstrap, "_incremental_reindex", fake_incremental)
@@ -291,3 +265,70 @@ def test_validate_bootstrap_ready_requires_local_repos_and_indices() -> None:
 
     with pytest.raises(RuntimeError, match="repo-a"):
         bootstrap.validate_bootstrap_ready(StubRepoManager(), StubVectorIndex())
+
+
+def test_incremental_reindex_updates_vector_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_incremental_reindex should update vector index for changed files."""
+
+    cfg = RepoConfig(
+        id="repo-a",
+        name="repo-a",
+        source=RepoSource(url="https://example.com/repo-a.git"),
+    )
+
+    class FakeChunk:
+        def __init__(self, fp: str, idx: int):
+            self.file_path = fp
+            self.chunk_index = idx
+            self.is_doc = False
+            self.content_hash = f"hash_{fp}_{idx}"
+            self.text = f"content of {fp} chunk {idx}"
+
+    class StubRepoManager:
+        def get_config(self, repo_id: str) -> RepoConfig:
+            return cfg
+
+        def read_file(self, repo_id: str, rel_path: str) -> str:
+            return f"source of {rel_path}"
+
+    class StubVectorIndex:
+        def __init__(self) -> None:
+            self.deleted: list[tuple[str, str]] = []
+            self.upserted: list[tuple[str, int]] = []
+
+        @staticmethod
+        def _is_doc_file(cfg_arg, rel_path: str) -> bool:
+            return False
+
+        def delete_file_chunks(self, repo_id: str, file_path: str) -> int:
+            self.deleted.append((repo_id, file_path))
+            return 0
+
+        def upsert_file_chunks(self, repo_id: str, chunks: list) -> int:
+            self.upserted.append((repo_id, len(chunks)))
+            return len(chunks)
+
+        def collection_count_existing(self, repo_id: str) -> int | None:
+            return 42
+
+    vector = StubVectorIndex()
+    diff = ManifestDiff(added=["new.py"], changed=["changed.py"], deleted=["gone.py"])
+
+    import juena.indexing.chunking as chunking_mod
+    monkeypatch.setattr(
+        chunking_mod, "chunk_file",
+        lambda source, rel_path, **kw: [FakeChunk(rel_path, 0)],
+    )
+
+    count = bootstrap._incremental_reindex(
+        StubRepoManager(), vector,
+        "repo-a", diff, "rev-123",
+    )
+
+    assert count == 42
+    deleted_paths = {fp for _, fp in vector.deleted}
+    assert "gone.py" in deleted_paths
+    assert "changed.py" in deleted_paths
+    assert len(vector.upserted) == 2

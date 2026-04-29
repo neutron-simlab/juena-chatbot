@@ -1,8 +1,8 @@
 """
 Benchmark runner for retrieval evaluation.
 
-Loads gold queries from YAML, runs each query against dense (vector),
-sparse (FTS5), and hybrid retrievers, then computes standard IR metrics
+Loads gold queries from YAML, runs each query against dense (vector)
+and hybrid retrievers, then computes standard IR metrics
 (MAP, MRR, nDCG@K, P@K) via ``huggingface/evaluate``'s ``trec_eval``.
 """
 
@@ -18,7 +18,6 @@ import yaml
 
 from juena.core.log import get_logger
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.sparse_index import RepoSparseIndex
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.retrieval.hybrid_search import hybrid_search
 
@@ -91,31 +90,15 @@ def _run_dense(
     return seen
 
 
-def _run_sparse(
-    sparse_index: RepoSparseIndex,
-    repo_id: str,
-    query: str,
-    k: int,
-) -> list[str]:
-    hits = sparse_index.search(repo_id, query, max_results=k)
-    seen: list[str] = []
-    for h in hits:
-        if h.file_path not in seen:
-            seen.append(h.file_path)
-    return seen
-
-
 def _run_hybrid(
-    repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
-    sparse_index: RepoSparseIndex,
     repo_id: str,
     query: str,
     k: int,
 ) -> list[str]:
     hits = hybrid_search(
-        repo_manager, vector_index, repo_id, query,
-        max_results=k, sparse_index=sparse_index,
+        vector_index, repo_id, query,
+        max_results=k,
     )
     seen: list[str] = []
     for h in hits:
@@ -214,7 +197,6 @@ def _recall_at_k(query_results: list[QueryResult], k: int) -> float:
 def run_benchmark(
     repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
-    sparse_index: RepoSparseIndex,
     *,
     gold_path: Path | None = None,
     llm_path: Path | None = None,
@@ -229,18 +211,17 @@ def run_benchmark(
     ----------
     repo_manager : RepoManager
     vector_index : RepoVectorIndex
-    sparse_index : RepoSparseIndex
     gold_path : optional path to gold_queries.yaml
     llm_path : optional path to llm-generated-queries.yaml
     extra_query_paths : additional YAML files to load queries from
     k : number of results to retrieve per query
-    retrievers : subset of ``["dense", "sparse", "hybrid"]`` to evaluate
+    retrievers : subset of ``["dense", "hybrid"]`` to evaluate
 
     Returns
     -------
     list of BenchmarkReport, one per retriever
     """
-    retrievers = retrievers or ["dense", "sparse", "hybrid"]
+    retrievers = retrievers or ["dense", "hybrid"]
     queries = load_all_benchmark_queries(
         gold_path=gold_path,
         llm_path=llm_path,
@@ -281,10 +262,8 @@ def run_benchmark(
 
             if retriever_name == "dense":
                 retrieved = _run_dense(vector_index, repo_id, query_text, k)
-            elif retriever_name == "sparse":
-                retrieved = _run_sparse(sparse_index, repo_id, query_text, k)
             elif retriever_name == "hybrid":
-                retrieved = _run_hybrid(repo_manager, vector_index, sparse_index, repo_id, query_text, k)
+                retrieved = _run_hybrid(vector_index, repo_id, query_text, k)
             else:
                 logger.warning("Unknown retriever %s – skipping", retriever_name)
                 continue

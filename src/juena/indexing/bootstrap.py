@@ -10,7 +10,6 @@ from typing import Any
 from juena.core.log import get_logger
 from juena.indexing.repo_config import load_repo_configs
 from juena.indexing.repo_manager import ManifestDiff, RepoManager, diff_manifests
-from juena.indexing.sparse_index import RepoSparseIndex
 from juena.indexing.vector_index import RepoVectorIndex
 
 logger = get_logger(__name__)
@@ -53,7 +52,6 @@ def _save_manifest(repo_id: str, manifest: dict[str, str]) -> None:
 def _incremental_reindex(
     repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
-    sparse_index: RepoSparseIndex,
     repo_id: str,
     diff: ManifestDiff,
     repo_revision: str,
@@ -69,7 +67,6 @@ def _incremental_reindex(
 
     for file_path in diff.deleted + diff.changed:
         vector_index.delete_file_chunks(repo_id, file_path)
-        sparse_index.delete_file_chunks(repo_id, file_path)
 
     for rel_path in files_to_index:
         try:
@@ -98,7 +95,6 @@ def _incremental_reindex(
         ]
 
         vector_index.upsert_file_chunks(repo_id, chunk_dicts)
-        sparse_index.build_index(repo_id, chunk_dicts, force=False, repo_revision=repo_revision)
 
     logger.info(
         "Incremental update for %s: %d added, %d changed, %d deleted",
@@ -116,7 +112,6 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
     configs = load_repo_configs(config_path)
     repo_manager = RepoManager(configs)
     vector_index = RepoVectorIndex(repo_manager)
-    sparse_index = RepoSparseIndex(repo_manager)
     results: dict[str, int] = {}
     total_repos = len(repo_manager.repo_ids)
 
@@ -158,19 +153,14 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
                         repo_id, len(diff.added), len(diff.changed), len(diff.deleted),
                     )
                     chunk_count = _incremental_reindex(
-                        repo_manager, vector_index, sparse_index,
+                        repo_manager, vector_index,
                         repo_id, diff, repo_revision,
                     )
                     _save_manifest(repo_id, new_manifest)
                 else:
                     logger.info("Full rebuild for %s (no prior manifest)", repo_id)
-                    result = vector_index.build_index(
+                    chunk_count = vector_index.build_index(
                         repo_id, force=True, repo_revision=repo_revision,
-                        collect_chunks=True,
-                    )
-                    chunk_count, raw_chunks = result  # type: ignore[misc]
-                    sparse_index.build_index(
-                        repo_id, raw_chunks, force=True, repo_revision=repo_revision,
                     )
                     _save_manifest(repo_id, new_manifest)
             else:
@@ -178,13 +168,8 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
                     "Full rebuild for repository %s: %s", repo_id, stale_reason,
                 )
                 new_manifest = repo_manager.build_manifest(repo_id)
-                result = vector_index.build_index(
+                chunk_count = vector_index.build_index(
                     repo_id, force=True, repo_revision=repo_revision,
-                    collect_chunks=True,
-                )
-                chunk_count, raw_chunks = result  # type: ignore[misc]
-                sparse_index.build_index(
-                    repo_id, raw_chunks, force=True, repo_revision=repo_revision,
                 )
                 _save_manifest(repo_id, new_manifest)
 
