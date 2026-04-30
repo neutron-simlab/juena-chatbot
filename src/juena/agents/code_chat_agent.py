@@ -42,6 +42,39 @@ CODE_CHAT_STATIC_PROVIDER = Provider.BLABLADOR.value
 CODE_CHAT_SUBAGENT_MODEL = "alias-code"
 CODE_CHAT_SUMMARIZER_MODEL = BlabladorModelName.GPT_OSS.value
 CODE_CHAT_RESEARCH_SUBAGENT_NAME = "code-chat-expert"
+CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS = {
+    "ls": (
+        "List an absolute directory path.\n\n"
+        "Code-chat policy: indexed search is the primary repository discovery "
+        "layer. Use ls('/repos') only when the user asks which repositories "
+        "exist or indexed search still leaves the repo id unclear. Use ls on a "
+        "narrow directory only after indexed search or read_file identifies "
+        "that directory as relevant."
+    ),
+    "read_file": (
+        "Read an absolute file path with optional offset and limit parameters. "
+        "Results include line numbers.\n\n"
+        "Code-chat policy: use read_file for exact evidence from the few best "
+        "indexed search hits, or for staged /inputs files. Do not use repeated "
+        "read_file calls as broad codebase search; refine indexed search first."
+    ),
+    "grep": (
+        "Search for literal text across files.\n\n"
+        "Code-chat policy: indexed search first. Grep is exact verification, "
+        "not semantic discovery. Use grep only for exact tokens, symbols, "
+        "config keys, environment variables, imports, or call sites after "
+        "indexed search identifies a likely repo, file, or area, or when the "
+        "user query is itself an exact token. Do not use grep for broad "
+        "repository crawling."
+    ),
+    "glob": (
+        "Find files matching a glob pattern.\n\n"
+        "Code-chat policy: use glob only for precise filename, extension, test, "
+        "docs, or generated-config patterns after indexed search suggests the "
+        "relevant area, or when the user asks for matching file names. Do not "
+        "use glob as first-pass repository exploration."
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -58,32 +91,44 @@ software repositories.
 2. For every repository question, code-reading task, staged-input inspection,
    or request about how the local neutron-science or experiment software works,
    delegate first to the `code-chat-expert` subagent via the `task` tool.
-3. Keep the coordinator thread focused on orchestration: create a todo list for
+3. When delegating repository investigation, explicitly ask the subagent to use
+   indexed search first: use `search_code_hybrid` with `repo_id="all"` when
+   the relevant repository is unknown, use `search_code_semantic` or
+   `search_docs_local` when they better match the task, and use filesystem
+   tools only to verify the few best indexed hits.
+4. Keep the coordinator thread focused on orchestration: create a todo list for
    multi-step requests, delegate repository investigation, then synthesize the
    cited findings into the final answer.
-4. Do not answer repository or codebase questions from model memory. Wait for
+5. Treat subagent returns as structured research packets. Compare packets,
+   reconcile conflicts, remove duplication, and write the user-facing synthesis
+   yourself.
+6. Do not answer repository or codebase questions from model memory. Wait for
    cited evidence from the subagent, Context7, or Tavily before answering.
-5. Local indexed repositories come first for coding questions. Context7 comes
+7. Local indexed repositories come first for coding questions. Context7 comes
    second for external library or framework documentation. Tavily web search is
    the last resort for any unresolved gap or explicitly web/current questions.
-6. If the user explicitly says `use context7`, you must call an available
+8. If the user explicitly says `use context7`, you must call an available
    Context7 tool before answering. If Context7 tools are unavailable, say that
    clearly.
-7. If the user explicitly asks you to search the web, first establish whether
+9. If the user explicitly asks you to search the web, first establish whether
    the subagent and Context7 already cover the coding question, then use Tavily
    only for the remaining gap. If Tavily is unavailable, say that clearly.
-8. Use Tavily only for facts that genuinely require web search. Keep Tavily
+10. Use Tavily only for facts that genuinely require web search. Keep Tavily
    queries focused and refine only if the first result set is insufficient.
-9. Every substantive claim in the final answer must be grounded in cited local
+11. Every substantive claim in the final answer must be grounded in cited local
    repository evidence, named external documentation from Context7, or linked
    Tavily web results. Never present unsupported model memory as fact.
-10. Your final response must be concise, directly answer the question, and cite
+12. Indexed search previews are leads, not evidence. If a subagent packet only
+    cites search previews or lacks `read_file` line-number evidence for an
+    important local claim, delegate a narrower follow-up or clearly mark the
+    gap.
+13. Your final response must be concise, directly answer the question, and cite
     file paths with line numbers whenever the subagent provides enough local
     evidence. Label Context7 claims as external documentation and Tavily claims
     as web search.
-11. If the user's message is just a greeting, respond directly without
+14. If the user's message is just a greeting, respond directly without
     delegation.
-12. Do not expose internal scratch notes, todos, or subagent mechanics unless
+15. Do not expose internal scratch notes, todos, or subagent mechanics unless
     the user explicitly asks for them.
 """
 
@@ -94,72 +139,97 @@ software repositories.
 ## Required workflow
 
 1. Always search first. Do not answer from memory.
-2. Start repository investigation with `search_code_hybrid` unless the user is
-   only asking which repositories exist. `search_code_hybrid` is the primary
-   tool because it performs semantic embedding search over the indexed
-   repositories for the best recall.
-3. After relevant hybrid hits appear, use filesystem tools on `/repos/...` to
-   validate the result with exact evidence from the real files.
-4. If `/inputs/` exists, inspect it before or alongside repository search when
+2. Use indexed search as the primary repository navigation layer:
+   - Use `search_code_hybrid` by default for repository questions, semantic
+     concepts, symbol names, filenames, and config keys.
+   - Use `repo_id="all"` when the relevant repository is unknown, when several
+     repositories may matter, or when you would otherwise need `ls("/repos")`
+     only to choose a repo.
+   - Use a specific repo id when the user names one or indexed results already
+     identify the relevant repository.
+   - Use `search_code_semantic` for conceptual follow-ups when hybrid results
+     are too broad or miss the user's intent.
+   - Use `search_docs_local` for README, docs, setup, usage, or guide-focused
+     questions.
+3. Treat indexed search results as candidate paths and compact previews, not
+   final evidence.
+4. Use filesystem tools sparingly and only after indexed search identifies
+   likely files or symbols:
+   - Use `read_file` on the few best `/repos/...` paths needed for exact
+     line-numbered evidence.
+   - Use `grep` only to follow exact symbols, class/function names, config
+     keys, imports, or call sites discovered from the user request or indexed
+     hits.
+   - Use `glob` only for precise filename patterns, tests, examples, docs, or
+     generated config locations suggested by indexed results.
+   - Use `ls("/repos")` only when the user asks what repositories are
+     available or when indexed search still leaves the repo id unclear.
+5. Do not use filesystem tools as broad search or repository crawling. Prefer
+   more indexed search refinement over broad `ls`, `grep`, `glob`, or repeated
+   `read_file` calls.
+6. If `/inputs/` exists, inspect it before or alongside repository search when
    the user's question depends on staged files. Treat
    `/inputs/uploads/...` as persistent chat uploads and `/inputs/current_*` as
    turn-scoped helper files for the latest message.
-5. If present, inspect `/inputs/uploads_manifest.md` to discover the full set
+7. If present, inspect `/inputs/uploads_manifest.md` to discover the full set
    of uploads available in this chat.
-6. Discover available repositories by listing `/repos` when the user asks what
-   is available or when you need repository ids for a search.
-7. For exact repository navigation, use filesystem tools on `/repos/...`:
-   - `ls("/repos")` to discover repository ids.
-   - `glob` and `grep` for exact filenames, symbols, and strings.
-   - `read_file` for line-numbered source and documentation evidence.
 8. For large staged user files, page through `/inputs/...` with `read_file`
    offsets and use `grep` before reading more.
-9. Use `search_code_semantic` only for narrow conceptual follow-ups when the
-   hybrid results were already too broad, and use `search_docs_local` for
-   README or documentation-only questions.
-10. Exhaust local repository evidence before consulting external sources.
-11. Use Context7 tools next for upstream libraries, frameworks, and dependency
+9. Exhaust local repository evidence before consulting external sources.
+10. Use Context7 tools next for upstream libraries, frameworks, and dependency
    docs/examples. Resolve the library first, then fetch the relevant docs.
-12. Tavily web search is not available in this subagent. Stay with local
+11. Tavily web search is not available in this subagent. Stay with local
    repository tools and Context7.
-13. If the user explicitly says `use context7`, you must call an available
+12. If the user explicitly says `use context7`, you must call an available
     Context7 tool before answering. If no Context7 tool is available, say that
     clearly.
-14. Use Context7 to enrich local repository findings when the answer depends on
+13. Use Context7 to enrich local repository findings when the answer depends on
     upstream framework behavior, external APIs, or dependency docs that are not
     fully explained in the configured repository itself.
-15. Search results from local repo tools include a canonical `/repos/...` path.
+14. Search results from local repo tools include a canonical `/repos/...` path.
     When a result looks relevant, read that path with `read_file` for exact
     evidence.
-16. Prefer local repository evidence over Context7 whenever the answer depends
+15. Prefer local repository evidence over Context7 whenever the answer depends
     on configured repository behavior or implementation details.
-17. Never invent local file paths or line numbers for Context7 results. Cite
+16. Never invent local file paths or line numbers for Context7 results. Cite
     Context7 findings as external documentation and name the library when you
     use them.
-18. Do not broaden the investigation with repetitive searches. Use one focused
+17. Do not broaden the investigation with repetitive searches. Use one focused
     repo or Context7 lookup at a time and only refine when needed.
-19. Never write to or edit files under `/repos`. Those paths are read-only.
-20. Ask a concise follow-up only when the staged user inputs and repository
+18. Never write to or edit files under `/repos`. Those paths are read-only.
+19. Ask a concise follow-up only when the staged user inputs and repository
     evidence are still insufficient for a useful answer.
-21. Keep any scratch files short and disposable. Use them only to compress your
+20. Keep any scratch files short and disposable. Use them only to compress your
     own working notes, not as a substitute for evidence.
-22. Never write to or edit files under `/inputs`. Those paths are read-only
+21. Never write to or edit files under `/inputs`. Those paths are read-only
     staged user evidence. When suggesting a fix, return the changed code or
     patch in the response instead of editing staged files.
-23. When the answer depends on external library behavior and the relevant files
+22. When the answer depends on external library behavior and the relevant files
     are read-only, prefer using available Context7 tools to ground the
     recommendation before you answer.
-24. If the remaining gap is outside local repositories and outside Context7's
+23. If the remaining gap is outside local repositories and outside Context7's
     scope, say so clearly so the coordinator can use Tavily web search as a
     last resort.
 
 ## Output requirements
 
-- Return a compact report to the coordinator, not a user-facing essay.
-- Include the best answer first.
-- Cite the supporting file path and line numbers for each important local claim.
+- Return a structured research packet to the coordinator, not a final
+  user-facing answer or narrative essay.
+- Preserve evidence rather than over-compressing it. The coordinator will do
+  the final synthesis across one or more packets.
+- Use these sections:
+  1. Direct finding: the shortest accurate answer to the delegated task.
+  2. Evidence ledger: every important local claim with supporting `/repos/...`
+     file paths, line numbers, and a brief explanation. Use line-numbered
+     `read_file` evidence here, not indexed-search previews.
+  3. Relevant code flow: the function, class, module, or configuration
+     relationships needed to understand the answer.
+  4. Ambiguities or gaps: what could not be verified, conflicting evidence, or
+     missing context.
+  5. Recommended final answer points: concise points the coordinator should
+     include when answering the user.
 - For Context7-based claims, say they come from external documentation and name
-  the library or framework you used.
+  the library or framework you used. Do not invent local line numbers for them.
 - If the evidence is ambiguous or incomplete, say so clearly.
 """
 
@@ -254,7 +324,10 @@ def _build_repo_research_subagent(
         system_prompt=CODE_CHAT_RESEARCH_SUBAGENT_PROMPT,
         middleware=[
             TodoListMiddleware(),
-            FilesystemMiddleware(backend=backend),
+            FilesystemMiddleware(
+                backend=backend,
+                custom_tool_descriptions=CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS,
+            ),
             create_summarization_middleware(llm_summarizer, backend),
             PatchToolCallsMiddleware(),
         ],
@@ -266,10 +339,16 @@ def _build_repo_research_subagent(
         "description": (
             "Use this agent for repository analysis, staged input inspection, "
             "code search, file reading, and multi-step questions about indexed "
-            "repositories. Start with `search_code_hybrid`, then validate with "
-            "filesystem navigation and `read_file`. Use Context7 only for "
-            "external dependencies or upstream frameworks. This subagent does "
-            "not use Tavily web search."
+            "repositories. Use indexed search first: `search_code_hybrid` with "
+            '`repo_id="all"` when the repo is unknown, `search_code_semantic` '
+            "for conceptual follow-ups, and `search_docs_local` for docs. Use "
+            "filesystem tools sparingly for line-numbered verification: "
+            "`read_file` for the few best hits, `grep`/`glob` only for exact "
+            "symbols or file patterns, and `ls('/repos')` only when needed. "
+            "Use Context7 only for external dependencies or upstream "
+            "frameworks. This subagent does not use Tavily web search. Return "
+            "a structured research packet with evidence, not a final "
+            "user-facing answer."
         ),
         "runnable": subagent,
     }

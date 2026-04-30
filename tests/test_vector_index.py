@@ -57,6 +57,21 @@ def test_semantic_search(repo_config_path: Path):
     assert all("content" in h for h in hits)
 
 
+def test_search_rejects_unknown_repo_before_chroma_collection_creation(repo_config_path: Path) -> None:
+    _, vi = _make_index(repo_config_path)
+
+    with pytest.raises(ValueError, match="Unknown repo: js scatter"):
+        vi.search("js scatter", "query")
+
+
+def test_collection_name_sanitizes_invalid_repo_id_characters() -> None:
+    vi = object.__new__(RepoVectorIndex)
+
+    assert vi._collection_name("fake-repo") == "repo_fake_repo"
+    assert vi._collection_name("js scatter") == "repo_js_scatter"
+    assert vi._collection_name("!!!") == "repo_repo"
+
+
 def test_docs_only_filter(repo_config_path: Path):
     _, vi = _make_index(repo_config_path)
     vi.build_index("fake-repo", force=True)

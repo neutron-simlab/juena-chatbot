@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import warnings
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,11 @@ class RepoVectorIndex:
         self._embedding_descriptor = self._build_embedding_descriptor()
 
     def _collection_name(self, repo_id: str) -> str:
-        safe = repo_id.replace("-", "_").replace(".", "_")[:50]
+        safe = repo_id.replace("-", "_").replace(".", "_")
+        safe = re.sub(r"[^A-Za-z0-9_]+", "_", safe)
+        safe = re.sub(r"_+", "_", safe).strip("_")[:50].rstrip("_")
+        if not safe:
+            safe = "repo"
         return f"repo_{safe}"
 
     def _build_embedding_descriptor(self) -> str:
@@ -368,6 +373,9 @@ class RepoVectorIndex:
         Returns a list of dicts with keys:
             file_path, chunk_index, is_doc, distance, content
         """
+        if self._repo_manager.get_config(repo_id) is None:
+            raise ValueError(f"Unknown repo: {repo_id}")
+
         col = self._get_or_create_collection(repo_id)
         kwargs: dict[str, Any] = {
             "query_texts": [query],

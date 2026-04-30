@@ -19,6 +19,24 @@ from juena.server import agent_registry
 from juena.server.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
 
 
+def test_code_chat_prompts_require_subagent_research_packets() -> None:
+    assert "structured research packets" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "write the user-facing synthesis" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert 'repo_id="all"' in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "tools only to verify" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "Indexed search previews are leads" in code_chat_agent.CODE_CHAT_SYSTEM_PROMPT
+    assert "structured research packet" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Use indexed search as the primary" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Do not use filesystem tools as broad search" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Evidence ledger" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Recommended final answer points" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "`grep` only" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "`glob` only" in code_chat_agent.CODE_CHAT_RESEARCH_SUBAGENT_PROMPT
+    assert "Grep is exact verification" in code_chat_agent.CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS["grep"]
+    assert "not semantic discovery" in code_chat_agent.CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS["grep"]
+    assert "indexed search is the primary" in code_chat_agent.CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS["ls"]
+
+
 @pytest.mark.asyncio
 async def test_code_chat_agent_without_context7_uses_only_local_tools(
     monkeypatch: pytest.MonkeyPatch,
@@ -115,6 +133,12 @@ async def test_code_chat_agent_without_context7_uses_only_local_tools(
         isinstance(middleware, FilesystemMiddleware)
         for middleware in created["subagent_agent_kwargs"]["middleware"]
     )
+    filesystem_middleware = next(
+        middleware
+        for middleware in created["subagent_agent_kwargs"]["middleware"]
+        if isinstance(middleware, FilesystemMiddleware)
+    )
+    assert filesystem_middleware._custom_tool_descriptions == code_chat_agent.CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS
     assert created["summarization_middleware_args"][0][0] is llm_summarizer
     assert created["summarization_middleware_args"][1][0] is llm_summarizer
     assert created["summarization_middleware_args"][1][1] is created["summarization_middleware_args"][0][1]
@@ -299,5 +323,3 @@ def test_code_chat_coordinator_persists_staged_inputs_in_graph_state() -> None:
     values = getattr(state, "values", {}) or {}
 
     assert values["files"] == staged_files
-
-
