@@ -39,7 +39,7 @@ from juena.tools.repo_search import (
 )
 
 CODE_CHAT_STATIC_PROVIDER = Provider.BLABLADOR.value
-CODE_CHAT_SUBAGENT_MODEL = "alias-code"
+CODE_CHAT_SUBAGENT_MODEL = BlabladorModelName.MINIMAX_M27.value
 CODE_CHAT_SUMMARIZER_MODEL = BlabladorModelName.GPT_OSS.value
 CODE_CHAT_RESEARCH_SUBAGENT_NAME = "code-chat-expert"
 CODE_CHAT_FILESYSTEM_TOOL_DESCRIPTIONS = {

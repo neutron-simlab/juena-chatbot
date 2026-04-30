@@ -28,12 +28,14 @@ class BlabladorModelName(StrEnum):
 
     GPT_OSS = "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025"
     MINIMAX_M27 = "01 - MiniMax-M2.7 - our best model as of April, 2026"
+    QWEN35_122B = "02 - Qwen3.5-122B-A10B-FP8, general purpose large model"
 
 
 # Display name shown in UI for Blablador models (model id -> label)
 BLABLADOR_MODEL_DISPLAY_NAMES: Dict[str, str] = {
     BlabladorModelName.GPT_OSS.value: "GPT-OSS-120b",
     BlabladorModelName.MINIMAX_M27.value: "MiniMax-M2.7",
+    BlabladorModelName.QWEN35_122B.value: "QWEN3.5-122B",
 }
 
 

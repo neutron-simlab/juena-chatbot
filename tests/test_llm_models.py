@@ -14,12 +14,20 @@ def test_blablador_models_include_minimax() -> None:
 
     assert BlabladorModelName.GPT_OSS.value in models
     assert BlabladorModelName.MINIMAX_M27.value in models
+    assert BlabladorModelName.QWEN35_122B.value in models
 
 
 def test_blablador_display_name_for_minimax() -> None:
     assert (
         get_blablador_model_display_name(BlabladorModelName.MINIMAX_M27.value)
         == "MiniMax-M2.7"
+    )
+
+
+def test_blablador_display_name_for_qwen35_122b() -> None:
+    assert (
+        get_blablador_model_display_name(BlabladorModelName.QWEN35_122B.value)
+        == "QWEN3.5-122B"
     )
 
 
