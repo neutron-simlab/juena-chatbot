@@ -106,6 +106,78 @@ repositories:
       - "README.md"
       - "docs/"
 
+  - id: mdanse
+    name: MDANSE
+    description: "Molecular Dynamics Analysis for Neutron Scattering Experiments, including the MDANSE analysis package and MDANSE_GUI."
+    source:
+      url: https://github.com/ISISNeutronMuon/MDANSE.git
+      branch: protos
+    include_globs:
+      - "**/*.py"
+      - "**/*.pyi"
+      - "**/*.pyx"
+      - "**/*.pxd"
+      - "**/*.c"
+      - "**/*.cc"
+      - "**/*.cpp"
+      - "**/*.cxx"
+      - "**/*.h"
+      - "**/*.hh"
+      - "**/*.hpp"
+      - "**/*.hxx"
+      - "**/*.md"
+      - "**/*.rst"
+      - "**/*.txt"
+      - "**/*.toml"
+      - "**/*.yaml"
+      - "**/*.yml"
+      - "**/*.json"
+      - "**/*.ini"
+      - "**/*.cfg"
+      - "**/*.ui"
+      - "**/*.qrc"
+      - "**/*.sh"
+      - "**/*.bat"
+      - "**/Makefile"
+      - "**/makefile"
+      - "**/*.mk"
+      - "**/*.in"
+    exclude_globs:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/__pycache__/**"
+      - "**/.venv/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/*.egg-info/**"
+      - "**/.mypy_cache/**"
+      - "**/.pytest_cache/**"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.gif"
+      - "**/*.svg"
+      - "**/*.ico"
+      - "**/*.pdf"
+      - "**/*.zip"
+      - "**/*.tar"
+      - "**/*.gz"
+      - "**/*.bz2"
+      - "**/*.xz"
+      - "**/*.whl"
+      - "**/*.so"
+      - "**/*.dylib"
+      - "**/*.dll"
+      - "**/*.pyd"
+      - "**/*.exe"
+    max_file_bytes: 524288
+    chunk_size: 1500
+    chunk_overlap: 200
+    docs_paths:
+      - "README.md"
+      - "CHANGELOG"
+      - "Doc/"
+
   - id: sasview
     name: SasView
     description: "Small-angle scattering analysis application. Depends on sasmodels for scattering models and sasdata for SAS data loading and exchange."

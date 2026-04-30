@@ -17,7 +17,7 @@ from juena.core.llms_providers import (
     get_default_model,
     format_model_name,
 )
-from app.chat_storage import get_chat_storage, Chat
+from app.chat_storage import Chat, ChatStorage, get_chat_storage
 from app.file_management import check_server_health, initialize_client
 
 
@@ -48,7 +48,30 @@ def _format_chat_history_title(chat: Chat, max_chars: int = 22) -> tuple[str, st
     return textwrap.shorten(title, width=max_chars, placeholder="..."), title
 
 
-def _delete_chat_with_server_state(storage, thread_id: str, *, is_current: bool) -> tuple[bool, str | None]:
+def _activate_chat(storage: ChatStorage, thread_id: str) -> None:
+    """Load a saved chat into the current Streamlit session."""
+
+    st.session_state.thread_id = thread_id
+    st.session_state.messages = storage.load_messages(thread_id)
+    st.session_state.welcome_initialized = True
+
+
+def _create_new_chat(storage: ChatStorage) -> None:
+    """Create and activate a new blank chat."""
+
+    new_thread_id = str(uuid4())
+    storage.upsert_chat(Chat(thread_id=new_thread_id))
+    st.session_state.thread_id = new_thread_id
+    st.session_state.messages = []
+    st.session_state.welcome_initialized = False
+
+
+def _delete_chat_with_server_state(
+    storage: ChatStorage,
+    thread_id: str,
+    *,
+    is_current: bool,
+) -> tuple[bool, str | None]:
     """Delete both the server-side thread state and the local chat history."""
 
     client = st.session_state.get("client")
@@ -63,11 +86,11 @@ def _delete_chat_with_server_state(storage, thread_id: str, *, is_current: bool)
     storage.delete_chat(thread_id)
 
     if is_current:
-        new_thread_id = str(uuid4())
-        storage.upsert_chat(Chat(thread_id=new_thread_id))
-        st.session_state.thread_id = new_thread_id
-        st.session_state.messages = []
-        st.session_state.welcome_initialized = False
+        remaining_chats = storage.list_chats(limit=1)
+        if remaining_chats:
+            _activate_chat(storage, remaining_chats[0].thread_id)
+        else:
+            _create_new_chat(storage)
 
     return True, None
 
@@ -217,25 +240,14 @@ def render_sidebar() -> None:
 
         # 4. Chat History
         st.subheader("Chat History")
+        storage = get_chat_storage()
         
         # New Chat button
         if st.button("➕ New Chat", help="Start a new conversation", use_container_width=True):
-            # Create new thread
-            new_thread_id = str(uuid4())
-            
-            # Create new chat in storage
-            storage = get_chat_storage()
-            new_chat = Chat(thread_id=new_thread_id)
-            storage.upsert_chat(new_chat)
-            
-            # Update session state
-            st.session_state.thread_id = new_thread_id
-            st.session_state.messages = []
-            st.session_state.welcome_initialized = False  # Reset welcome message flag
+            _create_new_chat(storage)
             st.rerun()
         
         # List saved chats
-        storage = get_chat_storage()
         chats = storage.list_chats(limit=20)
         
         # Rename form (shown when editing_thread_id is set)
@@ -292,9 +304,7 @@ def render_sidebar() -> None:
                         help=full_title,
                     ):
                         # Switch to selected chat
-                        st.session_state.thread_id = chat.thread_id
-                        st.session_state.messages = storage.load_messages(chat.thread_id)
-                        st.session_state.welcome_initialized = True  # Don't show welcome for loaded chats
+                        _activate_chat(storage, chat.thread_id)
                         st.rerun()
                 
                 with actions_col:
