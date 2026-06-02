@@ -26,7 +26,7 @@ class BlabladorModelName(StrEnum):
     The UI offers the curated Blablador model options used by this project.
     """
 
-    GPT_OSS = "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025"
+    GPT_OSS = "01 - GPT-OSS-120b - an open model released by OpenAI in August 2025"
     MINIMAX_M27 = "01 - MiniMax-M2.7 - our best model as of April, 2026"
     QWEN35_122B = "02 - Qwen3.5-122B-A10B-FP8, general purpose large model"
 
