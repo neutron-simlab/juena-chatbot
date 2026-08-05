@@ -9,6 +9,7 @@ Markdown; other languages fall back to the existing generic
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -190,38 +191,55 @@ def _split_oversized_chunks(
 # Enrichment
 # ------------------------------------------------------------------
 
-def _enrich_python_symbols(source: str, chunk_text: str, start: int) -> tuple[str, str]:
-    """Attempt to identify the enclosing Python symbol for a chunk."""
+def _build_python_symbol_index(source: str) -> list[tuple[int, int, str, str]]:
+    """Parse the file once and index (start_line, end_line, name, type) for
+    every function/class definition, keyed by 1-indexed source line."""
     import ast
 
     try:
         tree = ast.parse(source)
     except SyntaxError:
+        return []
+
+    index: list[tuple[int, int, str, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            end_lineno = getattr(node, "end_lineno", None)
+            if end_lineno is None:
+                continue
+            kind = "class" if isinstance(node, ast.ClassDef) else "function"
+            index.append((node.lineno, end_lineno, node.name, kind))
+
+    return index
+
+
+def _line_start_offsets(source: str) -> list[int]:
+    """offsets[i] is the character offset where line i+1 (1-indexed) starts."""
+    offsets = [0]
+    for line in source.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
+def _symbol_at_offset(
+    symbol_index: list[tuple[int, int, str, str]],
+    line_offsets: list[int],
+    start: int,
+) -> tuple[str, str]:
+    """Find the innermost function/class enclosing a character offset."""
+    if not symbol_index:
         return "", ""
 
-    best_name = ""
-    best_type = ""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            if hasattr(node, "end_lineno") and node.end_lineno is not None:
-                node_start = source.index("\n") * 0  # approximate
-                try:
-                    func_source = ast.get_source_segment(source, node)
-                    if func_source and chunk_text[:40] in func_source:
-                        best_name = node.name
-                        best_type = "function"
-                except Exception:
-                    pass
-        elif isinstance(node, ast.ClassDef):
-            try:
-                cls_source = ast.get_source_segment(source, node)
-                if cls_source and chunk_text[:40] in cls_source:
-                    best_name = node.name
-                    best_type = "class"
-            except Exception:
-                pass
+    line = bisect.bisect_right(line_offsets, start)
+    best: tuple[int, int, str, str] | None = None
+    for sym in symbol_index:
+        start_line, end_line, _, _ = sym
+        if start_line <= line <= end_line and (
+            best is None or (end_line - start_line) < (best[1] - best[0])
+        ):
+            best = sym
 
-    return best_name, best_type
+    return (best[2], best[3]) if best else ("", "")
 
 
 # ------------------------------------------------------------------
@@ -254,6 +272,12 @@ def chunk_file(
     else:
         raw_chunks = _split_oversized_chunks(raw_chunks, chunk_size, chunk_overlap)
 
+    symbol_index: list[tuple[int, int, str, str]] = []
+    line_offsets: list[int] = []
+    if language == "python":
+        symbol_index = _build_python_symbol_index(source)
+        line_offsets = _line_start_offsets(source)
+
     results: list[IndexChunk] = []
     for idx, rc in enumerate(raw_chunks):
         text = rc["text"]
@@ -261,7 +285,7 @@ def chunk_file(
         symbol_type = ""
 
         if language == "python":
-            symbol, symbol_type = _enrich_python_symbols(source, text, rc.get("start_index", 0))
+            symbol, symbol_type = _symbol_at_offset(symbol_index, line_offsets, rc.get("start_index", 0))
 
         results.append(IndexChunk(
             text=text,
