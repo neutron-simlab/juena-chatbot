@@ -13,14 +13,14 @@ from langchain_core._api import LangChainBetaWarning
 from juena.core.config import global_config
 from juena.core.log import get_logger
 from juena.schema.server import HealthStatus
-from juena.server.agent_registry import shutdown_agents
-from juena.server.api_endpoints import router as api_router
-from juena.server.auth_endpoints import router as auth_router
-from juena.server.chat_endpoints import router as chat_router
-from juena.server.checkpointer import checkpointer_lifespan
+from juena.server.agent.registry import shutdown_agents
+from juena.server.api.endpoints import router as api_router
+from juena.server.auth.endpoints import router as auth_router
+from juena.server.chat.endpoints import router as chat_router
+from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan
-from juena.server.saml_service import saml_lifespan
-from juena.server.store import store_lifespan
+from juena.server.auth.saml import saml_lifespan
+from juena.server.database.store import store_lifespan
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API

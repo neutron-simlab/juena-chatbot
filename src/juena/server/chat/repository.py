@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from juena.core.config import global_config
 from juena.core.log import get_logger
 from juena.schema.server import ChatMessage
-from juena.server.checkpointer import get_checkpointer
-from juena.server.models import Chat
+from juena.server.database.checkpointer import get_checkpointer
+from juena.server.database.models import Chat
 from juena.server.utils import langchain_to_chat_message
 
 logger = get_logger(__name__)

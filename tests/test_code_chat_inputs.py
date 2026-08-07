@@ -9,7 +9,8 @@ import pytest
 from deepagents.backends.utils import file_data_to_string
 from starlette.datastructures import Headers, UploadFile
 
-from juena.server import code_chat_inputs, code_chat_utils
+from juena.server.chat import input_utils as code_chat_utils
+from juena.server.chat import inputs as code_chat_inputs
 
 
 def _upload(filename: str, content: bytes, content_type: str = "text/plain") -> UploadFile:

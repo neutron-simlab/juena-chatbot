@@ -45,10 +45,10 @@ from juena.indexing.bootstrap import describe_bootstrap_problems
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.schema.llm_models import BlabladorModelName, Provider
-from juena.server.agent_registry import register_agent_alias, register_agent_factory
-from juena.server.checkpointer import get_checkpointer
-from juena.server.store import get_store
-from juena.server.runtime_model_middleware import (
+from juena.server.agent.registry import register_agent_alias, register_agent_factory
+from juena.server.database.checkpointer import get_checkpointer
+from juena.server.database.store import get_store
+from juena.server.agent.runtime_model_middleware import (
     RuntimeModelContext,
     RuntimeModelMiddleware,
 )

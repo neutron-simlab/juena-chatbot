@@ -25,8 +25,8 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 
 from juena.agents import juena_agent
-from juena.server import agent_registry
-from juena.server.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
+from juena.server.agent import registry as agent_registry
+from juena.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
 
 
 def test_code_chat_prompts_require_subagent_research_packets() -> None:

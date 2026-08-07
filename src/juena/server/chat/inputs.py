@@ -20,16 +20,16 @@ from juena.schema.upload_limits import (  # noqa: F401 - re-exported for callers
     TEXT_READABLE_FILE_TYPES,
     is_text_readable_filename,
 )
-from juena.server.code_chat_input_constants import (
+from juena.server.chat.input_constants import (
     INPUTS_PREFIX as _INPUTS_PREFIX,
     UPLOADS_MANIFEST_PATH as _UPLOADS_MANIFEST_PATH,
     UPLOADS_PREFIX as _UPLOADS_PREFIX,
 )
-from juena.server.code_chat_input_types import (
+from juena.server.chat.input_types import (
     PreparedCodeChatInputs,
     UploadedAttachment,
 )
-from juena.server.code_chat_utils import (
+from juena.server.chat.input_utils import (
     build_inputs_manifest,
     build_uploads_manifest,
     extract_pasted_code_context,

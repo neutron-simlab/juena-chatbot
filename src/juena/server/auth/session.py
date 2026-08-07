@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from juena.core.config import global_config
 from juena.server.database import get_db_session
-from juena.server.models import AuthSession, User, utc_now
-from juena.server.saml_service import SamlIdentity
+from juena.server.database.models import AuthSession, User, utc_now
+from juena.server.auth.saml import SamlIdentity
 
 SESSION_COOKIE_NAME = "juena_session"
 

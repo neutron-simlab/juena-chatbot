@@ -12,13 +12,13 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from juena.core.log import get_logger
-from juena.server.agent_registry import _normalize_provider_model
-from juena.server.code_chat_input_constants import (
+from juena.server.agent.registry import _normalize_provider_model
+from juena.server.chat.input_constants import (
     DISPLAY_ATTACHMENTS_KEY,
     DISPLAY_TEXT_KEY,
 )
-from juena.server.code_chat_input_types import UploadedAttachment
-from juena.server.runtime_model_middleware import RuntimeModelContext
+from juena.server.chat.input_types import UploadedAttachment
+from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 logger = get_logger(__name__)
 

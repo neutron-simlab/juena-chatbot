@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from juena.server import api_endpoints
+from juena.server.api import endpoints as api_endpoints
 from juena.server.auth import AuthenticatedUser, get_current_user
 from juena.server.database import get_db_session
 

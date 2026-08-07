@@ -10,7 +10,7 @@ from langchain_core.messages import (
 )
 
 from juena.schema.server import ChatMessage
-from juena.server.code_chat_input_constants import (
+from juena.server.chat.input_constants import (
     DISPLAY_ATTACHMENTS_KEY,
     DISPLAY_TEXT_KEY,
 )

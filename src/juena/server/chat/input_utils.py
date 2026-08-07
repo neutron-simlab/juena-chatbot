@@ -7,14 +7,14 @@ from typing import Any, Sequence
 
 from deepagents.backends.utils import file_data_to_string
 
-from juena.server.code_chat_input_constants import (
+from juena.server.chat.input_constants import (
     ERROR_LINE_RE,
     FENCED_CODE_RE,
     LANGUAGE_SUFFIXES,
     UPLOADS_MANIFEST_PATH,
     UPLOADS_PREFIX,
 )
-from juena.server.code_chat_input_types import PastedCodeContext, UploadedAttachment
+from juena.server.chat.input_types import PastedCodeContext, UploadedAttachment
 
 
 def _line_is_error_like(line: str) -> bool:

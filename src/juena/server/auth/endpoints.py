@@ -23,8 +23,8 @@ from juena.server.auth import (
     upsert_saml_user,
 )
 from juena.server.database import get_db_session
-from juena.server.models import SamlLoginRequest, utc_now
-from juena.server.saml_service import (
+from juena.server.database.models import SamlLoginRequest, utc_now
+from juena.server.auth.saml import (
     PERSISTENT_NAME_ID_FORMAT,
     SamlAuthenticationError,
     SamlIdentity,

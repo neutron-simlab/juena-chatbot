@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
-from juena.server.agent_registry import (
+from juena.server.agent.registry import (
     get_agent,
     get_default_agent,
     list_registered_agents,
@@ -30,20 +30,20 @@ from juena.server.errors import (
     StateError,
     ChatbotServerError
 )
-from juena.server.agent_input_handler import AgentInputHandler
-from juena.server.checkpointer import get_checkpointer
-from juena.server.code_chat_inputs import prepare_code_chat_turn_inputs
+from juena.server.agent.input_handler import AgentInputHandler
+from juena.server.database.checkpointer import get_checkpointer
+from juena.server.chat.inputs import prepare_code_chat_turn_inputs
 from juena.server.streaming import StreamEventProcessor, events
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from juena.server.auth import AuthenticatedUser, get_current_user
-from juena.server.chat_repository import (
+from juena.server.chat.repository import (
     ChatNotFoundError,
     ensure_owned_chat,
     get_owned_chat,
 )
 from juena.server.database import get_db_session
-from juena.server.models import utc_now
+from juena.server.database.models import utc_now
 
 logger = get_logger(__name__)
 

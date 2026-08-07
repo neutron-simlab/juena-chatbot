@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import (
 
 from juena.core.config import global_config
 from juena.core.log import get_logger
-from juena.server.models import Base
+from juena.server.database.models import Base
 
 logger = get_logger(__name__)
 

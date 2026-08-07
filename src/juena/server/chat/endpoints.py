@@ -1,7 +1,7 @@
 """Authenticated, user-owned chat history API.
 
-Thread deletion lives on ``DELETE /threads/{thread_id}`` in ``api_endpoints``;
-it is not duplicated here.
+Thread deletion lives on ``DELETE /threads/{thread_id}`` in
+``juena.server.api.endpoints``; it is not duplicated here.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from juena.server.auth import AuthenticatedUser, get_current_user
-from juena.server.chat_repository import (
+from juena.server.chat.repository import (
     ChatNotFoundError,
     chat_to_dict,
     ensure_owned_chat,

@@ -17,7 +17,7 @@ from juena.agents.skills_backend import (
     build_user_context_backend,
     user_store_namespace,
 )
-from juena.server.runtime_model_middleware import RuntimeModelContext
+from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 SKILL_BODY_MARKER = "Secret body marker"
 

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from juena.server import auth_endpoints
-from juena.server.saml_service import (
+from juena.server.auth import endpoints as auth_endpoints
+from juena.server.auth.saml import (
     PERSISTENT_NAME_ID_FORMAT,
     SamlAuthenticationError,
     SamlIdentity,

@@ -6,8 +6,8 @@ from uuid import UUID
 
 import pytest
 
-from juena.server.agent_input_handler import AgentInputHandler
-from juena.server.runtime_model_middleware import RuntimeModelContext
+from juena.server.agent.input_handler import AgentInputHandler
+from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 
 @pytest.mark.asyncio

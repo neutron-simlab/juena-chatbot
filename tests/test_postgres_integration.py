@@ -25,20 +25,20 @@ from juena.server.auth import (
     revoke_auth_session,
     upsert_saml_user,
 )
-from juena.server.chat_repository import (
+from juena.server.chat.repository import (
     ChatNotFoundError,
     ensure_owned_chat,
     get_owned_chat,
     list_owned_chats,
     load_thread_messages,
 )
-from juena.server.api_endpoints import _authorize_thread, router as api_router
-from juena.server.chat_endpoints import router as chat_router
-from juena.server.checkpointer import checkpointer_lifespan
+from juena.server.api.endpoints import _authorize_thread, router as api_router
+from juena.server.chat.endpoints import router as chat_router
+from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan, get_session_factory
-from juena.server.saml_service import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
-from juena.server.store import store_lifespan
-from juena.server.models import AuthSession, utc_now
+from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
+from juena.server.database.store import store_lifespan
+from juena.server.database.models import AuthSession, utc_now
 
 TEST_DATABASE_URL = os.getenv("JUENA_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
