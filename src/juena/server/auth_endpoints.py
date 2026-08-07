@@ -50,6 +50,25 @@ DEV_BYPASS_IDP_ENTITY_ID = "urn:juena:dev-bypass"
 DEV_BYPASS_SUBJECT = "dev-local-user"
 
 
+def _require_saml_service():
+    """Return the SAML service, or fail with a 503 that explains why it is absent.
+
+    ``AUTH_DEV_BYPASS`` skips ``saml_lifespan`` entirely, so ``get_saml_service``
+    raises ``RuntimeError`` and every SAML route answered 500 -- an opaque
+    "internal server error" for a deliberate configuration choice. That is
+    especially unhelpful on ``/auth/metadata``, which is the document we owe the
+    IdP administrator: the natural first thing to try returns a server error
+    rather than saying the bypass is on.
+    """
+
+    if global_config.AUTH_DEV_BYPASS:
+        raise HTTPException(
+            status_code=503,
+            detail="SAML is disabled because AUTH_DEV_BYPASS is on. Unset it to configure the SP.",
+        )
+    return get_saml_service()
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE_NAME,
@@ -125,6 +144,12 @@ async def assertion_consumer_service(
     relay_state: str = Form(alias="RelayState"),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
+    """Receive the SAML login result from IFFLogin.
+
+    IFFLogin posts the browser back to this endpoint after the user signs in.
+    The SAMLResponse proves who the user is; RelayState is the original UI URL
+    we saved during /auth/login, so we know where to send the browser next.
+    """
     cutoff = utc_now() - timedelta(minutes=10)
     result = await session.execute(
         select(SamlLoginRequest).where(
@@ -155,6 +180,10 @@ async def assertion_consumer_service(
     login_request = locked_result.scalar_one_or_none()
     if login_request is None or login_request.relay_state != relay_state:
         raise HTTPException(status_code=401, detail="Unknown, expired, or replayed SAML request")
+
+    # This is the "back to the app" location after SAML has succeeded. It is
+    # not hardcoded here; it comes from the return_to URL passed into /auth/login
+    # and echoed back by IFFLogin as RelayState.
     return_url = _safe_return_url(relay_state)
     login_request.consumed_at = utc_now()
 
@@ -228,7 +257,7 @@ async def single_logout_service(
     binding = BINDING_HTTP_POST if request.method == "POST" else BINDING_HTTP_REDIRECT
     params = form or request.query_params
     relay_state = params.get("RelayState")
-    saml_service = get_saml_service()
+    saml_service = _require_saml_service()
 
     if saml_response := params.get("SAMLResponse"):
         try:
@@ -278,6 +307,6 @@ def _post_logout_redirect(relay_state: str | None) -> RedirectResponse:
 @router.get("/metadata")
 async def service_provider_metadata() -> Response:
     return Response(
-        content=get_saml_service().metadata_xml(),
+        content=_require_saml_service().metadata_xml(),
         media_type="application/samlmetadata+xml",
     )

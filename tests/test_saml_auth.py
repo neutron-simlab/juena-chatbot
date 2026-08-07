@@ -317,3 +317,33 @@ async def test_logout_without_idp_redirect_returns_browser_to_ui(monkeypatch) ->
     cookie = response.headers["set-cookie"]
     assert "juena_session=" in cookie
     assert "Max-Age=0" in cookie
+
+
+@pytest.mark.asyncio
+async def test_sp_metadata_is_unavailable_while_bypass_is_active(monkeypatch) -> None:
+    """503, not 500.
+
+    `/auth/metadata` is the document handed to the IdP administrator, so the
+    first thing anyone tries. Under the bypass there is no SP to describe, and
+    an opaque 500 reads like a crash rather than a configuration choice.
+    """
+
+    monkeypatch.setattr(auth_endpoints.global_config, "AUTH_DEV_BYPASS", True)
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_endpoints.service_provider_metadata()
+
+    assert exc.value.status_code == 503
+    assert "AUTH_DEV_BYPASS" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_single_logout_is_unavailable_while_bypass_is_active(monkeypatch) -> None:
+    monkeypatch.setattr(auth_endpoints.global_config, "AUTH_DEV_BYPASS", True)
+
+    request = SimpleNamespace(method="GET", query_params={"SAMLRequest": "ignored"})
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_endpoints.single_logout_service(request=request, session=object())
+
+    assert exc.value.status_code == 503

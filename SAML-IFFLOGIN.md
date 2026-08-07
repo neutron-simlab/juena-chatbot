@@ -42,13 +42,22 @@ Read directly from the live metadata on 5 August 2026.
 | SLO — HTTP-Redirect | `https://ifflogin.fz-juelich.de/saml/slo/redirect` |
 | Key descriptor | One, `use="signing"` |
 | Metadata signature | **Signed** |
-| `validUntil` | `2026-08-12T15:38:20Z` — roughly a **one-week** window |
+| `validUntil` | `2026-08-12T15:38:20Z` — see the warning below |
 | Declared attributes | **None** — the metadata lists no `<Attribute>` elements |
 | Contacts published | `Organization`, plus `technical` and `support` `ContactPerson` |
 | Algorithms advertised | Digest and signing methods up to SHA-512, including `rsa-sha256` |
 
 Single Log-Out is advertised on both bindings, so Daniel's stated advantage is
 real and usable.
+
+> **The values above are a snapshot taken on 5 August 2026 and the metadata
+> expires on 12 August 2026.** Two consequences. First, re-read the live
+> document before relying on any row in this table — a refreshed `idp.xml`
+> carries a new `validUntil` and may carry new certificates. Second, the roughly
+> one-week validity window is not a quirk of this snapshot but the IdP's normal
+> cadence, which makes §4.3 a release blocker rather than a nicety: a deployment
+> that fetches metadata only at startup stops recognising the IdP mid-run, and
+> every login fails with no deploy to explain it.
 
 ---
 
@@ -144,7 +153,7 @@ production settings then are:
 SAML_SP_ENTITY_ID=https://juena.fz-juelich.de/auth/metadata
 SAML_SP_ACS_URL=https://juena.fz-juelich.de/auth/acs
 SAML_SP_SLS_URL=https://juena.fz-juelich.de/auth/sls
-JUENA_API_INTERNAL_URL=http://localhost:8080
+JUENA_API_INTERNAL_URL=http://localhost:8080   # see note below
 JUENA_PUBLIC_URL=https://juena.fz-juelich.de
 UI_PUBLIC_URL=https://juena.fz-juelich.de
 SESSION_COOKIE_SECURE=true
@@ -156,11 +165,19 @@ placed in browser links. `JUENA_PUBLIC_URL` is the public origin used for login
 links. `UI_PUBLIC_URL` is a one-release compatibility setting for the post-login
 destination; in production it defaults to `JUENA_PUBLIC_URL`. See §5.2.
 
+> `JUENA_API_INTERNAL_URL=http://localhost:8080` is correct **only while FastAPI
+> and Streamlit share one container**, which is the current layout.
+> [DEPLOYMENT-AND-SANDBOX-PLAN.md](DEPLOYMENT-AND-SANDBOX-PLAN.md) splits them
+> into separate `api` and `ui` services, where `localhost` inside the UI
+> container is the UI itself and the value becomes `http://api:8080`. Change it
+> in the same release as the split; nothing else in this file is affected,
+> because every other URL here is browser-facing.
+
 ### 5.2 Both services must share one hostname
 
 `/auth/acs` sets `juena_session` with `path="/"` and **no `domain=`**
-([auth_endpoints.py:100-108](src/juena/server/auth_endpoints.py#L100-L108)), so
-the cookie is host-only. Streamlit then reads it through `st.context.cookies`.
+([`_set_session_cookie`](src/juena/server/auth_endpoints.py#L53-L62)), so the
+cookie is host-only. Streamlit then reads it through `st.context.cookies`.
 
 Splitting the two across subdomains — FastAPI on `api.…`, Streamlit on
 `chat.…` — means the cookie is never sent to Streamlit, and login fails
@@ -211,8 +228,20 @@ chat session controls or rendered in the UI.
 
 Development keeps sensible split-port defaults (`8080` for FastAPI, `9501` for
 Streamlit). Production has no localhost public default: startup rejects missing
-or non-HTTPS public/SAML URLs and rejects an insecure session cookie. The base
-Compose file does not publish PostgreSQL; the development override does.
+or non-HTTPS public/SAML URLs and rejects an insecure session cookie.
+
+The base Compose file does not publish PostgreSQL;
+[docker-compose.dev.yml](docker-compose.dev.yml) does. That file is **not** an
+auto-merged `docker-compose.override.yml` — it must be passed explicitly:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # or: make up
+```
+
+Omitting the second `-f` silently starts the production configuration against
+your development `.env`, which is exactly how a container ends up dialling
+`localhost:5432` for a Postgres that lives in another container. `make up`
+always passes both.
 
 ---
 
@@ -244,8 +273,14 @@ a fixed `Local Developer` account.
 | `users` / `auth_sessions` rows | Real, created through the normal code path |
 | Thread ownership, memory namespacing | Unchanged — production logic throughout |
 | Unauthenticated requests | Still `401`; the bypass grants a session, it does not disable auth |
-| `/auth/login`, SAML endpoints | Return `503`; `saml_lifespan` is skipped entirely |
+| `/auth/login`, `/auth/metadata`, `/auth/sls` | Return `503` naming the bypass; `saml_lifespan` is skipped entirely |
 | SP certificates, `xmlsec1` | **Not required** — so native macOS runs work |
+
+> Note for producing the SP metadata: `/auth/metadata` **cannot** emit a document
+> while the bypass is on, because no SP is configured to describe. Unset
+> `AUTH_DEV_BYPASS`, provide the SP keypair, and restart before running
+> `make sp-metadata`. Until then the endpoint answers `503` with that reason —
+> it previously answered an opaque `500`, which looked like a crash.
 
 The dev user is keyed on a fixed persistent subject, so its UUID, chats and
 memories survive restarts.
