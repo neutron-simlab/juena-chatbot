@@ -9,7 +9,7 @@ import pytest
 from deepagents.backends.utils import file_data_to_string
 from starlette.datastructures import Headers, UploadFile
 
-from juena.server import code_chat_inputs
+from juena.server import code_chat_inputs, code_chat_utils
 
 
 def _upload(filename: str, content: bytes, content_type: str = "text/plain") -> UploadFile:
@@ -101,8 +101,10 @@ async def test_prepare_code_chat_turn_inputs_preserves_thread_uploads_and_clears
             "def boom():\n"
             "    return missing_name\n"
             "```\n\n"
+            "```\n"
             "Traceback (most recent call last):\n"
             "NameError: name 'missing_name' is not defined\n"
+            "```\n"
         ),
         attachments=[_upload("extra.log", b"ERROR: something happened\n")],
     )
@@ -162,3 +164,56 @@ async def test_prepare_code_chat_turn_inputs_reminds_about_existing_thread_uploa
     assert "/inputs/uploads_manifest.md" in prepared.message_override
     assert "Persistent uploaded files for this chat are available under `/inputs/uploads/`." in prepared.message_override
     assert "Current turn files:" not in prepared.message_override
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Prose that used to be staged as a traceback because ERROR_LINE_RE ended
+        # in a bare `Error:` alternative.
+        "What does the Error: message in the manual mean?",
+        # Prose that used to be staged as code because any line containing one of
+        # `[{}();]` counted as code-like.
+        "Can you (please) explain how the detector works?",
+        "How do I normalise SANS data?",
+        # An unfenced traceback is no longer staged either -- the accepted cost of
+        # trusting only what the user marked deliberately. It still reaches the
+        # agent verbatim in the message.
+        'Traceback (most recent call last):\n  File "run.py", line 12\nValueError: bad',
+    ],
+)
+def test_unfenced_text_is_never_staged(message: str) -> None:
+    assert code_chat_utils.extract_pasted_code_context(message) is None
+
+
+def test_fenced_code_is_staged_with_its_language() -> None:
+    context = code_chat_utils.extract_pasted_code_context(
+        "why does this fail?\n\n```python\ndef f(x):\n    return x / 0\n```"
+    )
+
+    assert context is not None
+    assert context.contains_code and not context.contains_error
+    assert code_chat_utils.staged_code_path(context) == "/inputs/current_code.py"
+    assert context.user_goal == "why does this fail?"
+
+
+def test_fenced_traceback_is_staged_as_an_error() -> None:
+    context = code_chat_utils.extract_pasted_code_context(
+        'help!\n\n```\nTraceback (most recent call last):\n'
+        '  File "run.py", line 12\n    x = 1\nValueError: bad\n```'
+    )
+
+    assert context is not None
+    assert context.contains_error and not context.contains_code
+    assert context.user_goal == "help!"
+
+
+def test_fenced_js_stack_trace_is_detected() -> None:
+    """The `^`-anchored alternatives only matched at string start before
+    re.MULTILINE was set, so JS/Java traces went unrecognised."""
+    context = code_chat_utils.extract_pasted_code_context(
+        "```\n  at foo (bar.js:10)\n  at baz (bar.js:22)\n```"
+    )
+
+    assert context is not None
+    assert context.contains_error

@@ -121,39 +121,47 @@ async def _prepare_agent_invocation(
 ) -> PreparedAgentInvocation:
     """Prepare LangGraph invocation kwargs for JSON and multipart requests."""
 
-    kwargs, run_id = await AgentInputHandler.prepare_input(
-        message,
+    # The config is built first because staging uploads has to read the thread's
+    # existing `/inputs` state, and that read must use the config the run will use.
+    run = AgentInputHandler.build_run_context(
         thread_id=thread_id,
         user_id=user_id,
         provider=provider,
         model=model,
     )
-    effective_message = message
 
     # Every conversation can stage attachments now that there is a single agent.
     prepared_inputs = await prepare_code_chat_turn_inputs(
         agent,
-        kwargs["config"],
+        run.config,
         message,
         attachments=attachments,
     )
-    if prepared_inputs is not None:
-        kwargs, run_id = await AgentInputHandler.prepare_input(
+
+    kwargs = {
+        "input": AgentInputHandler.build_input(
             message,
-            thread_id=thread_id,
-            user_id=user_id,
-            run_id=run_id,
-            provider=provider,
-            model=model,
-            message_override=prepared_inputs.message_override,
-            initial_files=prepared_inputs.files_update or None,
-        )
-        effective_message = prepared_inputs.message_override
+            message_override=(
+                prepared_inputs.message_override if prepared_inputs is not None else None
+            ),
+            initial_files=(
+                (prepared_inputs.files_update or None) if prepared_inputs is not None else None
+            ),
+            display_attachments=(
+                prepared_inputs.attachments if prepared_inputs is not None else None
+            ),
+        ),
+        "config": run.config,
+        "context": run.context,
+    }
 
     return PreparedAgentInvocation(
         kwargs=kwargs,
-        run_id=run_id,
-        effective_user_message=effective_message,
+        run_id=run.run_id,
+        # The raw text, not the manifest: the stream processor dedupes the echoed
+        # human message against this, and the message now renders as what the
+        # user typed.
+        effective_user_message=message,
     )
 
 

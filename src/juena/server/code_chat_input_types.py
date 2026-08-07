@@ -39,3 +39,6 @@ class PreparedCodeChatInputs:
 
     message_override: str
     files_update: dict[str, Any | None]
+    # Uploads accepted this turn, recorded on the human message so the transcript
+    # can show which files were attached -- including after a reload.
+    attachments: tuple[UploadedAttachment, ...] = ()

@@ -20,7 +20,7 @@ from juena.core.llms_providers import get_available_providers, get_default_model
 # Import UI modules
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
-from app.file_management import initialize_client
+from app.client_setup import initialize_client
 from app.chat_storage import get_chat_storage
 
 # Paths and assets

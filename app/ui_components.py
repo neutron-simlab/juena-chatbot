@@ -142,6 +142,31 @@ def finalize_streaming_message(message_placeholder, content: Any) -> None:
             render_content(content)
 
 
+def render_attachment_chips(custom_data: Optional[Dict[str, Any]]) -> None:
+    """Show the files attached to a user message, if any.
+
+    The server records the same ``attachments`` key on the staged human message,
+    so a reloaded chat shows the uploads it was sent with instead of losing every
+    trace of them.
+    """
+    attachments = (custom_data or {}).get("attachments") or []
+    if not isinstance(attachments, list):
+        return
+
+    labels: list[str] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        name = str(attachment.get("name") or "").strip()
+        if not name:
+            continue
+        chars = attachment.get("chars")
+        labels.append(f"📎 `{name}` ({chars} chars)" if isinstance(chars, int) else f"📎 `{name}`")
+
+    if labels:
+        st.caption(" · ".join(labels))
+
+
 def render_message(message: ChatMessage, show_system: bool = False) -> None:
     """
     Render a chat message with consistent styling.
@@ -162,6 +187,7 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
                 render_content(message.content)
             else:
                 st.write(message.content)
+            render_attachment_chips(message.custom_data)
     
     elif message.type == "ai":
         # AI messages

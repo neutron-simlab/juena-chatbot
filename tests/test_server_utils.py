@@ -61,3 +61,34 @@ def test_custom_message_accepts_dict_and_rejects_str() -> None:
     # A str payload used to be indexed as content[0], yielding a single char.
     with pytest.raises(ValueError, match="must be a dict"):
         langchain_to_chat_message(LangchainChatMessage(role="custom", content="oops"))
+
+
+def test_staged_human_message_replays_as_the_users_own_text() -> None:
+    """A turn with uploads sends the `/inputs` manifest to the model, but the
+    checkpointer is the only store of message content -- so without the
+    preserved original, reloading the chat showed agent scaffolding inside the
+    user's own bubble."""
+    typed = "Why does my reduction script crash on the second run?"
+    manifest = (
+        "Persistent uploaded files for this chat are available under `/inputs/uploads/`.\n"
+        f"\nUser request: {typed}\n\n- /inputs/uploads/reduce.py"
+    )
+    message = HumanMessage(
+        content=manifest,
+        additional_kwargs={
+            "juena_display_text": typed,
+            "juena_attachments": [{"name": "reduce.py", "chars": 812}],
+        },
+    )
+
+    chat_message = langchain_to_chat_message(message)
+
+    assert chat_message.content == typed
+    assert chat_message.custom_data["attachments"] == [{"name": "reduce.py", "chars": 812}]
+
+
+def test_plain_human_message_is_unaffected() -> None:
+    chat_message = langchain_to_chat_message(HumanMessage(content="hello"))
+
+    assert chat_message.content == "hello"
+    assert "attachments" not in chat_message.custom_data

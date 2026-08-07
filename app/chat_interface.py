@@ -6,10 +6,11 @@ from typing import Any
 import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
 from juena.schema.server import ChatMessage
-from juena.server.code_chat_inputs import (
+from juena.schema.upload_limits import (
     CHAT_INPUT_MAX_CHARS,
     CHAT_INPUT_MAX_UPLOAD_MB,
     TEXT_READABLE_FILE_TYPES,
+    validate_attachments,
 )
 from app.starters import build_starter_prompts
 from app.ui_components import (
@@ -149,15 +150,30 @@ def _normalize_chat_submission(submission: Any) -> tuple[str, list[Any]]:
     return text, files
 
 
-def _format_user_submission(text: str, attachments: list[Any]) -> str:
-    """Render the local user-message content shown in chat history."""
+def _attachment_metadata(attachments: list[Any]) -> list[dict[str, Any]]:
+    """Describe attached files for display on the user's message.
 
-    attachment_names = [str(getattr(attachment, "name", "attachment")) for attachment in attachments]
-    if text and attachment_names:
-        return text + "\n\nAttachments:\n" + "\n".join(f"- {name}" for name in attachment_names)
-    if attachment_names:
-        return "Uploaded files:\n" + "\n".join(f"- {name}" for name in attachment_names)
-    return text
+    Mirrors the shape the server records on the staged human message, so a live
+    turn and a reloaded one render identically.
+    """
+
+    # Only the name: the server records a character count once it has decoded the
+    # file, and reporting raw bytes under the same key would mislabel it.
+    return [
+        {"name": str(getattr(attachment, "name", "attachment"))}
+        for attachment in attachments
+    ]
+
+
+def _attachment_errors(attachments: list[Any]) -> list[str]:
+    """Return reasons the selected files cannot be sent, if any."""
+
+    return validate_attachments(
+        [
+            (str(getattr(attachment, "name", "attachment")), getattr(attachment, "size", None))
+            for attachment in attachments
+        ]
+    )
 
 
 def _chat_input_kwargs() -> dict[str, Any]:
@@ -278,9 +294,20 @@ def render_chat_interface() -> None:
         st.error("The JüNA service is unavailable. Please try again later.")
         return
 
+    # Refuse bad uploads before the message joins the transcript. The server
+    # enforces the same limits, but by the time its error arrives over SSE the
+    # user's message is already rendered and stuck in the history.
+    if upload_errors := _attachment_errors(attachments):
+        for error in upload_errors:
+            st.error(error)
+        return
+
     user_message = ChatMessage(
         type="human",
-        content=_format_user_submission(prompt, attachments),
+        content=prompt,
+        custom_data=(
+            {"attachments": _attachment_metadata(attachments)} if attachments else {}
+        ),
     )
     st.session_state.messages.append(user_message)
     render_message(user_message)

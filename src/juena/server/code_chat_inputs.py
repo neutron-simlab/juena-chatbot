@@ -12,10 +12,16 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
-from juena.server.code_chat_input_constants import (
-    ALLOWED_SUFFIXES as _ALLOWED_SUFFIXES,
-    INPUTS_PREFIX as _INPUTS_PREFIX,
+from juena.schema.upload_limits import (  # noqa: F401 - re-exported for callers
+    CHAT_INPUT_MAX_CHARS,
+    CHAT_INPUT_MAX_UPLOAD_MB,
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS_PER_MESSAGE,
     TEXT_READABLE_FILE_TYPES,
+    is_text_readable_filename,
+)
+from juena.server.code_chat_input_constants import (
+    INPUTS_PREFIX as _INPUTS_PREFIX,
     UPLOADS_MANIFEST_PATH as _UPLOADS_MANIFEST_PATH,
     UPLOADS_PREFIX as _UPLOADS_PREFIX,
 )
@@ -33,10 +39,9 @@ from juena.server.code_chat_utils import (
 
 logger = get_logger(__name__)
 
-CHAT_INPUT_MAX_CHARS = 4_000
-CHAT_INPUT_MAX_UPLOAD_MB = 1
-MAX_ATTACHMENTS_PER_MESSAGE = 5
-MAX_ATTACHMENT_BYTES = CHAT_INPUT_MAX_UPLOAD_MB * 1024 * 1024
+# Read in chunks so an oversized upload is refused after one chunk rather than
+# after the whole body has been buffered into memory.
+_UPLOAD_CHUNK_BYTES = 64 * 1024
 
 
 def sanitize_uploaded_filename(filename: str | None) -> str:
@@ -50,12 +55,6 @@ def sanitize_uploaded_filename(filename: str | None) -> str:
     if not sanitized:
         sanitized = "upload.txt"
     return sanitized
-
-
-def is_text_readable_filename(filename: str | None) -> bool:
-    """Return whether *filename* uses an allowed text-readable extension."""
-
-    return Path(filename or "").suffix.lower() in _ALLOWED_SUFFIXES
 
 
 def _dedupe_staged_name(filename: str, taken_names: set[str]) -> str:
@@ -72,14 +71,45 @@ def _dedupe_staged_name(filename: str, taken_names: set[str]) -> str:
     return candidate
 
 
-def _decode_upload_text(raw: bytes, filename: str) -> str:
-    if len(raw) > MAX_ATTACHMENT_BYTES:
+async def _read_upload_bounded(upload: UploadFile, filename: str) -> bytes:
+    """Read *upload* into memory, refusing anything over the per-file limit.
+
+    Starlette reports ``size`` for multipart uploads, so the common oversized
+    case is rejected without reading at all. The chunked loop is the fallback
+    for streams that do not report a size: it stops one chunk past the limit
+    instead of buffering the entire body first.
+    """
+
+    declared_size = getattr(upload, "size", None)
+    if isinstance(declared_size, int) and declared_size > MAX_ATTACHMENT_BYTES:
         raise ValueError(
             f"File '{filename}' exceeds the {CHAT_INPUT_MAX_UPLOAD_MB} MB per-file limit."
         )
 
-    decoded = raw.decode("utf-8-sig", errors="replace")
-    if "\x00" in decoded or "\ufffd" in decoded:
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"File '{filename}' exceeds the {CHAT_INPUT_MAX_UPLOAD_MB} MB per-file limit."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _decode_upload_text(raw: bytes, filename: str) -> str:
+    # Strict decoding is what actually distinguishes text from binary. Decoding
+    # with errors="replace" and then rejecting U+FFFD also rejected legitimate
+    # UTF-8 files that genuinely contain a replacement character.
+    try:
+        decoded = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"File '{filename}' must be a valid UTF-8 text file."
+        ) from exc
+
+    if "\x00" in decoded:
         raise ValueError(
             f"File '{filename}' must be a valid UTF-8 text file."
         )
@@ -118,7 +148,7 @@ async def normalize_uploaded_attachments(
             )
 
         staged_name = _dedupe_staged_name(sanitized_name, taken_names)
-        raw = await upload.read()
+        raw = await _read_upload_bounded(upload, original_name)
         text = _decode_upload_text(raw, original_name)
         staged_path = f"{_UPLOADS_PREFIX}{staged_name}"
         files_update[staged_path] = create_file_data(text)
@@ -204,12 +234,14 @@ async def prepare_code_chat_turn_inputs(
                 has_thread_uploads=has_thread_uploads,
             ),
             files_update=files_update,
+            attachments=tuple(uploaded),
         )
 
     if files_update:
         return PreparedCodeChatInputs(
             message_override=message,
             files_update=files_update,
+            attachments=tuple(uploaded),
         )
 
     return None

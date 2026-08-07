@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 from typing import Any, Sequence
 
 from deepagents.backends.utils import file_data_to_string
 
 from juena.server.code_chat_input_constants import (
-    CODE_PATTERNS,
     ERROR_LINE_RE,
     FENCED_CODE_RE,
     LANGUAGE_SUFFIXES,
@@ -23,57 +21,18 @@ def _line_is_error_like(line: str) -> bool:
     return bool(ERROR_LINE_RE.search(line))
 
 
-def _line_is_code_like(line: str) -> bool:
-    stripped = line.rstrip()
-    if not stripped:
+def _block_is_error(body: str) -> bool:
+    """Whether a fenced block reads as a traceback rather than source code.
+
+    A majority vote over non-blank lines, because a traceback interleaves error
+    lines with echoed source lines ("    x = 1") that match nothing, while real
+    source rarely has any error-shaped line at all.
+    """
+    lines = [line for line in body.splitlines() if line.strip()]
+    if not lines:
         return False
-    if any(pattern.search(stripped) for pattern in CODE_PATTERNS):
-        return True
-    if stripped.startswith((">>>", "...")):
-        return True
-    if stripped.startswith((" ", "\t")) and any(ch in stripped for ch in "=(){}[]:;"):
-        return True
-    if re.search(r"[{}();]", stripped):
-        return True
-    if re.match(r"^\s*</?[A-Za-z][^>]*>$", stripped):
-        return True
-    return False
-
-
-def _extract_block(
-    text: str,
-    *,
-    predicate,
-    min_hits: int,
-) -> str:
-    lines = text.splitlines()
-    best_content = ""
-    current_lines: list[str] = []
-    hits = 0
-
-    for line in [*lines, "__END__"]:
-        is_blank = line.strip() == ""
-        if line != "__END__" and (predicate(line) or (current_lines and is_blank)):
-            current_lines.append(line)
-            if predicate(line):
-                hits += 1
-            continue
-
-        if hits >= min_hits:
-            candidate = "\n".join(current_lines).strip()
-            if len(candidate) > len(best_content):
-                best_content = candidate
-
-        current_lines = []
-        hits = 0
-
-    return best_content
-
-
-def _strip_first_occurrence(text: str, fragment: str) -> str:
-    if not fragment:
-        return text
-    return text.replace(fragment, "", 1)
+    hits = sum(1 for line in lines if _line_is_error_like(line))
+    return hits * 2 >= len(lines)
 
 
 def _compact_summary(text: str, *, max_chars: int = 500) -> str:
@@ -86,44 +45,45 @@ def _compact_summary(text: str, *, max_chars: int = 500) -> str:
 
 
 def extract_pasted_code_context(message: str) -> PastedCodeContext | None:
-    """Best-effort extraction of inline code and errors from typed chat text."""
+    """Extract code and errors from fenced blocks in typed chat text.
+
+    Only ``` fenced blocks count. Guessing at unfenced text used to misread
+    ordinary prose as code -- "What does the Error: message in the manual mean?"
+    was staged as a traceback -- which silently reframed the whole turn. A fence
+    is something the user types deliberately, so it is the signal we trust.
+
+    Unfenced text is not staged, but nothing is lost from the conversation: the
+    message still reaches the agent verbatim.
+    """
 
     if not message.strip():
         return None
 
-    remaining = message
-    fenced_blocks = list(FENCED_CODE_RE.finditer(message))
-    code = "\n\n".join(
-        block.group("body").strip("\n")
-        for block in fenced_blocks
-        if block.group("body").strip()
-    ).strip()
+    fenced_blocks = [
+        block for block in FENCED_CODE_RE.finditer(message) if block.group("body").strip()
+    ]
+    if not fenced_blocks:
+        return None
+
+    code_bodies: list[str] = []
+    error_bodies: list[str] = []
+    for block in fenced_blocks:
+        body = block.group("body").strip("\n")
+        (error_bodies if _block_is_error(body) else code_bodies).append(body)
+
+    # The fence's language tag is now the only language signal, and it is the one
+    # `staged_code_path` was built for.
     language = next(
         (block.group("lang").strip().lower() for block in fenced_blocks if block.group("lang").strip()),
         None,
     )
-    if fenced_blocks:
-        remaining = FENCED_CODE_RE.sub("", remaining)
-
-    error_text = ""
-    if ERROR_LINE_RE.search(remaining):
-        error_text = _extract_block(remaining, predicate=_line_is_error_like, min_hits=1)
-        if error_text:
-            remaining = _strip_first_occurrence(remaining, error_text)
-
-    if not code:
-        code = _extract_block(remaining, predicate=_line_is_code_like, min_hits=3)
-        if code:
-            remaining = _strip_first_occurrence(remaining, code)
-
-    if not code and not error_text:
-        return None
-
+    remaining = FENCED_CODE_RE.sub("", message)
     goal = "\n".join(line for line in remaining.splitlines() if line.strip()).strip()
+
     return PastedCodeContext(
         user_goal=goal,
-        code=code,
-        error_text=error_text,
+        code="\n\n".join(code_bodies).strip(),
+        error_text="\n\n".join(error_bodies).strip(),
         language=language,
     )
 

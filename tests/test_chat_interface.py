@@ -10,7 +10,7 @@ import pytest
 
 from juena.clients.client import AgentClientError
 from juena.schema.server import ChatMessage
-from juena.server.code_chat_inputs import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
+from juena.schema.upload_limits import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
 from app.starters import StarterPrompt as chat_interface_starter
 
 
@@ -510,7 +510,7 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     render_message_mock = Mock()
     render_chat_input_styles_mock = Mock()
     stream_mock = Mock()
-    attachment = SimpleNamespace(name="snippet.py")
+    attachment = SimpleNamespace(name="snippet.py", size=128)
     submission = SimpleNamespace(text="please inspect", files=[attachment])
     session_state = _SessionState(
         client=Mock(),
@@ -540,7 +540,10 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
 
     chat_interface.render_chat_interface()
 
-    assert session_state.messages[0].content == "please inspect\n\nAttachments:\n- snippet.py"
+    # The typed text stays the message; attachments ride in custom_data so the
+    # same rendering path works for a reloaded thread.
+    assert session_state.messages[0].content == "please inspect"
+    assert session_state.messages[0].custom_data["attachments"] == [{"name": "snippet.py"}]
     render_message_mock.assert_called_once_with(session_state.messages[0])
     stream_mock.assert_called_once()
     render_chat_input_styles_mock.assert_called_once_with()
@@ -585,3 +588,55 @@ def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -
     assert session_state.messages[0].content == submission
     render_message_mock.assert_called_once_with(session_state.messages[0])
     assert stream_mock.call_args.args[:2] == (submission, fake_st.empty.return_value)
+
+
+@pytest.mark.parametrize(
+    ("files", "expected_error"),
+    [
+        (
+            [SimpleNamespace(name=f"f{index}.py", size=10) for index in range(6)],
+            "At most 5 files",
+        ),
+        ([SimpleNamespace(name="huge.py", size=2 * 1024 * 1024)], "over the 1 MB"),
+        ([SimpleNamespace(name="archive.zip", size=10)], "unsupported extension"),
+    ],
+)
+def test_render_chat_interface_refuses_bad_uploads_without_touching_history(
+    monkeypatch, files, expected_error
+) -> None:
+    """The server enforces the same limits, but its error arrives over SSE only
+    after the user's message is already rendered and stuck in the transcript."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    stream_mock = Mock()
+    error_mock = Mock()
+    session_state = _SessionState(
+        client=Mock(),
+        messages=[],
+        welcome_initialized=True,
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        show_system_messages=False,
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(),
+        chat_input=Mock(return_value=SimpleNamespace(text="have a look", files=files)),
+        container=lambda: _DummyContext(),
+        error=error_mock,
+    )
+
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
+    monkeypatch.setattr(chat_interface, "render_message", Mock())
+    monkeypatch.setattr(chat_interface, "render_starter_topics", Mock(return_value=None))
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+
+    chat_interface.render_chat_interface()
+
+    assert session_state.messages == []
+    stream_mock.assert_not_called()
+    assert expected_error in " ".join(str(call.args[0]) for call in error_mock.call_args_list)

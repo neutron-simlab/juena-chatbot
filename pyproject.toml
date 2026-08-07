@@ -19,7 +19,8 @@ dependencies = [
     "httpx>=0.25.0",
     "httpx-sse>=0.4.0",
     "sse-starlette>=2.0.0",
-    "streamlit>=1.28.0",
+    # 1.53 is the floor for `st.chat_input(max_upload_size=...)`, used by the composer.
+    "streamlit>=1.53.0",
     "pydantic[all]>=2.11.2,<3.0.0",
     "python-dotenv>=1.0.0",
     "langgraph-checkpoint-postgres==3.1.0",

@@ -4,46 +4,33 @@ from __future__ import annotations
 
 import re
 
-TEXT_READABLE_FILE_TYPES = [
-    "py",
-    "js",
-    "ts",
-    "java",
-    "c",
-    "cpp",
-    "rs",
-    "go",
-    "sh",
-    "md",
-    "txt",
-    "log",
-    "json",
-    "yaml",
-    "yml",
-    "toml",
-    "ini",
-    "cfg",
-    "csv",
-    "sql",
-    "html",
-    "css",
-    "xml",
-    "ipynb",
-]
+# Canonical home is `juena.schema.upload_limits`, which the Streamlit UI also
+# imports; re-exported here so server-side callers keep a single import site.
+from juena.schema.upload_limits import (  # noqa: F401
+    ALLOWED_SUFFIXES,
+    TEXT_READABLE_FILE_TYPES,
+)
 
-ALLOWED_SUFFIXES = {f".{suffix}" for suffix in TEXT_READABLE_FILE_TYPES}
 INPUTS_PREFIX = "/inputs/"
+
+# `additional_kwargs` keys on the staged human message. The manifest is what the
+# model reads, but the checkpointer is the only store of message content, so the
+# text the user actually typed has to ride along or a reloaded chat shows the
+# manifest in the user's own bubble.
+DISPLAY_TEXT_KEY = "juena_display_text"
+DISPLAY_ATTACHMENTS_KEY = "juena_attachments"
+
 UPLOADS_PREFIX = "/inputs/uploads/"
 UPLOADS_MANIFEST_PATH = "/inputs/uploads_manifest.md"
 FENCED_CODE_RE = re.compile(r"```(?P<lang>[A-Za-z0-9_#+.-]*)\n(?P<body>.*?)```", re.DOTALL)
+# MULTILINE so the `^`-anchored alternatives match at the start of any line, not
+# only at the start of the string -- without it, JS/Java stack traces went
+# undetected. The trailing bare `Error:` alternative is deliberately absent: it
+# matched ordinary prose such as "What does the Error: message mean?".
 ERROR_LINE_RE = re.compile(
     r"(Traceback \(most recent call last\):|^\s*File \".*\", line \d+|^\s*at .+\(.+:\d+\)|"
-    r"^\s*Caused by:|^\s*ERROR\b|\b[A-Za-z_][A-Za-z0-9_]*(Error|Exception)\b:|Error:)"
-)
-CODE_PATTERNS = (
-    re.compile(r"^\s*(def|class|import|from|return|if|elif|else|for|while|try|except|with|async def)\b"),
-    re.compile(r"^\s*(#include|public |private |protected |function\b|const\b|let\b|var\b|package\b|using\b|fn\b|impl\b)"),
-    re.compile(r"^\s*[A-Za-z_][\w.]*\s*=\s*[^=]"),
+    r"^\s*Caused by:|^\s*ERROR\b|\b[A-Za-z_][A-Za-z0-9_]*(Error|Exception)\b:)",
+    re.MULTILINE,
 )
 LANGUAGE_SUFFIXES = {
     "python": ".py",
