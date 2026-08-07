@@ -21,7 +21,12 @@ services:
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-juena}
       - POSTGRES_USER=${POSTGRES_USER:-juena}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      # Required, with no default on purpose. `${VAR:-}` supplied an empty
+      # password silently: `docker compose config` rendered it without even a
+      # warning, and the failure only appeared later as a health-check timeout
+      # on a container that refused to initialise. `${VAR:?}` fails at config
+      # time with this message instead. See env.example.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your env file (see env.example)}
     volumes:
       - chatbot-postgres:/var/lib/postgresql/data
     # Intentionally not published. The development override exposes Postgres
@@ -94,7 +99,14 @@ services:
       - RELOAD=${RELOAD:-false}
       
       # Durable identity, chat, checkpoints, and long-term memory.
-      - DATABASE_URL=${DATABASE_URL:-}
+      # Built here rather than inherited from the host environment. Compose
+      # auto-loads the repository `.env`, whose DATABASE_URL is written for a
+      # process running natively on the host and so points at `localhost` --
+      # which inside this container means the container itself, not Postgres.
+      # Inheriting it produced a connection-refused crash on startup that read
+      # like a Postgres outage. Point POSTGRES_HOST at an external database to
+      # use one instead of the bundled service.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-juena}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your env file (see env.example)}@${POSTGRES_HOST:-postgres}:5432/${POSTGRES_DB:-juena}
       - LEGACY_SQLITE_ARCHIVE_DIR=/data/legacy-sqlite
 
       # FZJ SAML2 service provider.

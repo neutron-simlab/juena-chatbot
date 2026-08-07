@@ -20,7 +20,6 @@ from juena.core.llms_providers import get_available_providers, get_default_model
 # Import UI modules
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
-from juena.server.agent_registry import DEFAULT_AGENT
 from app.file_management import initialize_client
 from app.chat_storage import get_chat_storage
 
@@ -49,7 +48,6 @@ if (
         client.close()
     client = initialize_client(
         internal_api_url,
-        agent_id=DEFAULT_AGENT,
         session_token=session_token,
     )
     st.session_state.client = client

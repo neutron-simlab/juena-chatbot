@@ -4,7 +4,11 @@ UI components for rendering messages in Streamlit.
 This module provides functions for rendering chat messages and content
 with consistent styling across the application.
 """
+import base64
+import io
 import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import streamlit as st
@@ -15,9 +19,57 @@ from juena.schema.server import ChatMessage
 CHAT_INPUT_MIN_HEIGHT_REM = 7.5
 CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM = 5.5
 
+# The JüNA mark, shown above the chat title. The source is square and has an
+# alpha channel, so it sits directly on the themed background with no plate.
+LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
+HEADER_LOGO_WIDTH_PX = 88
+# Emit the bitmap at this multiple of the displayed size. 3 covers every common
+# device pixel ratio; the file stays a few kilobytes at this scale.
+HEADER_LOGO_PIXEL_DENSITY = 3
+
+
+@lru_cache(maxsize=4)
+def logo_data_uri(width_px: int, density: int) -> str | None:
+    """Return the JüNA mark as a base64 PNG data URI, sized for high-DPI screens.
+
+    Not ``st.image(path, width=N)``: that resamples server-side to exactly N
+    pixels with a bilinear filter, which both aliases badly on a large
+    reduction and leaves the browser upscaling an 88px bitmap to 176 device
+    pixels on a 2x display. The result looked blurry. Emitting the image at
+    ``density`` times the displayed size and letting CSS scale it down keeps it
+    sharp at any device pixel ratio, and Lanczos resampling suits the ratio.
+
+    Returns ``None`` when the asset is absent, so a checkout without it still
+    renders a usable header.
+    """
+    if not LOGO_PATH.is_file():
+        return None
+
+    from PIL import Image
+
+    with Image.open(LOGO_PATH) as image:
+        source_width, source_height = image.size
+        target_width = width_px * density
+        target_height = max(1, round(source_height * target_width / source_width))
+        resized = image.convert("RGBA").resize(
+            (target_width, target_height),
+            resample=Image.LANCZOS,
+        )
+        buffer = io.BytesIO()
+        resized.save(buffer, format="PNG", optimize=True)
+
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
 
 def render_header_with_logo() -> None:
-    """Render a top header with logo if available."""
+    """Render the JüNA mark above the chat title."""
+    data_uri = logo_data_uri(HEADER_LOGO_WIDTH_PX, HEADER_LOGO_PIXEL_DENSITY)
+    if data_uri:
+        st.html(
+            f'<img src="{data_uri}" alt="JüNA" '
+            f'style="width:{HEADER_LOGO_WIDTH_PX}px;height:auto;display:block;">'
+        )
     st.title("JüNA Chatbot")
 
 

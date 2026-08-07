@@ -254,12 +254,20 @@ def render_chat_interface() -> None:
     for message in st.session_state.messages:
         render_message(message, show_system=st.session_state.show_system_messages)
 
-    # Offer starter topics while the conversation is still empty.
+    # On an empty thread the composer sits directly under the title, with the
+    # starter chips beneath it, so the first thing the user sees is where to
+    # type. `st.chat_input` pins itself to the bottom of the viewport only when
+    # called at the top level of the script; inside a container it renders
+    # inline. Once the thread has messages it returns to the bottom, which is
+    # where a growing transcript expects it.
     starter_prompt: str | None = None
     if st.session_state.client and not st.session_state.messages:
+        with st.container():
+            submission = st.chat_input(**_chat_input_kwargs())
         starter_prompt = render_starter_topics()
+    else:
+        submission = st.chat_input(**_chat_input_kwargs())
 
-    submission = st.chat_input(**_chat_input_kwargs())
     prompt, attachments = _normalize_chat_submission(submission)
     if submission is None and starter_prompt:
         prompt, attachments = starter_prompt, []

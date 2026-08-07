@@ -22,6 +22,14 @@ from juena.server.database import database_lifespan
 from juena.server.saml_service import saml_lifespan
 from juena.server.store import store_lifespan
 
+# Imported for its side effect: the module self-registers the agent factory.
+# Importing *this* module has to be enough, because the process serving the API
+# is not always `main.py` -- production runs `uvicorn juena.server.service:app`,
+# and the deployment plan splits the API and the UI into separate containers.
+# Registering only from `main.py` leaves those processes with an empty registry,
+# so every invocation would 404.
+import juena.agents.juena_agent  # noqa: F401  the single JüNA agent
+
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)
 logger.info("Service logging initialized")

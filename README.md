@@ -50,6 +50,11 @@ An empty thread shows exactly two immediate-send chips:
    also replace every development Postgres/SAML URL and mount the registered SP
    certificate and key.
 
+   `POSTGRES_PASSWORD` is required and has no default: Compose refuses to start
+   without it rather than handing the database an empty password. If you are
+   upgrading an `.env` created before it was added, copy the `POSTGRES_*` block
+   out of `env.example`.
+
 3. Optional: update [`config/repositories.yaml`](config/repositories.yaml) to change the repositories available to JüNA.
 
 4. Start the stack:

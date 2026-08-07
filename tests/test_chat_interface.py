@@ -360,6 +360,7 @@ def test_render_chat_interface_offers_starter_topics_on_empty_chat(monkeypatch) 
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=None),
+        container=lambda: _DummyContext(),
         error=Mock(),
     )
 
@@ -398,6 +399,7 @@ def test_render_chat_interface_sends_selected_starter_topic(monkeypatch) -> None
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=None),
+        container=lambda: _DummyContext(),
         error=Mock(),
     )
 
@@ -525,6 +527,7 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=submission),
+        container=lambda: _DummyContext(),
         error=Mock(),
     )
 
@@ -565,6 +568,7 @@ def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=submission),
+        container=lambda: _DummyContext(),
         error=Mock(),
     )
 

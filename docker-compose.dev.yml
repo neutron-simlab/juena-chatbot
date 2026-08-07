@@ -15,10 +15,8 @@ services:
       - ./skills:/app/skills:ro
     environment:
       - ENVIRONMENT=development
-      # Build the container DSN from the Postgres service settings. The host-side
-      # DATABASE_URL may legitimately use localhost, which is not Postgres from
-      # inside this container.
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-juena}:${POSTGRES_PASSWORD:-juena-development-only}@postgres:5432/${POSTGRES_DB:-juena}
+      # DATABASE_URL is not repeated here: the base file already builds the
+      # container DSN from POSTGRES_* against the `postgres` service.
       - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-http://localhost:8080/auth/metadata}
       - SAML_SP_ACS_URL=${SAML_SP_ACS_URL:-http://localhost:8080/auth/acs}
       - SAML_SP_SLS_URL=${SAML_SP_SLS_URL:-http://localhost:8080/auth/sls}

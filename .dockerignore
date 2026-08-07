@@ -68,7 +68,8 @@ logs/
 Thumbs.db
 
 # Streamlit
-.streamlit/
+# config.toml is the app theme and must reach the image; only secrets are kept out.
+.streamlit/secrets.toml
 
 # Project specific
 *.db

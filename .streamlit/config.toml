@@ -1,0 +1,56 @@
+# JüNA Streamlit theme.
+#
+# Ported from streamlit/demo-ai-assistant (.streamlit/config.toml): a light,
+# low-contrast surface with a soft blue accent, bordered widgets, and Inter at
+# a 14px base with an oversized h1.
+#
+# One deliberate difference: the demo loads Inter from Google Fonts. JüNA does
+# not, for two reasons -- fonts.googleapis.com is not in the production egress
+# allowlist (DEPLOYMENT-AND-SANDBOX-PLAN.md), and a browser-side Google Fonts
+# request from an FZJ-hosted page is a GDPR problem in Germany. Inter is
+# resolved locally instead and falls back to the platform UI font, which is
+# metrically close. To get Inter everywhere, self-host the woff2 files and add
+# [[theme.fontFaces]] entries pointing at them -- see the notes at the bottom.
+
+[theme]
+base = "light"
+
+# Colors, matching the demo exactly.
+primaryColor = "#60a5fa"            # soft blue accent
+backgroundColor = "#fafafa"         # page surface
+secondaryBackgroundColor = "#ffffff"  # widgets, chat bubbles, headers
+textColor = "#3f3f46"               # zinc-700, softer than pure black
+borderColor = "#eeeef0"
+showWidgetBorder = true
+
+# Typography. Metrics match the demo; the family is resolved locally.
+font = "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
+headingFont = "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["3rem", "1.5rem", "1rem", "1rem", "0.8rem", "0.8rem"]
+headingFontWeights = [600, 600, 600, 200, 600, 200]
+
+# The demo has no sidebar; JüNA does. Streamlit swaps the sidebar background
+# and secondary background when they are not set explicitly, which would invert
+# the intended contrast, so both are pinned here: a white sidebar against the
+# off-white page.
+[theme.sidebar]
+primaryColor = "#60a5fa"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#fafafa"
+textColor = "#3f3f46"
+borderColor = "#eeeef0"
+
+# ---------------------------------------------------------------------------
+# To self-host Inter instead of relying on the local fallback:
+#   1. Put the woff2 files in .streamlit/static/
+#   2. Set  [server] enableStaticServing = true
+#   3. Add, for each weight:
+#        [[theme.fontFaces]]
+#        family = "Inter"
+#        url = "app/static/inter-400.woff2"
+#        weight = 400
+#        style = "normal"
+# Inter is SIL Open Font Licensed, so redistributing it in the image is fine.
+# ---------------------------------------------------------------------------

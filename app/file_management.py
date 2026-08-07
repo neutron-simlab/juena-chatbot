@@ -2,12 +2,18 @@
 
 from juena.clients.client import AgentClient
 from juena.core.config import global_config
-from juena.server.agent_registry import DEFAULT_AGENT
+
+# The UI talks to the API over HTTP and must not import the server package to
+# learn this: the two run as separate processes, and in production as separate
+# containers. `GET /agents` reports the authoritative default, but it requires
+# an authenticated session and the client has to exist before the user signs
+# in, so the id is named here. Retired ids still resolve server side.
+JUENA_AGENT_ID = "juena"
 
 
 def initialize_client(
     internal_api_url: str,
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str = JUENA_AGENT_ID,
     session_token: str | None = None,
 ) -> AgentClient:
     """Initialize AgentClient with the private API URL."""

@@ -16,8 +16,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
 from juena.server.agent_registry import (
-    DEFAULT_AGENT,
     get_agent,
+    get_default_agent,
     list_registered_agents,
 )
 from juena.schema.server import ChatMessage, StreamInput, UserInput
@@ -160,7 +160,7 @@ async def _prepare_agent_invocation(
 async def message_generator(
     user_input: StreamInput,
     authenticated_user_id: str,
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str | None = None,
     attachments: list[UploadFile] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
@@ -168,6 +168,8 @@ async def message_generator(
 
     Yields JSON strings; `EventSourceResponse` adds the SSE framing.
     """
+    agent_id = agent_id or get_default_agent()
+
     # Extract provider and model from request
     provider = user_input.provider.value if user_input.provider else None
     model = user_input.model
@@ -327,7 +329,7 @@ async def _invoke_with_attachments(
 @router.post("/invoke")
 async def invoke(
     user_input: UserInput,
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ChatMessage:
@@ -341,6 +343,7 @@ async def invoke(
     authenticated session.
     Provider and model can be specified in the request to use different LLMs.
     """
+    agent_id = agent_id or get_default_agent()
     user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
 
     # Extract provider and model from request
@@ -415,7 +418,7 @@ async def invoke(
 @router.post("/{agent_id}/invoke_with_files")
 @router.post("/invoke_with_files")
 async def invoke_with_files(
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str | None = None,
     message: str = Form(""),
     thread_id: str | None = Form(None),
     user_id: str | None = Form(None),
@@ -427,6 +430,7 @@ async def invoke_with_files(
 ) -> ChatMessage:
     """Invoke an agent with multipart form data and text attachments."""
 
+    agent_id = agent_id or get_default_agent()
     user_input = UserInput(
         message=message,
         thread_id=_form_field(thread_id),
@@ -458,7 +462,7 @@ async def invoke_with_files(
 @router.post("/stream", response_class=EventSourceResponse, responses=_sse_response_example())
 async def stream(
     user_input: StreamInput,
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> EventSourceResponse:
@@ -473,7 +477,7 @@ async def stream(
     """
     user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
     return EventSourceResponse(
-        message_generator(user_input, str(user.id), agent_id),
+        message_generator(user_input, str(user.id), agent_id or get_default_agent()),
     )
 
 
@@ -484,7 +488,7 @@ async def stream(
 )
 @router.post("/stream_with_files", response_class=EventSourceResponse, responses=_sse_response_example())
 async def stream_with_files(
-    agent_id: str = DEFAULT_AGENT,
+    agent_id: str | None = None,
     message: str = Form(""),
     thread_id: str | None = Form(None),
     user_id: str | None = Form(None),
@@ -496,6 +500,7 @@ async def stream_with_files(
 ) -> EventSourceResponse:
     """Stream an agent response from multipart form data and text attachments."""
 
+    agent_id = agent_id or get_default_agent()
     user_input = StreamInput(
         message=message,
         thread_id=_form_field(thread_id),
@@ -555,7 +560,7 @@ async def get_agents(_user: AuthenticatedUser = Depends(get_current_user)) -> di
     """Return all registered agents and the current default."""
     return {
         "agents": list_registered_agents(),
-        "default": DEFAULT_AGENT,
+        "default": get_default_agent(),
     }
 
 

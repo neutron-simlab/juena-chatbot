@@ -52,7 +52,10 @@ Thumbs.db
 htmlcov/
 
 # Streamlit
-.streamlit/
+# Only secrets are ignored. .streamlit/config.toml carries the app theme and
+# must be versioned -- ignoring the whole directory silently dropped it from
+# clones and from the Docker image.
+.streamlit/secrets.toml
 
 # Project specific
 *.db

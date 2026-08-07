@@ -51,6 +51,16 @@ Production target:
   - `postgres`: internal-only persistent database.
   - `sandbox-broker`: internal API for controlled code execution.
 - Make API startup depend on healthy PostgreSQL and successful bootstrap; make UI and gateway depend on healthy upstream services.
+  - This keeps bootstrap all-or-nothing, which is a deliberate choice, not an
+    oversight. `bootstrap_repositories` re-raises on the first repository
+    failure and the entrypoint runs it under `set -e`, so one unreachable git
+    remote out of the nine configured in `config/repositories.yaml` blocks
+    startup — including general neutron-science chat, which needs no index.
+    The agent already degrades gracefully on a missing index
+    (`describe_bootstrap_problems`), so the strictness comes from the
+    entrypoint, not the agent. Revisit if repository availability turns out to
+    be the main source of downtime; until then, fail loudly rather than serve
+    silently degraded retrieval.
 - Persist PostgreSQL, repositories, indices, manifests, logs, and generated artifacts in named volumes. Keep sandbox workspaces on a separate host path owned only by the unprivileged sandbox account.
 - Trust forwarded headers only from the institutional proxy CIDRs. Keep Streamlit CORS and XSRF protection enabled.
 - Introduce `JUENA_PUBLIC_URL`; derive the SAML entity, ACS, SLS, login, logout, and UI URLs from it unless explicitly overridden. Compose supplies the non-user-configurable internal API URL `http://api:8080`.
@@ -71,6 +81,58 @@ Production target:
   - Remove dead/decorative middleware helpers and stale two-agent documentation without adding replacement abstractions.
 
 ## Python/Shell Sandbox and Plot Streaming
+
+### Backend composition — settled before implementation
+
+Three constraints from `deepagents==0.6.12` decide the shape of this work. They
+were verified against the installed source and the upstream documentation.
+
+1. **Execution is not path-routable.** `CompositeBackend.execute` delegates to
+   `self.default` only, and raises `NotImplementedError` unless that default
+   implements `SandboxBackendProtocol`. Routing `/workspace/` to a sandbox while
+   keeping a state backend as the default does not work.
+2. **The tool is gated dynamically, not at registration.** `FilesystemMiddleware`
+   always registers `execute` among its eight tools, then filters it out of
+   `request.tools` on every model call when `supports_execution(backend)` is
+   false. That is why the model sees no `execute` tool today, and why enabling
+   the sandbox needs no separate tool wiring.
+3. **Tool-level permissions and execution are mutually exclusive.**
+   `FilesystemMiddleware` raises `NotImplementedError` when `_permissions` are
+   combined with an execution-capable backend whose paths are not all scoped to
+   routes. The approve/edit/reject gate must therefore be
+   `HumanInTheLoopMiddleware`, not filesystem permissions.
+
+So the sandbox becomes the **default** backend and everything else becomes an
+explicit route:
+
+```
+CompositeBackend(
+    default = <PodmanSandboxBackend>,        # /workspace, satisfies execute
+    routes  = {
+        "/inputs/":   <read-only guard over staged uploads>,
+        "/repos/":    ReadOnlyFilesystemBackend(repo cache),
+        "/skills/":   ReadOnlyFilesystemBackend(SKILLS_DIR),
+        "/memories/": StoreBackend(per-user namespace),
+    },
+)
+```
+
+Two things must not be lost in that move:
+
+- The `/inputs` read-only guard currently lives in `ReadOnlyInputsStateBackend`
+  ([skills_backend.py](src/juena/agents/skills_backend.py)) — i.e. in the class
+  that is the default today. Once the sandbox is the default, `/inputs` needs an
+  explicit read-only route or staged uploads silently become writable. Add a
+  test asserting `/inputs/...` writes are still rejected under the new
+  composition.
+- `CompositeBackend` aggregates its routes’ state schemas at construction, so
+  the full route table must be passed up front; routes cannot be added later.
+
+Decide explicitly whether `execute` belongs to the coordinator or to the
+`code-chat-expert` subagent before writing code — they have separate backends
+today ([juena_agent.py](src/juena/agents/juena_agent.py)).
+
+### Implementation
 
 - Integrate execution through Deep Agents’ `SandboxBackendProtocol`; never use `LocalShellBackend` in production.
 - Run a dedicated rootless Podman service under an unprivileged `juena-sandbox` account. Only the broker may access its socket; FastAPI and the agent containers must not receive either Docker or Podman sockets.
@@ -99,7 +161,7 @@ Production target:
 
 ## Verification and Acceptance
 
-- Preserve the current passing baseline of 218 unit tests and four PostgreSQL integration tests.
+- Preserve the current passing baseline of 232 unit tests and four PostgreSQL integration tests.
 - Add tests proving model fallback runs after retry exhaustion and is independent of graph creation order.
 - Verify the chunk schema change causes exactly one rebuild and search results retain correct source offsets.
 - Verify Compose exposes only the gateway port and uses service-name DNS, health-gated startup, non-root application processes, persistent volumes, and bounded log rotation.

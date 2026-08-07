@@ -12,6 +12,11 @@ logger = get_logger(__name__)
 
 # Provider/model are handled per invocation via runtime context. The factory's
 # pair only supplies the initial defaults used while the graph is constructed.
+#
+# `register_agent_factory(set_as_default=True)` rebinds this at import time, so
+# it must never be read into another module's namespace at *its* import time.
+# Callers use `get_default_agent()` instead; a `from ... import DEFAULT_AGENT`
+# captures whatever value happened to be current when that module was loaded.
 DEFAULT_AGENT = "juena"
 
 # Type alias for agent instance (can be any type)
@@ -47,6 +52,16 @@ def register_agent_factory(
         global DEFAULT_AGENT
         DEFAULT_AGENT = agent_id
         logger.info(f"Set {agent_id} as default agent")
+
+
+def get_default_agent() -> str:
+    """The agent id to use when a request does not name one.
+
+    Read through this rather than importing ``DEFAULT_AGENT``: the value is
+    rebound when an agent registers itself as the default, which happens after
+    most modules have already been imported.
+    """
+    return DEFAULT_AGENT
 
 
 def register_agent_alias(alias: str, agent_id: str) -> None:

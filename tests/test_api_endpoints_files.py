@@ -176,3 +176,40 @@ def test_delete_thread_endpoint_removes_persisted_state(monkeypatch) -> None:
         "message": "Thread thread-123 deleted successfully",
     }
     assert deleted == {"thread_id": "thread-123"}
+
+
+def test_agents_endpoint_reports_the_registry_default(monkeypatch) -> None:
+    """`GET /agents` must read the default at request time.
+
+    The default is rebound when an agent self-registers, which happens after
+    this module is imported. A `from ... import DEFAULT_AGENT` in the endpoint
+    module would freeze whatever value was current at import.
+    """
+
+    monkeypatch.setattr(api_endpoints, "list_registered_agents", lambda: ["late-agent"])
+    monkeypatch.setattr(api_endpoints, "get_default_agent", lambda: "late-agent")
+
+    client = _build_test_client(monkeypatch)
+    response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert response.json() == {"agents": ["late-agent"], "default": "late-agent"}
+
+
+def test_invoke_without_an_agent_id_resolves_the_current_default(monkeypatch) -> None:
+    """`POST /invoke` has no `{agent_id}` path segment, so it must fall back."""
+
+    seen: dict[str, str] = {}
+
+    async def fake_get_agent(agent_id: str, provider: str | None = None, model: str | None = None):
+        seen["agent_id"] = agent_id
+        return _FakeAgent()
+
+    monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
+    monkeypatch.setattr(api_endpoints, "get_default_agent", lambda: "late-agent")
+
+    client = _build_test_client(monkeypatch)
+    response = client.post("/invoke", json={"message": "hello", "thread_id": "thread-1"})
+
+    assert response.status_code == 200
+    assert seen["agent_id"] == "late-agent"
