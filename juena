@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+#
+# JüNA development shortcuts.
+#
+# These wrap the commands already documented in README.md, HOW-TO-ADD-REPO.md
+# and SAML-IFFLOGIN.md -- nothing here does anything those files do not.
+# Production deployment deliberately has only a config check and an explicit
+# `prod-up`, so a stray `juena` in the wrong directory cannot deploy.
+#
+# Run `juena help` for the command list, `juena install` to put it on PATH.
+
+set -euo pipefail
+
+# Every command runs against the repository this script lives in, not the
+# current directory -- that is what makes `juena up` safe to type from
+# anywhere once the script is on PATH.
+#
+# Symlinks must be followed first: `juena install` links this into ~/.local/bin,
+# and BASH_SOURCE then reports the link, not the repo. `readlink -f` is GNU-only,
+# so walk the chain by hand to stay portable to macOS.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    link_target="$(readlink "$SCRIPT_PATH")"
+    case "$link_target" in
+        /*) SCRIPT_PATH="$link_target" ;;
+        *)  SCRIPT_PATH="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)/$link_target" ;;
+    esac
+done
+REPO_ROOT="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+cd "$REPO_ROOT"
+
+# Development always loads the base file plus the dev overlay. The overlay is
+# opt-in by design: it supplies localhost SAML URLs and an insecure cookie, and
+# must never be merged into a production run.
+COMPOSE_DEV=(docker compose -f docker-compose.yml -f docker-compose.dev.yml)
+COMPOSE_PROD=(docker compose -f docker-compose.yml)
+
+# Production reads its settings from a file outside the repo.
+PROD_ENV_FILE="${PROD_ENV_FILE:-/etc/juena/juena.env}"
+
+# Host-side DSN for the integration tests. Matches the development defaults in
+# env.example; override in the environment if you changed them.
+POSTGRES_USER="${POSTGRES_USER:-juena}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-juena-development-only}"
+POSTGRES_DB="${POSTGRES_DB:-juena}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}}"
+
+API_PORT="${API_PORT:-8080}"
+UI_PORT="${UI_PORT:-9501}"
+
+POSTGRES_VOLUME="juena-chatbot-postgres"
+
+if [ -t 1 ]; then CYAN=$'\033[36m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+else CYAN=""; DIM=""; RESET=""; fi
+
+die() { echo "error: $*" >&2; exit 1; }
+
+# Compose auto-loads .env from the repository root, and the base file *requires*
+# POSTGRES_PASSWORD. Failing here with a readable message beats failing inside
+# compose interpolation.
+require_env() {
+    [ -f .env ] || die ".env is missing. Run 'juena env' first."
+}
+
+# ---------------------------------------------------------------------------
+# Prerequisites
+# ---------------------------------------------------------------------------
+
+cmd_env() { ## Create .env from env.example if it does not exist
+    if [ -f .env ]; then
+        echo ".env already exists; leaving it alone"
+    else
+        cp env.example .env
+        echo "Created .env from env.example -- add at least one LLM provider key"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Running natively (uv)
+# ---------------------------------------------------------------------------
+
+cmd_run() { ## Run FastAPI natively on :8080 (bootstraps repositories first)
+    uv run main.py "$@"
+}
+
+cmd_ui() { ## Run the Streamlit UI natively on :9501
+    uv run streamlit run app/streamlit_app.py \
+        --server.port="$UI_PORT" \
+        --server.address=0.0.0.0 "$@"
+}
+
+cmd_bootstrap() { ## Clone/refresh repositories and rebuild stale vector indices
+    uv run python -m juena.indexing.bootstrap "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Development Postgres
+# ---------------------------------------------------------------------------
+
+cmd_postgres_up() { ## Start only Postgres, published on :5432
+    require_env
+    "${COMPOSE_DEV[@]}" up -d postgres
+}
+
+cmd_postgres_down() { ## Stop Postgres, keeping its data volume
+    "${COMPOSE_DEV[@]}" stop postgres
+}
+
+cmd_postgres_reset() { ## DESTROYS development Postgres data. Needs --confirm
+    local confirmed="${CONFIRM:-}"
+    case "${1:-}" in --confirm|-y|yes) confirmed=yes ;; esac
+    if [ "$confirmed" != "yes" ]; then
+        echo "refusing: this deletes the ${POSTGRES_VOLUME} volume and every" >&2
+        echo "development user, chat, checkpoint and memory in it." >&2
+        echo "Re-run with: juena postgres-reset --confirm" >&2
+        exit 1
+    fi
+    "${COMPOSE_DEV[@]}" down
+    docker volume rm "$POSTGRES_VOLUME"
+}
+
+# ---------------------------------------------------------------------------
+# Development stack
+# ---------------------------------------------------------------------------
+
+cmd_up() { ## Start the full development stack (build if needed)
+    require_env
+    "${COMPOSE_DEV[@]}" up --build -d "$@"
+    echo "UI      http://localhost:${UI_PORT}"
+    echo "API     http://localhost:${API_PORT}"
+}
+
+cmd_down() { ## Stop the development stack, keeping volumes
+    "${COMPOSE_DEV[@]}" down "$@"
+}
+
+cmd_build() { ## Rebuild the image without starting anything
+    require_env
+    "${COMPOSE_DEV[@]}" build "$@"
+}
+
+cmd_logs() { ## Follow application logs (bootstrap progress appears here)
+    "${COMPOSE_DEV[@]}" logs -f juena-chatbot "$@"
+}
+
+cmd_ps() { ## Show development stack status
+    "${COMPOSE_DEV[@]}" ps "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+# `--extra dev` because the test tooling is an optional extra: a bare
+# `uv sync` uninstalls pytest, and without this the suite fails to start.
+cmd_test() { ## Run the unit suite
+    uv run --extra dev pytest -q --ignore=tests/test_postgres_integration.py "$@"
+}
+
+cmd_test_integration() { ## Run the Postgres-backed tests against dev Postgres
+    cmd_postgres_up
+    JUENA_TEST_DATABASE_URL="$TEST_DATABASE_URL" \
+        uv run --extra dev pytest tests/test_postgres_integration.py -q "$@"
+}
+
+cmd_test_all() { ## Run the unit suite and the Postgres-backed tests
+    cmd_test
+    cmd_test_integration
+}
+
+# ---------------------------------------------------------------------------
+# SAML / health
+# ---------------------------------------------------------------------------
+
+cmd_health() { ## Check the API health endpoint
+    curl -fsS "http://localhost:${API_PORT}/health" && echo
+}
+
+cmd_sp_metadata() { ## Print SP metadata (the document to register with the FZJ IdP)
+    # Returns 500 while AUTH_DEV_BYPASS is on: the bypass skips saml_lifespan,
+    # so no SP is initialised. Unset it to produce real metadata.
+    # Redirect to a file to hand it over: juena sp-metadata > sp-metadata.xml
+    curl -fsS "http://localhost:${API_PORT}/auth/metadata"
+}
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+
+cmd_prod_config() { ## Validate the production compose config against PROD_ENV_FILE
+    "${COMPOSE_PROD[@]}" --env-file "$PROD_ENV_FILE" config "$@"
+}
+
+cmd_prod_up() { ## Start the production stack (base compose file only)
+    "${COMPOSE_PROD[@]}" --env-file "$PROD_ENV_FILE" up -d "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Housekeeping
+# ---------------------------------------------------------------------------
+
+cmd_clean() { ## Remove Python caches and test artefacts
+    find . -path ./.venv -prune -o -type d -name __pycache__ -print0 \
+        | xargs -0 rm -rf
+    rm -rf .pytest_cache
+}
+
+cmd_install() { ## Symlink this script into a bin directory on PATH
+    local target_dir="${1:-$HOME/.local/bin}"
+    mkdir -p "$target_dir"
+    ln -sf "$SCRIPT_PATH" "$target_dir/juena"
+    echo "linked $target_dir/juena -> $REPO_ROOT/juena"
+    case ":$PATH:" in
+        *":$target_dir:"*) echo "$target_dir is on PATH; run 'juena help' from anywhere" ;;
+        *) echo "note: $target_dir is not on PATH. Add to your shell profile:"
+           echo "  export PATH=\"$target_dir:\$PATH\"" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+# The help text is generated from the `##` comments above, so a new command is
+# documented by defining it -- there is no second list to keep in sync.
+cmd_help() { ## Show this help
+    echo "JüNA development shortcuts"
+    echo
+    echo "  usage: juena <command> [args...]"
+    echo
+    # Only the command name gets underscores rewritten -- descriptions may
+    # legitimately contain them (PROD_ENV_FILE).
+    grep -E '^cmd_[a-z_]+\(\) \{ ## ' "$SCRIPT_PATH" \
+        | sed -E 's/^cmd_([a-z_]+)\(\) \{ ## /\1\t/' \
+        | awk -F'\t' "{gsub(/_/, \"-\", \$1); printf \"  ${CYAN}%-18s${RESET} %s\n\", \$1, \$2}"
+    echo
+    echo "  ${DIM}extra args pass through, e.g. 'juena test -k upload'${RESET}"
+}
+
+main() {
+    local command="${1:-help}"
+    shift || true
+
+    # Commands are typed with dashes; the functions use underscores.
+    local fn="cmd_${command//-/_}"
+    if ! declare -F "$fn" >/dev/null; then
+        echo "error: unknown command '$command'" >&2
+        echo >&2
+        cmd_help >&2
+        exit 1
+    fi
+    "$fn" "$@"
+}
+
+main "$@"

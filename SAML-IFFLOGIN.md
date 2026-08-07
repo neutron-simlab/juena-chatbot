@@ -235,12 +235,12 @@ The base Compose file does not publish PostgreSQL;
 auto-merged `docker-compose.override.yml` — it must be passed explicitly:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # or: make up
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # or: juena up
 ```
 
 Omitting the second `-f` silently starts the production configuration against
 your development `.env`, which is exactly how a container ends up dialling
-`localhost:5432` for a Postgres that lives in another container. `make up`
+`localhost:5432` for a Postgres that lives in another container. `juena up`
 always passes both.
 
 ---
@@ -258,7 +258,7 @@ DATABASE_URL=postgresql://juena:juena-development-only@localhost:5432/juena
 ```
 
 ```bash
-make postgres-up
+juena postgres-up
 uv run main.py          # or use docker-compose.yml + docker-compose.dev.yml
 ```
 
@@ -279,7 +279,7 @@ a fixed `Local Developer` account.
 > Note for producing the SP metadata: `/auth/metadata` **cannot** emit a document
 > while the bypass is on, because no SP is configured to describe. Unset
 > `AUTH_DEV_BYPASS`, provide the SP keypair, and restart before running
-> `make sp-metadata`. Until then the endpoint answers `503` with that reason —
+> `juena sp-metadata`. Until then the endpoint answers `503` with that reason —
 > it previously answered an opaque `500`, which looked like a crash.
 
 The dev user is keyed on a fixed persistent subject, so its UUID, chats and
