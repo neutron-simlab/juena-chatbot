@@ -21,14 +21,19 @@ class _FakeResponse:
 
 
 class _FakeStreamResponse:
+    """Minimal stand-in for an SSE response, as httpx_sse expects to see it."""
+
     def __init__(self, lines):
         self._lines = lines
+        self.headers = {"content-type": "text/event-stream"}
 
     def raise_for_status(self) -> None:
         return None
 
-    def iter_lines(self):
-        yield from self._lines
+    def iter_text(self):
+        # Each SSE event is terminated by a blank line.
+        for line in self._lines:
+            yield f"{line}\n\n"
 
 
 class _FakeStreamContext:
@@ -52,13 +57,12 @@ def test_list_repositories_returns_payload(monkeypatch: pytest.MonkeyPatch) -> N
         captured["timeout"] = timeout
         return _FakeResponse([{"id": "datreat", "name": "DaTreat"}])
 
-    monkeypatch.setattr(client_module.httpx, "get", fake_get)
-
     client = client_module.AgentClient(
         base_url="http://localhost:8080",
         agent="react_agent",
         timeout=5.0,
     )
+    monkeypatch.setattr(client._client, "get", fake_get)
 
     repositories = client.list_repositories()
 
@@ -78,9 +82,8 @@ def test_list_repositories_raises_client_error_on_http_failure(
     def fake_get(url: str, *, headers: dict[str, str], timeout: float | None):
         raise httpx.ConnectError("boom")
 
-    monkeypatch.setattr(client_module.httpx, "get", fake_get)
-
     client = client_module.AgentClient(base_url="http://localhost:8080", agent="react_agent")
+    monkeypatch.setattr(client._client, "get", fake_get)
 
     with pytest.raises(client_module.AgentClientError, match="boom"):
         client.list_repositories()
@@ -99,9 +102,8 @@ def test_invoke_uses_multipart_endpoint_when_attachments_are_present(
         captured["timeout"] = timeout
         return _FakeResponse({"type": "ai", "content": "ok"})
 
-    monkeypatch.setattr(client_module.httpx, "post", fake_post)
-
-    client = client_module.AgentClient(base_url="http://localhost:8080", agent="code_chat_agent", timeout=5.0)
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena", timeout=5.0)
+    monkeypatch.setattr(client._client, "post", fake_post)
     attachment = SimpleNamespace(
         name="snippet.py",
         type="text/x-python",
@@ -111,16 +113,14 @@ def test_invoke_uses_multipart_endpoint_when_attachments_are_present(
     message = client.invoke(
         "debug this",
         thread_id="thread-1",
-        user_id="user-1",
         attachments=[attachment],
     )
 
     assert isinstance(message, ChatMessage)
-    assert captured["url"] == "http://localhost:8080/code_chat_agent/invoke_with_files"
+    assert captured["url"] == "http://localhost:8080/juena/invoke_with_files"
     assert captured["data"] == {
         "message": "debug this",
         "thread_id": "thread-1",
-        "user_id": "user-1",
     }
     assert captured["files"] == [
         ("attachments", ("snippet.py", b"print('hello')\n", "text/x-python"))
@@ -139,9 +139,8 @@ def test_invoke_without_attachments_uses_json_endpoint(
         captured["timeout"] = timeout
         return _FakeResponse({"type": "ai", "content": "ok"})
 
-    monkeypatch.setattr(client_module.httpx, "post", fake_post)
-
     client = client_module.AgentClient(base_url="http://localhost:8080", agent="react_agent", timeout=5.0)
+    monkeypatch.setattr(client._client, "post", fake_post)
     client.invoke("hello", thread_id="thread-1")
 
     assert captured["url"] == "http://localhost:8080/react_agent/invoke"
@@ -162,14 +161,12 @@ def test_stream_uses_multipart_endpoint_when_attachments_are_present(
             _FakeStreamResponse(
                 [
                     'data: {"type":"message","content":{"type":"ai","content":"ok","tool_calls":[],"tool_call_id":null,"run_id":null,"thread_id":null,"response_metadata":{},"custom_data":{},"timestamp":null}}',
-                    "data: [DONE]",
                 ]
             )
         )
 
-    monkeypatch.setattr(client_module.httpx, "stream", fake_stream)
-
-    client = client_module.AgentClient(base_url="http://localhost:8080", agent="code_chat_agent", timeout=5.0)
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena", timeout=5.0)
+    monkeypatch.setattr(client._client, "stream", fake_stream)
     attachment = SimpleNamespace(
         name="trace.log",
         type="text/plain",
@@ -181,11 +178,17 @@ def test_stream_uses_multipart_endpoint_when_attachments_are_present(
     assert len(chunks) == 1
     assert isinstance(chunks[0], ChatMessage)
     assert captured["method"] == "POST"
-    assert captured["url"] == "http://localhost:8080/code_chat_agent/stream_with_files"
+    assert captured["url"] == "http://localhost:8080/juena/stream_with_files"
     assert captured["kwargs"]["data"] == {"message": "please inspect"}
     assert captured["kwargs"]["files"] == [
         ("attachments", ("trace.log", b"ERROR: boom\n", "text/plain"))
     ]
+    stream_timeout = captured["kwargs"]["timeout"]
+    assert isinstance(stream_timeout, httpx.Timeout)
+    assert stream_timeout.connect == 5.0
+    assert stream_timeout.read is None
+    assert stream_timeout.write == 5.0
+    assert stream_timeout.pool == 5.0
 
 
 def test_delete_thread_uses_thread_cleanup_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,9 +200,8 @@ def test_delete_thread_uses_thread_cleanup_endpoint(monkeypatch: pytest.MonkeyPa
         captured["timeout"] = timeout
         return _FakeResponse({"status": "success", "thread_id": "thread-1"})
 
-    monkeypatch.setattr(client_module.httpx, "delete", fake_delete)
-
     client = client_module.AgentClient(base_url="http://localhost:8080", agent="react_agent", timeout=5.0)
+    monkeypatch.setattr(client._client, "delete", fake_delete)
     payload = client.delete_thread("thread-1")
 
     assert payload == {"status": "success", "thread_id": "thread-1"}
@@ -208,3 +210,22 @@ def test_delete_thread_uses_thread_cleanup_endpoint(monkeypatch: pytest.MonkeyPa
         "headers": {},
         "timeout": 5.0,
     }
+
+
+def test_session_cookie_replaces_shared_auth_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTH_SECRET", "must-not-be-used")
+    client = client_module.AgentClient(
+        base_url="http://localhost:8080",
+        agent="react_agent",
+        session_token="opaque-session",
+    )
+
+    assert client._headers == {"Cookie": "juena_session=opaque-session"}
+
+
+def test_close_closes_reusable_http_client() -> None:
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena")
+
+    client.close()
+
+    assert client._client.is_closed

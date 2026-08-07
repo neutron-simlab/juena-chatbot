@@ -1,24 +1,17 @@
-"""
-Stream handlers for processing LangGraph streaming events.
+"""Translation of LangGraph stream events into the server's SSE events."""
 
-This module provides handlers for different stream modes (updates, messages, custom)
-to process and convert LangGraph streaming events into chat messages.
-"""
-
-from juena.server.streaming.processor import StreamEventProcessor
+from juena.server.streaming import events
 from juena.server.streaming.handlers import (
-    UpdatesStreamHandler,
-    MessagesStreamHandler,
-    CustomStreamHandler,
+    extract_update_messages,
+    is_subagent_namespace,
+    token_text,
 )
-from juena.server.streaming.message_processor import MessageProcessor
-from juena.server.streaming.deduplication import get_message_identifier
+from juena.server.streaming.processor import StreamEventProcessor
 
 __all__ = [
     "StreamEventProcessor",
-    "UpdatesStreamHandler",
-    "MessagesStreamHandler",
-    "CustomStreamHandler",
-    "MessageProcessor",
-    "get_message_identifier",
+    "events",
+    "extract_update_messages",
+    "is_subagent_namespace",
+    "token_text",
 ]

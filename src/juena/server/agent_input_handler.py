@@ -57,7 +57,8 @@ class AgentInputHandler:
         """
         run_id = run_id or uuid4()
         thread_id = thread_id or str(uuid4())
-        user_id = user_id or str(uuid4())
+        if not user_id:
+            raise ValueError("A trusted authenticated user_id is required")
         provider, model = _normalize_provider_model(provider, model)
 
         configurable: dict[str, Any] = {
@@ -73,10 +74,13 @@ class AgentInputHandler:
         
         # Prepare input - always add as human message
         # LangGraph will automatically resume from checkpoint
-        input_data = {
+        #
+        # Only graph state channels belong here. thread_id and user_id are not
+        # channels of the agent's state schema, so LangGraph drops them and logs
+        # "Input channel ... not found" for each one on every invocation. They
+        # already travel in config.configurable and RuntimeModelContext below.
+        input_data: dict[str, Any] = {
             "messages": [HumanMessage(content=message_override or user_input)],
-            "thread_id": thread_id,
-            "user_id": user_id,
         }
         if initial_files is not None:
             input_data["files"] = initial_files

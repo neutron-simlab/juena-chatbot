@@ -1,0 +1,28 @@
+# Local-development additions to the production-oriented base Compose file.
+# Load this file explicitly after docker-compose.yml so it cannot be enabled
+# accidentally in production.
+
+services:
+  postgres:
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-juena-development-only}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  juena-chatbot:
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./skills:/app/skills:ro
+    environment:
+      - ENVIRONMENT=development
+      # Build the container DSN from the Postgres service settings. The host-side
+      # DATABASE_URL may legitimately use localhost, which is not Postgres from
+      # inside this container.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-juena}:${POSTGRES_PASSWORD:-juena-development-only}@postgres:5432/${POSTGRES_DB:-juena}
+      - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-http://localhost:8080/auth/metadata}
+      - SAML_SP_ACS_URL=${SAML_SP_ACS_URL:-http://localhost:8080/auth/acs}
+      - SAML_SP_SLS_URL=${SAML_SP_SLS_URL:-http://localhost:8080/auth/sls}
+      - JUENA_API_INTERNAL_URL=http://localhost:8080
+      - JUENA_PUBLIC_URL=${JUENA_PUBLIC_URL:-http://localhost:8080}
+      - UI_PUBLIC_URL=${UI_PUBLIC_URL:-http://localhost:9501}
+      - SESSION_COOKIE_SECURE=false

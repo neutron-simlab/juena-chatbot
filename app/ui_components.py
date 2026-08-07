@@ -120,7 +120,9 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
     elif message.type == "tool":
         # Tool messages
         with st.chat_message("assistant"):
-            st.markdown("🔧 **Tool Result**")
+            tool_name = str((message.custom_data or {}).get("tool_name") or "").strip()
+            label = f"Tool Result · `{tool_name}`" if tool_name else "Tool Result"
+            st.markdown(f"🔧 **{label}**")
             if message.tool_call_id:
                 st.caption(f"Tool call ID: {message.tool_call_id}")
             if message.content:

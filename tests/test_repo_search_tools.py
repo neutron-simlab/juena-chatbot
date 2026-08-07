@@ -27,6 +27,8 @@ def test_search_code_semantic_returns_compact_preview() -> None:
                     "id": "hit-1",
                     "file_path": "src/auth.py",
                     "chunk_index": 4,
+                    "start_index": 120,
+                    "end_index": 120 + len(content),
                     "is_doc": False,
                     "distance": 0.12,
                     "content": content,
@@ -50,6 +52,8 @@ def test_search_code_semantic_returns_compact_preview() -> None:
             "file_path": "src/auth.py",
             "path": "/repos/repo-a/src/auth.py",
             "chunk_index": 4,
+            "start_index": 120,
+            "end_index": 120 + len(content),
             "is_doc": False,
             "distance": 0.12,
             "char_count": len(content),
@@ -67,15 +71,17 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
     class StubRepoManager:
         repo_ids = ["repo-a"]
 
-    class StubHybridHit:
+    class StubSemanticHit:
         def __init__(self) -> None:
             self.file_path = "src/service.py"
             self.content = content
             self.is_doc = False
             self.semantic_rank = 0
+            self.start_index = 20
+            self.end_index = 20 + len(content)
 
-    original = repo_search.hybrid_search
-    repo_search.hybrid_search = lambda *args, **kwargs: [StubHybridHit()]
+    original = repo_search.semantic_search
+    repo_search.semantic_search = lambda *args, **kwargs: [StubSemanticHit()]
     try:
         payload = json.loads(
             repo_search._search_code_hybrid(
@@ -87,7 +93,7 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
             )
         )
     finally:
-        repo_search.hybrid_search = original
+        repo_search.semantic_search = original
 
     assert payload == [
         {
@@ -96,6 +102,8 @@ def test_search_code_hybrid_returns_preview_instead_of_full_content() -> None:
             "path": "/repos/repo-a/src/service.py",
             "is_doc": False,
             "semantic_rank": 0,
+            "start_index": 20,
+            "end_index": 20 + len(content),
             "char_count": len(content),
             "preview": repo_search._compact_preview(content),
         }
@@ -167,6 +175,8 @@ def test_search_code_hybrid_all_repositories_returns_global_preview_hits() -> No
                     "id": f"{repo_id}-hit",
                     "file_path": "src/detector.py",
                     "chunk_index": 0,
+                    "start_index": 10,
+                    "end_index": 39,
                     "is_doc": False,
                     "distance": 0.2 if repo_id == "repo-a" else 0.1,
                     "content": f"{repo_id} detector implementation",
@@ -190,6 +200,8 @@ def test_search_code_hybrid_all_repositories_returns_global_preview_hits() -> No
             "path": "/repos/repo-b/src/detector.py",
             "is_doc": False,
             "semantic_rank": 0,
+            "start_index": 10,
+            "end_index": 39,
             "char_count": len("repo-b detector implementation"),
             "preview": "repo-b detector implementation",
         }

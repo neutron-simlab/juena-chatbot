@@ -21,12 +21,16 @@ class UserInput(BaseModel):
     thread_id: Optional[str] = Field(
         description="Thread ID to persist and continue a multi-turn conversation.",
         default=None,
+        max_length=255,
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
     )
     user_id: Optional[str] = Field(
-        description="User ID to persist and continue a conversation across multiple threads.",
+        description=(
+            "Deprecated compatibility field. The authenticated server identity is always used."
+        ),
         default=None,
         examples=["user_123"],
+        deprecated=True,
     )
     provider: Optional[Provider] = Field(
         description="LLM provider to use (openai or blablador).",
@@ -67,6 +71,13 @@ class ChatMessage(BaseModel):
     type: Literal["human", "ai", "tool", "custom", "system"] = Field(
         description="Role of the message.",
         examples=["human", "ai", "tool", "custom", "system"],
+    )
+    id: Optional[str] = Field(
+        description=(
+            "Stable id copied from the underlying LangChain message. Lets the "
+            "client correlate streamed messages with checkpointed history."
+        ),
+        default=None,
     )
     content: str = Field(
         description="Content of the message.",

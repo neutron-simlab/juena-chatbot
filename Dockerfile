@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     bash \
     git \
+    openssl \
+    xmlsec1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast Python package management
@@ -26,6 +28,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ ./src/
 COPY app/ ./app/
 COPY config/ ./config/
+COPY skills/ ./skills/
 COPY main.py ./
 
 # Copy entrypoint script
@@ -41,7 +44,7 @@ RUN uv sync --frozen --no-dev
 RUN chmod +x docker-entrypoint.sh
 
 # Create directories for logs, data, vector index, and manifests
-RUN mkdir -p /data/logs /data/repos /data/vector_index /data/manifests
+RUN mkdir -p /data/logs /data/repos /data/vector_index /data/manifests /data/saml
 
 # Expose ports
 # 8080: FastAPI server

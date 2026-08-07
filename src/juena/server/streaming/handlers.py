@@ -1,140 +1,71 @@
-"""
-Stream handlers for processing LangGraph streaming events.
+"""Handlers for the LangGraph stream modes this server subscribes to.
 
-This module provides handlers for different stream modes (updates, messages, custom)
-to process and convert LangGraph streaming events into chat messages.
+Two modes are consumed:
+
+``updates``   complete messages as each node finishes
+``messages``  token chunks from LLM calls
+
+``custom`` is deliberately not subscribed: nothing in this codebase calls
+``get_stream_writer()``, and the old handler passed raw payloads into the
+message converter, which rejected them.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langgraph.types import Interrupt, Overwrite
-from langgraph.graph.state import CompiledStateGraph
-from langchain_core.runnables import RunnableConfig
 
-from juena.server.utils import (
-    convert_message_content_to_string,
-    remove_tool_calls,
-)
-import json
+# With subgraphs=True the namespace of a subagent contains a `tools:`-prefixed
+# segment, because subagents are invoked through the parent's tool node.
+# Verified against a real run: the coordinator streams under `()` and a subagent
+# under `('tools:<task-uuid>',)`. The suffix is a task id, not a readable name,
+# so there is nothing here worth showing the user.
+_SUBAGENT_NAMESPACE_PREFIX = "tools:"
 
 
-class UpdatesStreamHandler:
-    """Handler for stream_mode='updates' events."""
-    
-    def __init__(
-        self,
-        agent: CompiledStateGraph,
-        config: RunnableConfig,
-        run_id: str,
-        user_input_message: str
-    ):
-        self.agent = agent
-        self.config = config
-        self.run_id = run_id
-        self.user_input_message = user_input_message
+def is_subagent_namespace(node_path: Any) -> bool:
+    """Whether a stream event originated inside a subagent rather than the coordinator."""
+    if not node_path:
+        return False
+    return any(str(segment).startswith(_SUBAGENT_NAMESPACE_PREFIX) for segment in node_path)
 
-    @staticmethod
-    def _normalize_update_messages(update_messages: Any) -> list[BaseMessage | tuple]:
-        """Normalize LangGraph update payloads into a message list."""
 
+def extract_update_messages(event: dict[str, Any]) -> list[BaseMessage]:
+    """Pull the messages out of an `updates` event payload."""
+    new_messages: list[BaseMessage] = []
+
+    for node, updates in (event or {}).items():
+        if node == "__interrupt__":
+            interrupt: Interrupt
+            for interrupt in updates:
+                new_messages.append(AIMessage(content=interrupt.value))
+            continue
+
+        update_messages = (updates or {}).get("messages", [])
         if isinstance(update_messages, Overwrite):
             update_messages = update_messages.value
-
         if update_messages is None:
-            return []
+            continue
+        if isinstance(update_messages, BaseMessage):
+            new_messages.append(update_messages)
+            continue
         if isinstance(update_messages, list):
-            return update_messages
-        if isinstance(update_messages, (BaseMessage, tuple)):
-            return [update_messages]
-        return list(update_messages) if hasattr(update_messages, "__iter__") else []
-    
-    def process_updates(
-        self,
-        event: dict[str, Any]
-    ) -> list[BaseMessage]:
-        """
-        Process updates stream events and extract messages.
-        
-        Args:
-            event: The updates event dictionary
-            
-        Returns:
-            List of messages extracted from updates
-        """
-        new_messages = []
-        
-        for node, updates in event.items():
-            # Handle interrupts
-            if node == "__interrupt__":
-                interrupt: Interrupt
-                for interrupt in updates:
-                    interrupt_msg = AIMessage(content=interrupt.value)
-                    new_messages.append(interrupt_msg)
-                continue
-            
-            # Extract messages from updates
-            updates = updates or {}
-            update_messages = updates.get("messages", [])
-            new_messages.extend(self._normalize_update_messages(update_messages))
-        
-        return new_messages
+            new_messages.extend(m for m in update_messages if isinstance(m, BaseMessage))
+
+    return new_messages
 
 
-class MessagesStreamHandler:
-    """Handler for stream_mode='messages' token streaming."""
-    
-    def __init__(
-        self,
-        run_id: str
-    ):
-        self.run_id = run_id
-    
-    def process_messages(
-        self,
-        event: tuple[BaseMessage, dict[str, Any]],
-        user_input_message: str
-    ) -> Optional[str]:
-        """
-        Process messages stream events and yield token chunks.
-        
-        Args:
-            event: Tuple of (message, metadata)
-            user_input_message: Original user input message to filter duplicates
-            
-        Returns:
-            SSE data string with token chunk, or None if should be skipped
-        """
-        msg, metadata = event
-        
-        # Skip messages with skip_stream tag
-        if "skip_stream" in metadata.get("tags", []):
-            return None
-        
-        # Only process AIMessageChunk for token streaming
-        if not isinstance(msg, AIMessageChunk):
-            return None
-        
-        content = remove_tool_calls(msg.content)
-        if not content:
-            return None
-        
-        token_content = convert_message_content_to_string(content)
-        return f"data: {json.dumps({'type': 'token', 'content': token_content})}\n\n"
+def token_text(event: tuple[BaseMessage, dict[str, Any]]) -> str | None:
+    """Return the streamable text of a `messages` event, or None to skip it.
 
+    Only ``AIMessageChunk`` carries answer text. ``.text`` yields the text
+    blocks alone, so tool-call and reasoning blocks never reach the client.
+    """
+    msg, metadata = event
 
-class CustomStreamHandler:
-    """Handler for stream_mode='custom' events."""
-    
-    @staticmethod
-    def process_custom(event: Any) -> list[BaseMessage]:
-        """
-        Process custom stream events.
-        
-        Args:
-            event: The custom event data
-            
-        Returns:
-            List containing the custom event as a message
-        """
-        return [event]
+    if "skip_stream" in (metadata or {}).get("tags", []):
+        return None
+    if not isinstance(msg, AIMessageChunk):
+        return None
+
+    return msg.text or None

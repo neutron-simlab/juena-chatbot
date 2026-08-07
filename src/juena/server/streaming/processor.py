@@ -1,179 +1,179 @@
+"""Turn LangGraph stream events into the SSE events the UI consumes.
+
+Two rules shape this module:
+
+1. Only the coordinator's tokens are the answer. A subagent's tokens are its
+   internal reasoning; streaming them makes the UI show text that is later
+   replaced by the real answer.
+2. Tool results are activity, not transcript. They are large, the model has
+   already read them, and rendering them buries the answer. They become compact
+   `status` events unless payloads are explicitly enabled.
 """
-Main stream event processor for LangGraph streaming events.
 
-This module provides the main StreamEventProcessor class that orchestrates
-the processing of different stream modes.
-"""
+from typing import Any, AsyncGenerator
 
-import json
-from typing import Any, AsyncGenerator, Optional
-
-from langchain_core.messages import SystemMessage
-from langgraph.graph.state import CompiledStateGraph
-from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 from juena.core.log import get_logger
-from juena.server.errors import StreamingError
-from juena.server.utils import langchain_to_chat_message
+from juena.server.errors import MessageProcessingError, StreamingError
+from juena.server.streaming import events
 from juena.server.streaming.handlers import (
-    UpdatesStreamHandler,
-    MessagesStreamHandler,
-    CustomStreamHandler,
+    extract_update_messages,
+    is_subagent_namespace,
+    token_text,
 )
-from juena.server.streaming.message_processor import MessageProcessor
-from juena.server.streaming.deduplication import get_message_identifier
+from juena.server.utils import langchain_to_chat_message
 
 logger = get_logger(__name__)
 
+# Preview length for a tool result shown inside the status container.
+_TOOL_SUMMARY_CHARS = 120
+
+
+def _tool_summary(message: ToolMessage) -> str:
+    """One-line gist of a tool result, for the activity log."""
+    text = " ".join(message.text.split())
+    if len(text) <= _TOOL_SUMMARY_CHARS:
+        return text
+    return text[:_TOOL_SUMMARY_CHARS].rstrip() + "…"
+
 
 class StreamEventProcessor:
-    """Main processor for LangGraph stream events."""
-    
+    """Processor for LangGraph stream events."""
+
     def __init__(
         self,
-        agent: CompiledStateGraph,
-        config: RunnableConfig,
+        agent: Any,
+        config: Any,
         run_id: str,
-        user_input_message: str
+        user_input_message: str,
+        *,
+        include_tool_payloads: bool = False,
     ):
         self.agent = agent
         self.config = config
         self.run_id = run_id
         self.user_input_message = user_input_message
-        
-        # Track already-streamed messages to prevent duplicates
-        # Uses message IDs (from LangChain BaseMessage.id) or hash fallback
+        self.include_tool_payloads = include_tool_payloads
+
+        # Messages already sent this run, keyed by LangChain message id.
+        # `updates` only emits new messages -- including on a resumed thread --
+        # so this guards against the same message arriving twice within one run,
+        # not against replayed history.
         self._streamed_message_ids: set[str] = set()
-        
-        # Initialize handlers
-        self.updates_handler = UpdatesStreamHandler(agent, config, run_id, user_input_message)
-        self.message_processor = MessageProcessor(
-            agent, config, run_id, user_input_message, self._streamed_message_ids
-        )
-    
-    def _parse_stream_event(self, stream_event: Any) -> tuple[str, Any, Optional[str]]:
-        """
-        Parse a stream event into (stream_mode, event, node_path).
-        
-        Args:
-            stream_event: The raw stream event from LangGraph
-            
-        Returns:
-            Tuple of (stream_mode, event, node_path)
-        """
+
+        # Tracks the last status emitted so identical ones are not repeated.
+        self._last_status: tuple[str, str] | None = None
+
+    def _parse_stream_event(self, stream_event: Any) -> tuple[str, Any, Any]:
+        """Split a raw stream event into (stream_mode, event, node_path)."""
         if not isinstance(stream_event, tuple):
             raise StreamingError(f"Unexpected stream event type: {type(stream_event)}")
-        
+
         if len(stream_event) == 3:
-            # With subgraphs=True: (node_path, stream_mode, event)
+            # subgraphs=True: (node_path, stream_mode, event)
             node_path, stream_mode, event = stream_event
             return stream_mode, event, node_path
-        else:
-            # Without subgraphs: (stream_mode, event)
-            stream_mode, event = stream_event
-            return stream_mode, event, None
-    
-    async def _initialize_streamed_message_ids(self) -> None:
-        """
-        Initialize streamed_message_ids by reading existing messages from state.
-        
-        This prevents duplicate messages from being streamed when the graph resumes
-        from a checkpoint. All existing messages in the state are marked as already
-        streamed, so only new messages will be sent to the client.
-        
-        Handles edge cases:
-        - State doesn't exist yet (first invocation) - no messages to initialize
-        - State exists but has no messages - empty set
-        - Errors accessing state - logs warning and continues with empty set
-        """
-        try:
-            # Get current state from the agent
-            state: Any = await self.agent.aget_state(config=self.config)
-            
-            # Check if state exists and has values
-            if not state or not hasattr(state, 'values') or not state.values:
-                logger.debug("No existing state found, starting with empty streamed_message_ids")
-                return
-            
-            # Extract messages from state
-            existing_messages = state.values.get('messages', [])
-            
-            if not existing_messages:
-                logger.debug("State exists but has no messages, starting with empty streamed_message_ids")
-                return
-            
-            # Generate IDs for all existing messages
-            initialized_count = 0
-            for message in existing_messages:
-                try:
-                    # Skip SystemMessage - they shouldn't be streamed anyway
-                    if isinstance(message, SystemMessage):
-                        continue
-                    
-                    # Convert to ChatMessage to get consistent format
-                    chat_message = langchain_to_chat_message(message)
-                    
-                    # Generate message ID using same logic as MessageProcessor
-                    message_id = get_message_identifier(
-                        message,
-                        chat_message,
-                        run_id=self.run_id
-                    )
-                    
-                    # Add to streamed_message_ids
-                    self._streamed_message_ids.add(message_id)
-                    initialized_count += 1
-                    
-                except Exception as e:
-                    # Log but continue processing other messages
-                    logger.warning(f"Error initializing message ID for message: {e}", exc_info=True)
-            
-            logger.debug(f"Initialized streamed_message_ids with {initialized_count} existing messages")
-            
-        except Exception as e:
-            # Log error but don't fail - we can still process new messages
-            # This ensures the system is resilient to state access issues
-            logger.warning(f"Failed to initialize streamed_message_ids from state: {e}", exc_info=True)
-            # Continue with empty set - new messages will still be processed
-    
-    async def process_event(
-        self,
-        stream_event: Any
-    ) -> AsyncGenerator[str, None]:
-        """
-        Process a single stream event and yield SSE-formatted strings.
-        
-        Args:
-            stream_event: The raw stream event from LangGraph
-            
-        Yields:
-            SSE-formatted data strings
-        """
+
+        stream_mode, event = stream_event
+        return stream_mode, event, None
+
+    def _status(self, phase: str, label: str, **extra: Any) -> dict[str, Any] | None:
+        """Build a status event, or None when it repeats the previous one."""
+        key = (phase, label)
+        if key == self._last_status:
+            return None
+        self._last_status = key
+        return events.status_event(phase, label, **extra)
+
+    async def process_event(self, stream_event: Any) -> AsyncGenerator[dict[str, Any], None]:
+        """Process one stream event, yielding SSE payload dicts."""
         try:
             stream_mode, event, node_path = self._parse_stream_event(stream_event)
-            
-            # Process based on stream mode
+            from_subagent = is_subagent_namespace(node_path)
+
+            if stream_mode == "messages":
+                if from_subagent:
+                    # Subagent reasoning is activity, not the answer.
+                    status = self._status(
+                        events.PHASE_RESEARCHING, "Researching the repository…"
+                    )
+                    if status:
+                        yield status
+                    return
+
+                text = token_text(event)
+                if text:
+                    status = self._status(events.PHASE_DONE, "")
+                    if status:
+                        yield status
+                    yield events.token_event(text)
+                return
+
             if stream_mode == "updates":
-                messages = self.updates_handler.process_updates(event)
-                async for sse_string in self.message_processor.process_and_yield_messages(messages):
-                    yield sse_string
-            
-            elif stream_mode == "messages":
-                handler = MessagesStreamHandler(self.run_id)
-                token_data = handler.process_messages(event, self.user_input_message)
-                if token_data:
-                    yield token_data
-            
-            elif stream_mode == "custom":
-                messages = CustomStreamHandler.process_custom(event)
-                async for sse_string in self.message_processor.process_and_yield_messages(messages):
-                    yield sse_string
-            
+                for message in extract_update_messages(event):
+                    async for payload in self._handle_message(message, from_subagent):
+                        yield payload
+
         except Exception as e:
             logger.error(f"Error processing stream event: {e}", exc_info=True)
-            error = StreamingError(
-                "Failed to process stream event",
-                stream_mode=getattr(e, 'stream_mode', None),
-                details={"error": str(e)}
+            error = StreamingError("Failed to process stream event", details={"error": str(e)})
+            yield events.error_event(error.message)
+
+    async def _handle_message(
+        self, message: BaseMessage, from_subagent: bool
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Convert one complete message into the events the client should see."""
+        try:
+            if isinstance(message, SystemMessage):
+                return
+
+            if isinstance(message, ToolMessage):
+                tool_name = getattr(message, "name", None) or "tool"
+                yield events.status_event(
+                    events.PHASE_TOOL,
+                    f"Ran {tool_name}",
+                    tool=tool_name,
+                    summary=_tool_summary(message),
+                )
+                if not self.include_tool_payloads:
+                    return
+
+            chat_message = langchain_to_chat_message(message)
+            chat_message.run_id = str(self.run_id)
+
+            # A subagent's final packet is input to the coordinator, not an
+            # answer for the user; the coordinator synthesizes from it.
+            if from_subagent and chat_message.type == "ai":
+                return
+
+            # Echo of the user's own turn.
+            if chat_message.type == "human" and chat_message.content == self.user_input_message:
+                return
+            if chat_message.type == "system":
+                return
+
+            # Tool-call announcements carry no content of their own.
+            if (
+                chat_message.type == "ai"
+                and chat_message.tool_calls
+                and not (chat_message.content or "").strip()
+            ):
+                return
+
+            message_id = chat_message.id
+            if message_id:
+                if message_id in self._streamed_message_ids:
+                    return
+                self._streamed_message_ids.add(message_id)
+
+            yield events.message_event(chat_message)
+
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            error = MessageProcessingError(
+                "Failed to process message",
+                message_type=type(message).__name__,
+                details={"error": str(e)},
             )
-            yield f"data: {json.dumps({'type': 'error', 'content': error.message})}\n\n"
+            yield events.error_event(error.message)

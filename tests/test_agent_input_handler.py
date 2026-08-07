@@ -22,8 +22,12 @@ async def test_prepare_input_builds_standard_langgraph_kwargs() -> None:
 
     assert isinstance(run_id, UUID)
     assert kwargs["input"]["messages"][0].content == "hello"
-    assert kwargs["input"]["thread_id"] == "thread-1"
-    assert kwargs["input"]["user_id"] == "user-1"
+    # thread_id/user_id are not state channels: LangGraph drops unknown input
+    # keys and logs a warning for each on every invocation. They travel in
+    # config.configurable and the runtime context instead.
+    assert set(kwargs["input"]) == {"messages"}
+    assert kwargs["config"]["configurable"]["thread_id"] == "thread-1"
+    assert kwargs["config"]["configurable"]["user_id"] == "user-1"
     assert kwargs["config"]["configurable"]["provider"] == "openai"
     assert kwargs["config"]["configurable"]["model"] == "gpt-test"
     assert kwargs["context"] == RuntimeModelContext(

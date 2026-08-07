@@ -15,8 +15,16 @@ trap cleanup TERM INT
 mkdir -p /data/logs
 echo "✅ Log directory: /data/logs"
 
-mkdir -p /data/db
-echo "✅ Database directory: /data/db"
+mkdir -p /data/saml
+
+if [ "${ENVIRONMENT:-development}" != "production" ] && \
+   { [ ! -f "${SAML_SP_CERT_FILE:-/data/saml/sp.crt}" ] || [ ! -f "${SAML_SP_KEY_FILE:-/data/saml/sp.key}" ]; }; then
+    echo "Generating a development-only SAML signing certificate..."
+    openssl req -x509 -newkey rsa:3072 -nodes -days 30 \
+        -subj "/CN=juena-development-sp" \
+        -keyout "${SAML_SP_KEY_FILE:-/data/saml/sp.key}" \
+        -out "${SAML_SP_CERT_FILE:-/data/saml/sp.crt}"
+fi
 
 # Activate virtual environment if it exists (for uv)
 if [ -f "/app/.venv/bin/activate" ]; then
@@ -47,8 +55,6 @@ streamlit run app/streamlit_app.py \
     --server.port=9501 \
     --server.address=0.0.0.0 \
     --server.headless=true \
-    --server.enableCORS=false \
-    --server.enableXsrfProtection=false \
     &
 STREAMLIT_PID=$!
 

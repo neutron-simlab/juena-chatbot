@@ -6,12 +6,12 @@ from typing import Any
 import streamlit as st
 from juena.clients.client import AgentClient, AgentClientError
 from juena.schema.server import ChatMessage
-from juena.server.agent_registry import DEFAULT_AGENT
 from juena.server.code_chat_inputs import (
     CHAT_INPUT_MAX_CHARS,
     CHAT_INPUT_MAX_UPLOAD_MB,
     TEXT_READABLE_FILE_TYPES,
 )
+from app.starters import build_starter_prompts
 from app.ui_components import (
     finalize_streaming_message,
     render_chat_input_styles,
@@ -19,99 +19,40 @@ from app.ui_components import (
     render_message,
     render_streaming_token,
 )
-from app.chat_storage import get_chat_storage
 
 
-def save_message_to_storage(thread_id: str, message: ChatMessage) -> None:
+STARTER_PILLS_KEY = "starter_pills"
+
+
+def render_starter_topics() -> str | None:
+    """Render starter topic chips for an empty chat.
+
+    Returns the chosen question, or None when nothing was picked.
+
+    Streamlit's ``st.chat_input`` cannot be pre-filled programmatically, so a
+    chip sends its question rather than staging it in the composer. The question
+    is still shown verbatim as the user's own message, so nothing is hidden.
     """
-    Save a message to SQLite storage.
-    
-    Args:
-        thread_id: Thread ID the message belongs to
-        message: ChatMessage to save
-    """
-    try:
-        storage = get_chat_storage()
-        storage.save_message(thread_id, message)
-    except Exception as e:
-        # Don't block UI if storage fails
-        print(f"Warning: Failed to save message to storage: {e}")
-
-
-def _escape_markdown_table_cell(value: str) -> str:
-    """Escape characters that would break a Markdown table cell."""
-    return value.replace("|", r"\|")
-
-
-def _format_repository_label(repository: dict) -> str | None:
-    """Return a concise repository label for the intro message."""
-    repo_id = str(repository.get("id", "")).strip()
-    if not repo_id:
+    starters = build_starter_prompts()
+    if not starters:
         return None
 
-    name = str(repository.get("name", "")).strip()
-    if name and name.casefold() != repo_id.casefold():
-        return f"`{_escape_markdown_table_cell(repo_id)}`: {_escape_markdown_table_cell(name)}"
-    return f"`{_escape_markdown_table_cell(repo_id)}`"
+    st.caption("Not sure where to start?")
+    selected_label = st.pills(
+        "Starter topics",
+        options=[starter.label for starter in starters],
+        selection_mode="single",
+        default=None,
+        key=f"{STARTER_PILLS_KEY}:{st.session_state.thread_id}",
+        label_visibility="collapsed",
+    )
+    if not selected_label:
+        return None
 
-
-def _format_repository_table(repository_labels: list[str], *, columns: int = 3) -> list[str]:
-    """Render repository labels as a compact Markdown table."""
-    if not repository_labels:
-        return ["- No indexed repositories are currently available."]
-
-    header = " | ".join(["Repository"] * columns)
-    divider = " | ".join(["---"] * columns)
-    rows = [f"| {header} |", f"| {divider} |"]
-
-    for start in range(0, len(repository_labels), columns):
-        cells = repository_labels[start:start + columns]
-        cells.extend([""] * (columns - len(cells)))
-        rows.append("| " + " | ".join(cells) + " |")
-
-    return rows
-
-
-def build_agent_intro_message(client: AgentClient) -> ChatMessage:
-    """Build the local introductory assistant message for fresh chats."""
-    repo_lines: list[str]
-
-    try:
-        repositories = client.list_repositories()
-    except Exception:
-        repo_lines = ["- Repository metadata is unavailable right now."]
-    else:
-        repo_labels = [
-            label
-            for repository in repositories
-            if (label := _format_repository_label(repository)) is not None
-        ]
-        repo_lines = _format_repository_table(repo_labels)
-
-    intro_lines = [
-        "Hello! There are currently two agents available:",
-        "",
-        (
-            f"- `{DEFAULT_AGENT}`: default starting agent for general-purpose "
-            "Q&A, simple helper tasks, and optional Tavily web search for "
-            "current or external facts."
-        ),
-        (
-            "- `code_chat_agent`: a coordinator for repository analysis and "
-            "multi-step code questions. It delegates local repo search, file "
-            "reading, and staged input inspection to a dedicated repository "
-            "expert subagent, then checks optional Context7 docs for external "
-            "libraries, and only then uses coordinator-level Tavily web "
-            "search if the coding context is still insufficient or the "
-            "question is non-repository."
-        ),
-        "",
-        "Available repositories for `code_chat_agent`:",
-        *repo_lines,
-        "",
-        "Use the sidebar to switch agents at any time.",
-    ]
-    return ChatMessage(type="ai", content="\n".join(intro_lines))
+    for starter in starters:
+        if starter.label == selected_label:
+            return starter.prompt
+    return None
 
 
 def process_stream_chunk(
@@ -121,7 +62,6 @@ def process_stream_chunk(
     received_complete_message: bool,
     message_placeholder,
     messages: list,
-    thread_id: str
 ) -> tuple[str, bool]:
     """
     Process a single chunk from the stream and update UI.
@@ -133,7 +73,6 @@ def process_stream_chunk(
         received_complete_message: Whether complete message was received
         message_placeholder: Streamlit placeholder
         messages: Message history list
-        thread_id: Thread ID for storage persistence
         
     Returns:
         Tuple of (updated_response_text, updated_complete_flag)
@@ -148,8 +87,6 @@ def process_stream_chunk(
         received_complete_message = True
         # Backend handles deduplication, so we can always append
         messages.append(chunk)
-        # Persist to SQLite storage
-        save_message_to_storage(thread_id, chunk)
         
         if chunk.type == "ai":
             finalize_streaming_message(message_placeholder, chunk.content)
@@ -171,10 +108,33 @@ def process_stream_chunk(
     return response_text, received_complete_message
 
 
-def _allow_chat_attachments() -> bool:
-    """Return whether the active agent should accept file attachments."""
+def is_status_chunk(chunk: Any) -> bool:
+    """Whether a stream chunk reports agent activity rather than content."""
+    return isinstance(chunk, dict) and chunk.get("type") == "status"
 
-    return getattr(st.session_state, "selected_agent", DEFAULT_AGENT) == "code_chat_agent"
+
+def apply_status_chunk(status, chunk: dict) -> None:
+    """Reflect an activity event in the status container.
+
+    Tool calls are written as lines inside the container so the transcript
+    stays free of raw tool payloads.
+    """
+    phase = chunk.get("phase", "")
+    label = chunk.get("label", "")
+
+    if phase == "tool":
+        tool = chunk.get("tool") or "tool"
+        summary = chunk.get("summary") or ""
+        status.write(f"🔧 `{tool}` — {summary}" if summary else f"🔧 `{tool}`")
+        return
+
+    if phase == "done":
+        # First answer token: collapse the activity log and get out of the way.
+        status.update(label="Done", state="complete", expanded=False)
+        return
+
+    if label:
+        status.update(label=label)
 
 
 def _normalize_chat_submission(submission: Any) -> tuple[str, list[Any]]:
@@ -203,19 +163,14 @@ def _format_user_submission(text: str, attachments: list[Any]) -> str:
 def _chat_input_kwargs() -> dict[str, Any]:
     """Return keyword arguments for the main Streamlit chat input."""
 
-    kwargs: dict[str, Any] = {
+    # A single agent handles every conversation, so attachments are always on.
+    return {
         "placeholder": "Type your message here...",
         "max_chars": CHAT_INPUT_MAX_CHARS,
+        "accept_file": "multiple",
+        "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
+        "file_type": TEXT_READABLE_FILE_TYPES,
     }
-    if _allow_chat_attachments():
-        kwargs.update(
-            {
-                "accept_file": "multiple",
-                "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
-                "file_type": TEXT_READABLE_FILE_TYPES,
-            }
-        )
-    return kwargs
 
 
 def stream_and_display_response(
@@ -226,63 +181,67 @@ def stream_and_display_response(
 ) -> None:
     """
     Stream a response from the agent and display it.
-    
-    This is a unified helper for both welcome messages and user prompts.
-    
+
+    Agent activity (thinking, subagent research, tool calls) is shown in a
+    collapsible status container above the answer, so the transcript keeps only
+    the conversation itself.
+
     Args:
         message: The message to send to the agent
         message_placeholder: Streamlit placeholder for streaming display
         should_rerun: Whether to rerun after streaming completes
+        attachments: Files to stage for this turn
     """
     initial_message_count = len(st.session_state.messages)
     response_text = ""
     received_complete_message = False
-    
+
     try:
-        for chunk in st.session_state.client.stream(
-            message=message,
-            thread_id=st.session_state.thread_id,
-            user_id=st.session_state.user_id,
-            provider=st.session_state.selected_provider,
-            model=st.session_state.selected_model,
-            attachments=attachments,
-            stream_tokens=True,
-        ):
-            response_text, received_complete_message = process_stream_chunk(
-                chunk,
-                st.session_state.client,
-                response_text,
-                received_complete_message,
-                message_placeholder,
-                st.session_state.messages,
-                st.session_state.thread_id
-            )
-        
+        with st.status("Thinking…", expanded=False) as status:
+            for chunk in st.session_state.client.stream(
+                message=message,
+                thread_id=st.session_state.thread_id,
+                provider=st.session_state.selected_provider,
+                model=st.session_state.selected_model,
+                attachments=attachments,
+            ):
+                if is_status_chunk(chunk):
+                    apply_status_chunk(status, chunk)
+                    continue
+
+                response_text, received_complete_message = process_stream_chunk(
+                    chunk,
+                    st.session_state.client,
+                    response_text,
+                    received_complete_message,
+                    message_placeholder,
+                    st.session_state.messages,
+                )
+
+            status.update(label="Done", state="complete", expanded=False)
+
         # Finalize message display
         if response_text and not received_complete_message:
             finalize_streaming_message(message_placeholder, response_text)
             ai_message = ChatMessage(type="ai", content=response_text)
             st.session_state.messages.append(ai_message)
-            save_message_to_storage(st.session_state.thread_id, ai_message)
         elif not response_text and len(st.session_state.messages) > initial_message_count:
             # If no response text accumulated, check for last message
             last_msg = st.session_state.messages[-1]
             if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
                 finalize_streaming_message(message_placeholder, last_msg.content)
-        
+
         if should_rerun:
             st.rerun()
-            
+
     except AgentClientError as e:
         st.error(f"Error communicating with server: {e}")
         error_message = ChatMessage(type="ai", content=f"Error: {str(e)}")
         st.session_state.messages.append(error_message)
-        save_message_to_storage(st.session_state.thread_id, error_message)
     except Exception as e:
         st.error(f"Unexpected error: {e}")
         error_message = ChatMessage(type="ai", content=f"Unexpected error: {str(e)}")
         st.session_state.messages.append(error_message)
-        save_message_to_storage(st.session_state.thread_id, error_message)
 
 
 def render_chat_interface() -> None:
@@ -291,53 +250,37 @@ def render_chat_interface() -> None:
     render_header_with_logo()
     render_chat_input_styles()
     
-    # Auto-trigger initial welcome from server when connected and history is empty
-    if (
-        st.session_state.server_connected
-        and st.session_state.client
-        and not st.session_state.messages
-        and not st.session_state.get("welcome_initialized", False)
-    ):
-        intro_message = build_agent_intro_message(st.session_state.client)
-        st.session_state.messages.append(intro_message)
-        save_message_to_storage(st.session_state.thread_id, intro_message)
-        st.session_state.welcome_initialized = True
-        render_message(intro_message, show_system=st.session_state.show_system_messages)
-
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            stream_and_display_response("Start", message_placeholder)
-
     # Display chat history (filter out system messages unless debug mode is enabled)
     for message in st.session_state.messages:
         render_message(message, show_system=st.session_state.show_system_messages)
 
-    # Chat input
-    submission = st.chat_input(**_chat_input_kwargs())
-    if submission is not None:
-        prompt, attachments = _normalize_chat_submission(submission)
-        if not prompt and not attachments:
-            return
-        if not st.session_state.client:
-            st.error("Server not connected. Please check server status in the sidebar.")
-        else:
-            # Add user message
-            user_message = ChatMessage(
-                type="human",
-                content=_format_user_submission(prompt, attachments),
-            )
-            st.session_state.messages.append(user_message)
-            save_message_to_storage(st.session_state.thread_id, user_message)
-            render_message(user_message)
+    # Offer starter topics while the conversation is still empty.
+    starter_prompt: str | None = None
+    if st.session_state.client and not st.session_state.messages:
+        starter_prompt = render_starter_topics()
 
-            # Stream response
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                if attachments:
-                    stream_and_display_response(
-                        prompt,
-                        message_placeholder,
-                        attachments=attachments,
-                    )
-                else:
-                    stream_and_display_response(prompt, message_placeholder)
+    submission = st.chat_input(**_chat_input_kwargs())
+    prompt, attachments = _normalize_chat_submission(submission)
+    if submission is None and starter_prompt:
+        prompt, attachments = starter_prompt, []
+
+    if not prompt and not attachments:
+        return
+    if not st.session_state.client:
+        st.error("The JüNA service is unavailable. Please try again later.")
+        return
+
+    user_message = ChatMessage(
+        type="human",
+        content=_format_user_submission(prompt, attachments),
+    )
+    st.session_state.messages.append(user_message)
+    render_message(user_message)
+
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        stream_and_display_response(
+            prompt,
+            message_placeholder,
+            attachments=attachments or None,
+        )

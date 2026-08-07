@@ -1,10 +1,5 @@
-"""
-Agent registry for managing agent instances.
-
-This module provides functions for creating, retrieving, and restarting agents.
-Supports multiple agent types through a factory pattern. Users must register
-their own agent factories before using agents.
-"""
+"""Registry for the cached JüNA graph and its compatibility aliases."""
+import inspect
 from typing import Any, Callable, Awaitable
 from langgraph.graph.state import CompiledStateGraph
 
@@ -15,12 +10,9 @@ from juena.server.errors import AgentNotFoundError
 
 logger = get_logger(__name__)
 
-# Simple in-memory agent registry
-# Key format: agent_id -> tuple(AgentInstance, CompiledStateGraph)
-# Provider/model are now handled per-invocation via runtime context
-# (with config.configurable kept as a compatibility fallback)
-# Storing both agent instance and app allows us to restart the graph with new config
-DEFAULT_AGENT = "react_agent"
+# Provider/model are handled per invocation via runtime context. The factory's
+# pair only supplies the initial defaults used while the graph is constructed.
+DEFAULT_AGENT = "juena"
 
 # Type alias for agent instance (can be any type)
 AgentInstance = Any
@@ -32,14 +24,17 @@ _agent_registry: dict[str, tuple[AgentInstance, CompiledStateGraph]] = {}
 # Factory function signature: async (provider: str, model: str) -> tuple[AgentInstance, CompiledStateGraph]
 _agent_factories: dict[str, Callable[[str, str], Awaitable[tuple[AgentInstance, CompiledStateGraph]]]] = {}
 
+# Retired agent ids that should still resolve: alias -> canonical agent_id
+_agent_aliases: dict[str, str] = {}
+
 def register_agent_factory(
-    agent_id: str, 
+    agent_id: str,
     factory: Callable[[str, str], Awaitable[tuple[AgentInstance, CompiledStateGraph]]],
     set_as_default: bool = False
 ) -> None:
     """
     Register a factory function for creating agents of a specific type.
-    
+
     Args:
         agent_id: Agent identifier (e.g., "my_agent")
         factory: Async factory function that takes (provider, model) and returns (AgentInstance, CompiledStateGraph)
@@ -47,11 +42,35 @@ def register_agent_factory(
     """
     _agent_factories[agent_id] = factory
     logger.info(f"Registered factory for agent type: {agent_id}")
-    
+
     if set_as_default:
         global DEFAULT_AGENT
         DEFAULT_AGENT = agent_id
         logger.info(f"Set {agent_id} as default agent")
+
+
+def register_agent_alias(alias: str, agent_id: str) -> None:
+    """
+    Make a retired agent id resolve to a current one.
+
+    Aliases are not listed by ``list_registered_agents``: they exist so that
+    clients holding an old id keep working, not to advertise extra agents.
+
+    Args:
+        alias: The retired identifier (e.g., "react_agent")
+        agent_id: The identifier it should resolve to
+    """
+    _agent_aliases[alias] = agent_id
+    logger.info(f"Registered agent alias: {alias} -> {agent_id}")
+
+
+def _resolve_agent_id(agent_id: str) -> str:
+    """Map a possibly-retired agent id onto the agent that serves it."""
+    resolved = _agent_aliases.get(agent_id)
+    if resolved is None:
+        return agent_id
+    logger.debug(f"Resolved legacy agent id {agent_id} -> {resolved}")
+    return resolved
 
 
 def _normalize_provider_model(provider: str | None, model: str | None) -> tuple[str, str]:
@@ -108,9 +127,10 @@ async def get_agent(
     """
     # Normalize provider/model for initial creation (if needed)
     provider, model = _normalize_provider_model(provider, model)
-    
+    agent_id = _resolve_agent_id(agent_id)
+
     logger.info(f"Getting agent: {agent_id} (provider={provider}, model={model} used only for initial creation)")
-    
+
     if agent_id not in _agent_registry:
         # Check if factory is registered for this agent type
         if agent_id not in _agent_factories:
@@ -143,67 +163,29 @@ async def get_agent(
     return _agent_registry[agent_id][1]
 
 
-async def restart_agent(
-    agent_id: str,
-    provider: str | None = None,
-    model: str | None = None
-) -> CompiledStateGraph:
+async def shutdown_agents() -> None:
+    """Release long-lived resources held by cached agents.
+
+    Agent factories may hold network clients (the Context7 MCP session) that
+    stay open for the process lifetime; without this they leak on shutdown.
     """
-    Restart an agent by clearing its state/memory.
-    
-    This function clears conversation state/memory for a fresh start.
-    The graph itself is reused; model selection happens per invocation.
-    
-    Args:
-        agent_id: Agent identifier (e.g., "my_agent")
-        provider: Ignored (kept for backward compatibility). Model selection is per-invocation.
-        model: Ignored (kept for backward compatibility). Model selection is per-invocation.
-    
-    Returns:
-        CompiledStateGraph for the agent (same graph, cleared state)
-        
-    Raises:
-        AgentNotFoundError: If agent_id is not registered
-    """
-    logger.info(f"Restarting agent: {agent_id} (clearing state/memory)")
-    
-    # Check if factory is registered
-    if agent_id not in _agent_factories:
-        logger.error(f"Unknown agent requested: {agent_id}")
-        available_agents = list(_agent_factories.keys())
-        raise AgentNotFoundError(
-            agent_id,
-            details={"available_agents": available_agents}
-        )
-    
-    # If agent exists, clear its state
-    if agent_id in _agent_registry:
-        agent_instance, _ = _agent_registry[agent_id]
-        
-        # Check if agent has restart_with_new_config method
-        if hasattr(agent_instance, 'restart_with_new_config'):
-            # Normalize provider/model for restart_with_new_config
-            provider, model = _normalize_provider_model(provider, model)
-            logger.info(f"Clearing state for {agent_id}")
-            await agent_instance.restart_with_new_config(provider=provider, model=model, clear_state=True)
-            # Update the registry with the new app (same graph, cleared state)
-            _agent_registry[agent_id] = (agent_instance, agent_instance.app)
-            logger.info(f"{agent_id} state cleared successfully")
-        else:
-            # Agent doesn't support restart, recreate it
-            logger.info(f"{agent_id} doesn't support restart, recreating")
-            # Remove old entry
-            del _agent_registry[agent_id]
-            # Create new one (provider/model used for initial default LLM)
-            provider, model = _normalize_provider_model(provider, model)
-            return await get_agent(agent_id, provider=provider, model=model)
-    else:
-        # Agent doesn't exist, create it
-        logger.info(f"Agent not found, creating new {agent_id}")
-        provider, model = _normalize_provider_model(provider, model)
-        return await get_agent(agent_id, provider=provider, model=model)
-    
-    return _agent_registry[agent_id][1]
+    for agent_id, (instance, _graph) in list(_agent_registry.items()):
+        runtime = getattr(instance, "context7_runtime", None)
+        client = getattr(runtime, "client", None)
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is None:
+            continue
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+            logger.info("Closed Context7 MCP client for agent %s", agent_id)
+        except Exception:
+            logger.warning("Failed to close resources for agent %s", agent_id, exc_info=True)
+
+    _agent_registry.clear()
+
+
 def list_registered_agents() -> list[str]:
     """
     List all registered agent IDs.

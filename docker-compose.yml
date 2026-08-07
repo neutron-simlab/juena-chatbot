@@ -1,17 +1,14 @@
 # =============================================================================
 # DOCKER COMPOSE CONFIGURATION FOR juena-chatbot
 # =============================================================================
-# Single configuration file for both development and production.
-#
-# Environment Variables:
-#   - Development: Uses .env file in project root (auto-loaded by docker-compose)
-#   - Production: Uses /etc/juena/.env (set via env_file)
+# Production-oriented base configuration. Local development explicitly merges
+# docker-compose.dev.yml after this file.
 #
 # Usage:
-#   docker-compose up -d          # Start in detached mode
-#   docker-compose up              # Start with logs
-#   docker-compose down            # Stop and remove containers
-#   docker-compose logs -f         # View logs
+#   Development: docker compose -f docker-compose.yml \
+#                  -f docker-compose.dev.yml up -d
+#   Production:  docker compose -f docker-compose.yml \
+#                  --env-file /etc/juena/juena.env up -d
 #
 # Security:
 #   - Never commit .env files with actual secrets
@@ -19,6 +16,25 @@
 # =============================================================================
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-juena}
+      - POSTGRES_USER=${POSTGRES_USER:-juena}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+    volumes:
+      - chatbot-postgres:/var/lib/postgresql/data
+    # Intentionally not published. The development override exposes Postgres
+    # to localhost for integration tests.
+    networks:
+      - chatbot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-juena} -d ${POSTGRES_DB:-juena}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   juena-chatbot:
     build:
       context: .
@@ -28,14 +44,16 @@ services:
     volumes:
       # Mount logs directory for persistence
       - chatbot-logs:/data/logs
-      # Mount database directory for SQLite persistence (checkpoints + chat history)
-      - chatbot-db:/data/db
+      # Preserve pre-cutover anonymous SQLite files as a read-only archive.
+      - chatbot-db:/data/legacy-sqlite:ro
       # Persist cloned repos, vector index, and manifests across restarts
       - chatbot-repos:/data/repos
       - chatbot-vector-index:/data/vector_index
       - chatbot-manifests:/data/manifests
-      # Optional: Mount .env file for development (comment out in production)
-      - ./.env:/app/.env:ro
+      - chatbot-saml:/data/saml
+      # Skills are baked into the image (see Dockerfile). For local authoring,
+      # docker-compose.dev.yml bind-mounts ./skills over them so you can
+      # edit without rebuilding; the image copy is what production runs.
     environment:
       # Server configuration
       - SERVER_HOST=0.0.0.0
@@ -44,7 +62,8 @@ services:
       
       # LLM Provider configuration (from .env)
       - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-openai}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
+      - FALLBACK_PROVIDER=${FALLBACK_PROVIDER:-openai}
+      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL:-gpt-4o-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - BLABLADOR_API_KEY=${BLABLADOR_API_KEY:-}
       - BLABLADOR_BASE_URL=${BLABLADOR_BASE_URL:-}
@@ -69,15 +88,26 @@ services:
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-juena-chatbot}
       
       # Environment settings
-      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/data/logs
       - RELOAD=${RELOAD:-false}
       
-      # Database settings (SQLite)
-      - DB_DIR=/data/db
-      - CHECKPOINT_DB_PATH=/data/db/checkpoints.sqlite
-      - CHAT_DB_PATH=/data/db/chats.sqlite
+      # Durable identity, chat, checkpoints, and long-term memory.
+      - DATABASE_URL=${DATABASE_URL:-}
+      - LEGACY_SQLITE_ARCHIVE_DIR=/data/legacy-sqlite
+
+      # FZJ SAML2 service provider.
+      - SAML_IDP_METADATA_URL=${SAML_IDP_METADATA_URL:-https://ifflogin.fz-juelich.de/saml/idp.xml}
+      - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-}
+      - SAML_SP_ACS_URL=${SAML_SP_ACS_URL:-}
+      - SAML_SP_SLS_URL=${SAML_SP_SLS_URL:-}
+      - SAML_SP_CERT_FILE=${SAML_SP_CERT_FILE:-/data/saml/sp.crt}
+      - SAML_SP_KEY_FILE=${SAML_SP_KEY_FILE:-/data/saml/sp.key}
+      - JUENA_API_INTERNAL_URL=http://localhost:8080
+      - JUENA_PUBLIC_URL=${JUENA_PUBLIC_URL:-}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
+      - SKILLS_DIR=/app/skills
       
       # Code-chat agent settings
       - REPO_CACHE_DIR=/data/repos
@@ -88,12 +118,20 @@ services:
       - "9501:9501"  # Streamlit UI
     networks:
       - chatbot-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    # Repository bootstrap builds several large HNSW indices in one process.
+    # The previous 2 GB cap killed the process part-way through Vitess and left
+    # its Chroma collection unreadable. Keep this configurable for smaller or
+    # larger hosts, but give the documented development/VM setup enough room.
+    mem_limit: ${JUENA_MEMORY_LIMIT:-12G}
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: 2G
+          memory: ${JUENA_MEMORY_LIMIT:-12G}
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -117,6 +155,9 @@ volumes:
   chatbot-db:
     driver: local
     name: juena-chatbot-db
+  chatbot-postgres:
+    driver: local
+    name: juena-chatbot-postgres
   chatbot-repos:
     driver: local
     name: juena-chatbot-repos
@@ -126,6 +167,9 @@ volumes:
   chatbot-manifests:
     driver: local
     name: juena-chatbot-manifests
+  chatbot-saml:
+    driver: local
+    name: juena-chatbot-saml
 
 networks:
   chatbot-network:

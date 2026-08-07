@@ -1,9 +1,10 @@
 import json
-import os
+import weakref
 from collections.abc import AsyncGenerator, Generator, Sequence
 from typing import Any
 
 import httpx
+from httpx_sse import EventSource, SSEError
 
 from juena.schema.llm_models import Provider
 from juena.schema.server import (
@@ -47,6 +48,7 @@ class AgentClient:
         base_url: str = "http://0.0.0.0",
         agent: str | None = None,
         timeout: float | None = None,
+        session_token: str | None = None,
     ) -> None:
         """
         Initialize the client.
@@ -57,15 +59,39 @@ class AgentClient:
             timeout (float, optional): The timeout for requests.
         """
         self.base_url = base_url
-        self.auth_secret = os.getenv("AUTH_SECRET")
         self.timeout = timeout
         self.agent: str | None = agent
+        self.session_token = session_token
+        self._client = httpx.Client()
+        self._client_finalizer = weakref.finalize(self, self._client.close)
+
+    def close(self) -> None:
+        """Close the reusable HTTP connection pool."""
+        if self._client_finalizer.alive:
+            self._client_finalizer()
+
+    def __enter__(self) -> "AgentClient":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def health(self) -> bool:
+        """Return whether the API health endpoint is reachable."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/health",
+                timeout=2.0,
+            )
+            return response.status_code == 200
+        except httpx.HTTPError:
+            return False
 
     @property
     def _headers(self) -> dict[str, str]:
-        headers = {}
-        if self.auth_secret:
-            headers["Authorization"] = f"Bearer {self.auth_secret}"
+        headers: dict[str, str] = {}
+        if self.session_token:
+            headers["Cookie"] = f"juena_session={self.session_token}"
         return headers
 
     def _build_attachment_payloads(
@@ -101,14 +127,11 @@ class AgentClient:
         model: str | None,
         provider: str | Provider | None,
         thread_id: str | None,
-        user_id: str | None,
     ) -> dict[str, str]:
         data = {"message": message}
         provider_value = _provider_value(provider)
         if thread_id:
             data["thread_id"] = thread_id
-        if user_id:
-            data["user_id"] = user_id
         if model:
             data["model"] = model
         if provider_value:
@@ -119,10 +142,108 @@ class AgentClient:
         """Update the agent to use for requests."""
         self.agent = agent
 
+    def get_current_user(self) -> dict[str, Any]:
+        """Return the user associated with the current session cookie."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/auth/me",
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        return response.json()
+
+    def list_agents(self) -> dict[str, Any]:
+        """Return registered agents and the server-side default."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/agents",
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        return response.json()
+
+    def list_chats(self, limit: int = 50) -> list[dict[str, Any]]:
+        """List conversations owned by the authenticated user."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/chats",
+                params={"limit": limit},
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise AgentClientError("Error: Invalid chat-list response from server")
+        return payload
+
+    def create_chat(self, thread_id: str, title: str = "New Chat") -> dict[str, Any]:
+        """Create an authenticated, user-owned conversation."""
+        try:
+            response = self._client.post(
+                f"{self.base_url}/chats",
+                json={"thread_id": thread_id, "title": title},
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        return response.json()
+
+    def get_chat(self, thread_id: str, include_messages: bool = True) -> dict[str, Any] | None:
+        """Load an owned conversation, optionally without its message history."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/chats/{thread_id}",
+                params={"include_messages": include_messages},
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        return response.json()
+
+    def update_chat(
+        self,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Update metadata on an owned conversation."""
+        payload = {
+            key: value
+            for key, value in {"title": title, "summary": summary}.items()
+            if value is not None
+        }
+        try:
+            response = self._client.patch(
+                f"{self.base_url}/chats/{thread_id}",
+                json=payload,
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        return response.json()
+
     def list_repositories(self) -> list[dict[str, Any]]:
         """Return configured repository metadata from the server."""
         try:
-            response = httpx.get(
+            response = self._client.get(
                 f"{self.base_url}/repositories",
                 headers=self._headers,
                 timeout=self.timeout,
@@ -147,8 +268,6 @@ class AgentClient:
         model: str | None = None,
         provider: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
-        agent_config: dict[str, Any] | None = None,
         attachments: Sequence[Any] | None = None,
     ) -> ChatMessage:
         """
@@ -159,8 +278,6 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             provider (str, optional): LLM provider to use (openai or blablador)
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
-            agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
 
         Returns:
             AnyMessage: The response from the agent
@@ -177,7 +294,6 @@ class AgentClient:
                             model,
                             provider,
                             thread_id,
-                            user_id,
                         ),
                         files=self._build_attachment_payloads(attachments),
                         headers=self._headers,
@@ -194,13 +310,9 @@ class AgentClient:
                             request.provider = Provider(provider)
                         else:
                             request.provider = provider
-                    if agent_config:
-                        request.agent_config = agent_config
-                    if user_id:
-                        request.user_id = user_id
                     response = await client.post(
                         f"{self.base_url}/{self.agent}/invoke",
-                        json=request.model_dump(),
+                        json=request.model_dump(exclude_none=True),
                         headers=self._headers,
                         timeout=self.timeout,
                     )
@@ -216,8 +328,6 @@ class AgentClient:
         model: str | None = None,
         provider: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
-        agent_config: dict[str, Any] | None = None,
         attachments: Sequence[Any] | None = None,
     ) -> ChatMessage:
         """
@@ -228,8 +338,6 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             provider (str, optional): LLM provider to use (openai or blablador)
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
-            agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
 
         Returns:
             ChatMessage: The response from the agent
@@ -238,14 +346,13 @@ class AgentClient:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
         try:
             if attachments:
-                response = httpx.post(
+                response = self._client.post(
                     f"{self.base_url}/{self.agent}/invoke_with_files",
                     data=self._build_file_request_data(
                         message,
                         model,
                         provider,
                         thread_id,
-                        user_id,
                     ),
                     files=self._build_attachment_payloads(attachments),
                     headers=self._headers,
@@ -262,13 +369,9 @@ class AgentClient:
                         request.provider = Provider(provider)
                     else:
                         request.provider = provider
-                if agent_config:
-                    request.agent_config = agent_config
-                if user_id:
-                    request.user_id = user_id
-                response = httpx.post(
+                response = self._client.post(
                     f"{self.base_url}/{self.agent}/invoke",
-                    json=request.model_dump(),
+                    json=request.model_dump(exclude_none=True),
                     headers=self._headers,
                     timeout=self.timeout,
                 )
@@ -278,51 +381,90 @@ class AgentClient:
 
         return ChatMessage.model_validate(response.json())
 
-    def _parse_stream_line(self, line: str) -> ChatMessage | str | dict | None:
+    def _parse_sse_data(self, data: str) -> ChatMessage | dict | None:
         """
-        Parse a single SSE line into a normalized message or token.
-        
-        Returns:
-            ChatMessage, normalized token dict, or None
+        Parse one SSE `data` payload into a message, token, or status dict.
+
+        Returns None only for payloads that carry nothing to render; callers
+        must skip those rather than treating them as end-of-stream.
         """
-        line = line.strip()
-        if line.startswith("data: "):
-            data = line[6:]
-            if data == "[DONE]":
-                return None
+        try:
+            parsed = json.loads(data)
+        except ValueError as e:
+            raise AgentClientError(f"Error JSON parsing message from server: {e}")
+
+        parsed_type = parsed.get("type", "")
+
+        if parsed_type == "message":
             try:
-                parsed = json.loads(data)
+                return ChatMessage.model_validate(parsed["content"])
             except Exception as e:
-                raise Exception(f"Error JSON parsing message from server: {e}")
-            
-            parsed_type = parsed.get("type", "")
-            
-            # Handle complete messages
-            if parsed_type == "message":
-                try:
-                    return ChatMessage.model_validate(parsed["content"])
-                except Exception as e:
-                    raise Exception(f"Server returned invalid message: {e}")
-            
-            # Handle errors
-            elif parsed_type == "error":
-                error_msg = "Error: " + parsed.get("content", "Unknown error")
-                return ChatMessage(type="ai", content=error_msg)
-            
-            # Thread ID for conversation persistence (sent first in stream; use for follow-up)
-            elif parsed_type == "thread":
-                return {"type": "thread", "thread_id": parsed.get("thread_id", "")}
-            
-            # Token streaming
-            elif parsed_type == "token" or parsed_type.startswith("token"):
-                content = parsed.get("content", "")
-                return {"type": "token", "content": content}
-            
-            # Fallback for unknown types
-            else:
-                return {"type": "unknown", "content": parsed.get("content", str(parsed))}
-        
-        return None
+                raise AgentClientError(f"Server returned invalid message: {e}")
+
+        if parsed_type == "error":
+            return ChatMessage(type="ai", content="Error: " + parsed.get("content", "Unknown error"))
+
+        if parsed_type == "thread":
+            return {"type": "thread", "thread_id": parsed.get("thread_id", "")}
+
+        if parsed_type == "token":
+            return {"type": "token", "content": parsed.get("content", "")}
+
+        if parsed_type == "status":
+            return {
+                "type": "status",
+                "phase": parsed.get("phase", ""),
+                "label": parsed.get("label", ""),
+                "tool": parsed.get("tool"),
+                "summary": parsed.get("summary"),
+            }
+
+        return {"type": "unknown", "content": parsed.get("content", str(parsed))}
+
+    def _build_stream_request(
+        self,
+        message: str,
+        model: str | None,
+        provider: str | None,
+        thread_id: str | None,
+        attachments: Sequence[Any] | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build the URL and httpx kwargs shared by `stream` and `astream`."""
+        if not self.agent:
+            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+
+        stream_kwargs: dict[str, Any] = {
+            "headers": self._headers,
+            # A streamed response may legitimately stay open while the agent
+            # works, but connection setup and writes must still be bounded.
+            "timeout": (
+                httpx.Timeout(
+                    connect=self.timeout,
+                    read=None,
+                    write=self.timeout,
+                    pool=self.timeout,
+                )
+                if self.timeout is not None
+                else None
+            ),
+        }
+
+        if attachments:
+            stream_kwargs["data"] = self._build_file_request_data(
+                message, model, provider, thread_id
+            )
+            stream_kwargs["files"] = self._build_attachment_payloads(attachments)
+            return f"{self.base_url}/{self.agent}/stream_with_files", stream_kwargs
+
+        request = StreamInput(message=message)
+        if thread_id:
+            request.thread_id = thread_id
+        if model:
+            request.model = model  # type: ignore[assignment]
+        if provider:
+            request.provider = Provider(provider) if isinstance(provider, str) else provider
+        stream_kwargs["json"] = request.model_dump(exclude_none=True)
+        return f"{self.base_url}/{self.agent}/stream", stream_kwargs
 
     def stream(
         self,
@@ -330,76 +472,38 @@ class AgentClient:
         model: str | None = None,
         provider: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
-        agent_config: dict[str, Any] | None = None,
         attachments: Sequence[Any] | None = None,
-        stream_tokens: bool = True,
-    ) -> Generator[ChatMessage | str | dict, None, None]:
+    ) -> Generator[ChatMessage | dict, None, None]:
         """
         Stream the agent's response synchronously.
 
-        Each intermediate message of the agent process is yielded as a ChatMessage.
-        If stream_tokens is True (the default value), the response will also yield
-        content tokens from streaming models as they are generated.
+        Yields complete messages as `ChatMessage`, and `token`/`status`/`thread`
+        dicts as the run progresses.
 
         Args:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             provider (str, optional): LLM provider to use (openai or blablador)
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
-            agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
-            stream_tokens (bool, optional): Stream tokens as they are generated
-                Default: True
+            attachments (Sequence, optional): Files to stage for this turn
 
         Returns:
-            Generator[ChatMessage | str | dict, None, None]: The response from the agent
+            Generator[ChatMessage | dict, None, None]: The response from the agent
         """
-        if not self.agent:
-            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        url, stream_kwargs = self._build_stream_request(
+            message, model, provider, thread_id, attachments
+        )
         try:
-            stream_kwargs: dict[str, Any] = {
-                "headers": self._headers,
-                "timeout": self.timeout,
-            }
-            if attachments:
-                stream_kwargs["data"] = self._build_file_request_data(
-                    message,
-                    model,
-                    provider,
-                    thread_id,
-                    user_id,
-                )
-                stream_kwargs["files"] = self._build_attachment_payloads(attachments)
-                url = f"{self.base_url}/{self.agent}/stream_with_files"
-            else:
-                request = StreamInput(message=message, stream_tokens=stream_tokens)
-                if thread_id:
-                    request.thread_id = thread_id
-                if user_id:
-                    request.user_id = user_id
-                if model:
-                    request.model = model  # type: ignore[assignment]
-                if provider:
-                    if isinstance(provider, str):
-                        request.provider = Provider(provider)
-                    else:
-                        request.provider = provider
-                if agent_config:
-                    request.agent_config = agent_config
-                stream_kwargs["json"] = request.model_dump()
-                url = f"{self.base_url}/{self.agent}/stream"
-
-            with httpx.stream("POST", url, **stream_kwargs) as response:
+            with self._client.stream("POST", url, **stream_kwargs) as response:
                 response.raise_for_status()
-                for line in response.iter_lines():
-                    if line.strip():
-                        parsed = self._parse_stream_line(line)
-                        if parsed is None:
-                            break
+                for sse in EventSource(response).iter_sse():
+                    parsed = self._parse_sse_data(sse.data)
+                    if parsed is not None:
                         yield parsed
         except httpx.HTTPError as e:
             raise AgentClientError(_http_error_message(e))
+        except SSEError as e:
+            raise AgentClientError(f"Error: {e}")
 
     async def astream(
         self,
@@ -407,76 +511,38 @@ class AgentClient:
         model: str | None = None,
         provider: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
-        agent_config: dict[str, Any] | None = None,
         attachments: Sequence[Any] | None = None,
-        stream_tokens: bool = True,
-    ) -> AsyncGenerator[ChatMessage | str | dict, None]:
+    ) -> AsyncGenerator[ChatMessage | dict, None]:
         """
         Stream the agent's response asynchronously.
 
-        Each intermediate message of the agent process is yielded as an AnyMessage.
-        If stream_tokens is True (the default value), the response will also yield
-        content tokens from streaming models as they are generated.
+        Async twin of `stream`; see it for the yielded shapes.
 
         Args:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             provider (str, optional): LLM provider to use (openai or blablador)
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
-            agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
-            stream_tokens (bool, optional): Stream tokens as they are generated
-                Default: True
+            attachments (Sequence, optional): Files to stage for this turn
 
         Returns:
-            AsyncGenerator[ChatMessage | str | dict, None]: The response from the agent
+            AsyncGenerator[ChatMessage | dict, None]: The response from the agent
         """
-        if not self.agent:
-            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        url, stream_kwargs = self._build_stream_request(
+            message, model, provider, thread_id, attachments
+        )
         async with httpx.AsyncClient() as client:
             try:
-                stream_kwargs: dict[str, Any] = {
-                    "headers": self._headers,
-                    "timeout": self.timeout,
-                }
-                if attachments:
-                    stream_kwargs["data"] = self._build_file_request_data(
-                        message,
-                        model,
-                        provider,
-                        thread_id,
-                        user_id,
-                    )
-                    stream_kwargs["files"] = self._build_attachment_payloads(attachments)
-                    url = f"{self.base_url}/{self.agent}/stream_with_files"
-                else:
-                    request = StreamInput(message=message, stream_tokens=stream_tokens)
-                    if thread_id:
-                        request.thread_id = thread_id
-                    if model:
-                        request.model = model  # type: ignore[assignment]
-                    if provider:
-                        if isinstance(provider, str):
-                            request.provider = Provider(provider)
-                        else:
-                            request.provider = provider
-                    if agent_config:
-                        request.agent_config = agent_config
-                    if user_id:
-                        request.user_id = user_id
-                    stream_kwargs["json"] = request.model_dump()
-                    url = f"{self.base_url}/{self.agent}/stream"
                 async with client.stream("POST", url, **stream_kwargs) as response:
                     response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.strip():
-                            parsed = self._parse_stream_line(line)
-                            if parsed is None:
-                                break
+                    async for sse in EventSource(response).aiter_sse():
+                        parsed = self._parse_sse_data(sse.data)
+                        if parsed is not None:
                             yield parsed
             except httpx.HTTPError as e:
                 raise AgentClientError(_http_error_message(e))
+            except SSEError as e:
+                raise AgentClientError(f"Error: {e}")
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """
@@ -515,7 +581,7 @@ class AgentClient:
         """Delete all persisted server-side state for a conversation thread."""
 
         try:
-            response = httpx.delete(
+            response = self._client.delete(
                 f"{self.base_url}/threads/{thread_id}",
                 headers=self._headers,
                 timeout=self.timeout,
@@ -524,45 +590,4 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(_http_error_message(e))
 
-        return response.json()
-    
-    def restart(
-        self,
-        model: str | None = None,
-        provider: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Restart the agent with new provider/model configuration.
-        
-        This method forces reinitialization of the agent graph with new LLM configuration,
-        similar to refreshing the web page but keeping the new provider/model.
-        
-        Args:
-            model (str, optional): New LLM model name to use
-            provider (str, optional): New LLM provider to use (openai or blablador)
-        
-        Returns:
-            dict: Dictionary with restart status and agent info
-        """
-        if not self.agent:
-            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        
-        # Build query parameters
-        params: dict[str, str] = {}
-        if model:
-            params["model"] = model
-        if provider:
-            params["provider"] = provider
-        
-        try:
-            response = httpx.post(
-                f"{self.base_url}/{self.agent}/restart",
-                params=params,
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise AgentClientError(f"Error restarting agent: {e}")
-        
         return response.json()

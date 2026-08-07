@@ -8,6 +8,7 @@ import streamlit as st
 from uuid import uuid4
 from pathlib import Path
 import sys
+from urllib.parse import urlencode
 
 # Add parent directory to path to import juena modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,8 +20,9 @@ from juena.core.llms_providers import get_available_providers, get_default_model
 # Import UI modules
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
-from app.file_management import check_server_health, initialize_client
-from app.chat_storage import get_chat_storage, Chat
+from juena.server.agent_registry import DEFAULT_AGENT
+from app.file_management import initialize_client
+from app.chat_storage import get_chat_storage
 
 # Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
@@ -34,24 +36,62 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize session state
+# Establish the private backend client and authenticate before initializing chat state.
+session_token = st.context.cookies.get("juena_session")
+internal_api_url = global_config.JUENA_API_INTERNAL_URL.rstrip("/")
+client = st.session_state.get("client")
+if (
+    client is None
+    or client.base_url != internal_api_url
+    or client.session_token != session_token
+):
+    if client is not None:
+        client.close()
+    client = initialize_client(
+        internal_api_url,
+        agent_id=DEFAULT_AGENT,
+        session_token=session_token,
+    )
+    st.session_state.client = client
+
+if not client.health():
+    st.error("The JüNA service is unavailable. Please try again later.")
+    st.stop()
+
+_login_route = "/auth/dev-login" if global_config.AUTH_DEV_BYPASS else "/auth/login"
+_login_query = urlencode({"return_to": global_config.UI_PUBLIC_URL})
+login_url = f"{global_config.JUENA_PUBLIC_URL.rstrip('/')}{_login_route}?{_login_query}"
+if not session_token:
+    if global_config.AUTH_DEV_BYPASS:
+        st.warning(
+            "Development mode: authentication is bypassed. Anyone reaching this "
+            "page is signed in as the local developer account."
+        )
+        st.link_button("Sign in (development)", login_url, type="primary")
+    else:
+        st.info("Sign in with your Forschungszentrum Jülich account to use JüNA.")
+        st.link_button("Sign in with FZJ", login_url, type="primary")
+    st.stop()
+
+try:
+    current_user = client.get_current_user()
+except Exception:
+    st.warning("Your JüNA session is missing or has expired.")
+    st.link_button("Sign in again", login_url, type="primary")
+    st.stop()
+
+st.session_state.session_token = session_token
+st.session_state.user = current_user
+
+# Initialize authenticated session state.
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# The active thread lives in the URL, not only in st.session_state: session
+# state is per-Streamlit-session, so a browser reload would otherwise start a
+# brand new conversation every time.
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid4())
-
-if "user_id" not in st.session_state:
-    st.session_state.user_id = str(uuid4())
-
-if "server_url" not in st.session_state:
-    st.session_state.server_url = "http://localhost:8080"
-
-if "client" not in st.session_state:
-    st.session_state.client = None
-
-if "server_connected" not in st.session_state:
-    st.session_state.server_connected = False
+    st.session_state.thread_id = st.query_params.get("thread") or str(uuid4())
 
 if "show_system_messages" not in st.session_state:
     st.session_state.show_system_messages = False
@@ -74,41 +114,26 @@ if "selected_model" not in st.session_state:
     # Initialize model based on selected provider using registry
     st.session_state.selected_model = get_default_model(st.session_state.selected_provider) or "gpt-4o-mini"
 
-if "selected_agent" not in st.session_state:
-    st.session_state.selected_agent = "react_agent"
+# Initialize the remote, user-owned chat storage adapter.
+st.session_state.chat_storage = get_chat_storage(client)
 
-# Initialize chat storage
-if "chat_storage" not in st.session_state:
-    st.session_state.chat_storage = get_chat_storage()
-
-# Create or load current chat on first run
+# Resume the thread named in the URL, if it exists and is ours. A thread that
+# has no row yet is simply an unsent conversation: the row is created server
+# side by the first invocation, so reloading an empty chat never leaves a
+# stray "Chat f84f216a" behind in the sidebar.
 if "chat_initialized" not in st.session_state:
-    storage = st.session_state.chat_storage
-    
-    # Create a new chat entry for the current thread
-    existing_chat = storage.get_chat(st.session_state.thread_id)
-    if existing_chat is None:
-        new_chat = Chat(thread_id=st.session_state.thread_id)
-        storage.upsert_chat(new_chat)
-    else:
-        # Load existing messages if resuming a chat
-        st.session_state.messages = storage.load_messages(st.session_state.thread_id)
-    
+    loaded = st.session_state.chat_storage.load_chat_with_messages(
+        st.session_state.thread_id
+    )
+    if loaded is not None:
+        _, st.session_state.messages = loaded
+        st.session_state.welcome_initialized = True
     st.session_state.chat_initialized = True
 
-# Auto-connect to server on app load (only check once per session)
-if not hasattr(st.session_state, '_health_checked'):
-    st.session_state.server_connected = check_server_health(st.session_state.server_url)
-    if st.session_state.server_connected:
-        st.session_state.client = initialize_client(
-            st.session_state.server_url,
-            agent_id=st.session_state.selected_agent,
-        )
-        if st.session_state.client is None:
-            st.session_state.server_connected = False
-    else:
-        st.session_state.client = None
-    st.session_state._health_checked = True
+# Keep the address bar in step with the active conversation so reloads and
+# bookmarks return to it.
+if st.query_params.get("thread") != st.session_state.thread_id:
+    st.query_params["thread"] = st.session_state.thread_id
 
 # Render sidebar
 render_sidebar()

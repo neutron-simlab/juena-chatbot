@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from chromadb.errors import InternalError
 from chromadb.api.types import DefaultEmbeddingFunction
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
@@ -49,12 +50,35 @@ def test_build_index_uses_same_chunk_pipeline_as_file_updates(repo_config_path: 
 
 
 def test_semantic_search(repo_config_path: Path):
-    _, vi = _make_index(repo_config_path)
+    mgr, vi = _make_index(repo_config_path)
     vi.build_index("fake-repo", force=True)
     hits = vi.search("fake-repo", "greeting function", n_results=3)
     assert len(hits) > 0
     assert all("file_path" in h for h in hits)
     assert all("content" in h for h in hits)
+    assert all("start_index" in h and "end_index" in h for h in hits)
+    for hit in hits:
+        source = mgr.read_file("fake-repo", hit["file_path"])
+        assert source[hit["start_index"]:hit["end_index"]] == hit["content"]
+
+
+def test_old_index_schema_forces_one_rebuild(repo_config_path: Path) -> None:
+    mgr, vi = _make_index(repo_config_path)
+    revision = mgr.current_revision("fake-repo")
+    vi.build_index("fake-repo", force=True, repo_revision=revision)
+
+    collection = vi._get_collection_if_exists("fake-repo")
+    assert collection is not None
+    collection.modify(
+        metadata={
+            **(collection.metadata or {}),
+            vector_index_module._INDEX_META_SCHEMA_VERSION: 1,
+        }
+    )
+    assert vi.index_staleness_reason("fake-repo", revision) == "index metadata missing or outdated"
+
+    vi.build_index("fake-repo", force=True, repo_revision=revision)
+    assert vi.index_staleness_reason("fake-repo", revision) is None
 
 
 def test_search_rejects_unknown_repo_before_chroma_collection_creation(repo_config_path: Path) -> None:
@@ -86,6 +110,26 @@ def test_index_staleness_reason_is_clear_for_matching_revision(repo_config_path:
     vi.build_index("fake-repo", force=True, repo_revision=revision)
 
     assert vi.index_staleness_reason("fake-repo", revision) is None
+
+
+def test_unreadable_collection_is_rebuilt_instead_of_crashing_bootstrap(
+    repo_config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mgr, vi = _make_index(repo_config_path)
+    revision = mgr.current_revision("fake-repo")
+
+    class UnreadableCollection:
+        def count(self) -> int:
+            raise InternalError("broken HNSW segment")
+
+    monkeypatch.setattr(
+        vi,
+        "_get_collection_if_exists",
+        lambda _repo_id: UnreadableCollection(),
+    )
+
+    assert vi.index_staleness_reason("fake-repo", revision) == "vector index unreadable"
 
 
 def test_index_staleness_reason_detects_revision_changes(

@@ -19,7 +19,7 @@ import yaml
 from juena.core.log import get_logger
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
-from juena.retrieval.hybrid_search import hybrid_search
+from juena.retrieval.semantic_search import semantic_search
 
 logger = get_logger(__name__)
 
@@ -96,7 +96,7 @@ def _run_hybrid(
     query: str,
     k: int,
 ) -> list[str]:
-    hits = hybrid_search(
+    hits = semantic_search(
         vector_index, repo_id, query,
         max_results=k,
     )

@@ -279,6 +279,18 @@ def test_validate_bootstrap_ready_requires_local_repos_and_indices() -> None:
         bootstrap.validate_bootstrap_ready(StubRepoManager(), StubVectorIndex())
 
 
+def test_describe_bootstrap_problems_rejects_empty_repository_configuration() -> None:
+    class StubRepoManager:
+        repo_ids: list[str] = []
+
+    class StubVectorIndex:
+        pass
+
+    assert bootstrap.describe_bootstrap_problems(
+        StubRepoManager(), StubVectorIndex()
+    ) == ["no repositories configured"]
+
+
 def test_incremental_reindex_updates_vector_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,68 +1,43 @@
-"""
-SQLite checkpointer for LangGraph agents.
+"""Lifecycle-managed Postgres checkpointer for thread-scoped agent state."""
 
-This module provides a singleton AsyncSqliteSaver instance that persists
-conversation state across sessions using SQLite. The async saver is required
-because the FastAPI server uses async methods (astream, aget_state).
-"""
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from juena.core.config import global_config
 from juena.core.log import get_logger
+from juena.server.database import get_pool
 
 logger = get_logger(__name__)
 
-# Singleton checkpointer instance (set during lifespan)
-_checkpointer: Optional[AsyncSqliteSaver] = None
+_checkpointer: AsyncPostgresSaver | None = None
 
 
-def get_checkpointer() -> AsyncSqliteSaver:
-    """
-    Get the singleton AsyncSqliteSaver instance.
-
-    Must be called after the app lifespan has started (checkpointer is
-    initialized in FastAPI lifespan).
-
-    Returns:
-        AsyncSqliteSaver instance for LangGraph checkpoint persistence
-
-    Raises:
-        RuntimeError: If called before lifespan has initialized the checkpointer
-    """
+def get_checkpointer() -> AsyncPostgresSaver:
     if _checkpointer is None:
         raise RuntimeError(
-            "Checkpointer not initialized. Ensure the FastAPI app lifespan has started."
+            "Checkpointer not initialized. Ensure the FastAPI lifespan has started."
         )
     return _checkpointer
 
 
 @asynccontextmanager
-async def checkpointer_lifespan():
-    """
-    Async context manager for initializing and closing the SQLite checkpointer.
+async def checkpointer_lifespan() -> AsyncGenerator[AsyncPostgresSaver, None]:
+    """Migrate and expose the checkpointer over the shared psycopg pool.
 
-    Use this in the FastAPI lifespan. The checkpointer remains open for the
-    duration of the app and is closed on shutdown.
-
-    Example:
-        @asynccontextmanager
-        async def lifespan(app: FastAPI):
-            async with checkpointer_lifespan():
-                yield
+    Must be entered inside ``database_lifespan``, which owns the pool.
     """
+
     global _checkpointer
 
-    db_path = global_config.CHECKPOINT_DB_PATH
-    logger.info("Initializing AsyncSqliteSaver at: %s", db_path)
-
-    async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
-        _checkpointer = saver
-        logger.info("AsyncSqliteSaver initialized successfully")
-        try:
-            yield saver
-        finally:
-            _checkpointer = None
-            logger.info("AsyncSqliteSaver closed")
+    logger.info("Initializing AsyncPostgresSaver")
+    saver = AsyncPostgresSaver(get_pool())
+    await saver.setup()
+    _checkpointer = saver
+    try:
+        yield saver
+    finally:
+        _checkpointer = None
+        logger.info("AsyncPostgresSaver released")

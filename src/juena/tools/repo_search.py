@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from juena.retrieval.hybrid_search import hybrid_search
+from juena.retrieval.semantic_search import semantic_search
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
 
@@ -75,7 +75,7 @@ def _unknown_repo_response(repo_manager: RepoManager, repo_id: str) -> str:
             "available_repo_ids": repo_ids,
             "suggested_repo_ids": suggestions,
         },
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -119,6 +119,8 @@ def _serialize_vector_hit(repo_id: str, hit: dict) -> dict:
         "file_path": file_path,
         "path": _repo_virtual_path(repo_id, file_path),
         "chunk_index": hit.get("chunk_index", 0),
+        "start_index": hit.get("start_index", 0),
+        "end_index": hit.get("end_index", 0),
         "is_doc": hit.get("is_doc", False),
         "distance": hit.get("distance"),
         "char_count": len(content),
@@ -140,14 +142,14 @@ def _search_code_semantic(
             query,
             n_results=n_results,
         )
-        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], indent=2)
+        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], separators=(",", ":"))
 
     resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
     if resolved_repo_id is None:
         return _unknown_repo_response(repo_manager, repo_id)
 
     hits = vector_index.search(resolved_repo_id, query, n_results=n_results)
-    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], indent=2)
+    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], separators=(",", ":"))
 
 
 def _search_code_hybrid(
@@ -172,19 +174,21 @@ def _search_code_hybrid(
                     "path": _repo_virtual_path(str(h["repo_id"]), str(h.get("file_path", ""))),
                     "is_doc": h.get("is_doc", False),
                     "semantic_rank": rank,
+                    "start_index": h.get("start_index", 0),
+                    "end_index": h.get("end_index", 0),
                     "char_count": len(str(h.get("content", ""))),
                     "preview": _compact_preview(str(h.get("content", ""))),
                 }
                 for rank, h in enumerate(hits)
             ],
-            indent=2,
+            separators=(",", ":"),
         )
 
     resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
     if resolved_repo_id is None:
         return _unknown_repo_response(repo_manager, repo_id)
 
-    hits = hybrid_search(vector_index, resolved_repo_id, query, max_results=max_results)
+    hits = semantic_search(vector_index, resolved_repo_id, query, max_results=max_results)
     return json.dumps(
         [
             {
@@ -193,12 +197,14 @@ def _search_code_hybrid(
                 "path": _repo_virtual_path(resolved_repo_id, h.file_path),
                 "is_doc": h.is_doc,
                 "semantic_rank": h.semantic_rank,
+                "start_index": h.start_index,
+                "end_index": h.end_index,
                 "char_count": len(h.content),
                 "preview": _compact_preview(h.content),
             }
             for h in hits
         ],
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -217,7 +223,7 @@ def _search_docs_local(
             n_results=max_results,
             where={"is_doc": True},
         )
-        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], indent=2)
+        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], separators=(",", ":"))
 
     resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
     if resolved_repo_id is None:
@@ -229,7 +235,7 @@ def _search_docs_local(
         n_results=max_results,
         where={"is_doc": True},
     )
-    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], indent=2)
+    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], separators=(",", ":"))
 
 
 def build_code_chat_tools(
@@ -276,8 +282,10 @@ def build_code_chat_tools(
         """Default search tool -- semantic embedding search over the indexed
         repositories.
 
-        Use this as the primary search for all repository questions.  It works
-        for conceptual queries, symbol lookups, and everything in between. Treat
+        Use this as the primary search for all repository questions. It matches
+        on meaning, so it is strong for conceptual queries and approximate
+        symbol lookups, but it is NOT exact-string search -- use grep for
+        literal tokens, config keys, and call sites. Treat
         results as candidate paths and previews, not final evidence. After a
         relevant hit, call read_file on the returned /repos/... path for exact
         line-numbered evidence, and use grep/glob to follow symbols or files.
@@ -287,7 +295,7 @@ def build_code_chat_tools(
         Args:
             repo_id: Repository identifier visible under /repos/<repo_id>/, or
                 "all" to search all indexed repositories.
-            query: Search query - works for both exact strings and concepts.
+            query: Search query - matched semantically, not literally.
             max_results: Maximum results to return.
 
         Returns a JSON array of hits with repo_id, file_path, path, preview,

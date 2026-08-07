@@ -6,6 +6,7 @@ import io
 from types import SimpleNamespace
 
 import pytest
+from deepagents.backends.utils import file_data_to_string
 from starlette.datastructures import Headers, UploadFile
 
 from juena.server import code_chat_inputs
@@ -69,13 +70,24 @@ async def test_prepare_code_chat_turn_inputs_preserves_thread_uploads_and_clears
             return SimpleNamespace(
                 values={
                     "files": {
-                        "/inputs/old.txt": {"content": ["old"], "created_at": "c", "modified_at": "m"},
-                        "/inputs/uploads/kept.py": {
-                            "content": ["print('kept')"],
+                        "/inputs/old.txt": {
+                            "content": "old",
+                            "encoding": "utf-8",
                             "created_at": "c",
                             "modified_at": "m",
                         },
-                        "/unrelated.txt": {"content": ["keep"], "created_at": "c", "modified_at": "m"},
+                        "/inputs/uploads/kept.py": {
+                            "content": "print('kept')",
+                            "encoding": "utf-8",
+                            "created_at": "c",
+                            "modified_at": "m",
+                        },
+                        "/unrelated.txt": {
+                            "content": "keep",
+                            "encoding": "utf-8",
+                            "created_at": "c",
+                            "modified_at": "m",
+                        },
                     }
                 }
             )
@@ -103,7 +115,9 @@ async def test_prepare_code_chat_turn_inputs_preserves_thread_uploads_and_clears
     assert "/inputs/current_error.txt" in prepared.files_update
     assert "/inputs/uploads/extra.log" in prepared.files_update
     assert "/inputs/uploads_manifest.md" in prepared.files_update
-    manifest_text = "\n".join(prepared.files_update["/inputs/uploads_manifest.md"]["content"])
+    manifest_text = file_data_to_string(
+        prepared.files_update["/inputs/uploads_manifest.md"]
+    )
     assert "/inputs/uploads/kept.py" in manifest_text
     assert "/inputs/uploads/extra.log" in manifest_text
     assert "Inspect `/inputs` before answering." in prepared.message_override
@@ -119,16 +133,17 @@ async def test_prepare_code_chat_turn_inputs_reminds_about_existing_thread_uploa
                 values={
                     "files": {
                         "/inputs/uploads/snippet.py": {
-                            "content": ["print('hello')"],
+                            "content": "print('hello')",
+                            "encoding": "utf-8",
                             "created_at": "c",
                             "modified_at": "m",
                         },
                         "/inputs/uploads_manifest.md": {
-                            "content": [
-                                "# Persistent chat uploads",
-                                "",
-                                "1. `/inputs/uploads/snippet.py` (from snippet.py, 14 chars)",
-                            ],
+                            "content": (
+                                "# Persistent chat uploads\n\n"
+                                "1. `/inputs/uploads/snippet.py` (from snippet.py, 14 chars)"
+                            ),
+                            "encoding": "utf-8",
                             "created_at": "c",
                             "modified_at": "m",
                         },

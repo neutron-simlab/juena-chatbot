@@ -1,31 +1,33 @@
 """
-Chunking abstraction with Chonkie adapter and post-chunk enrichment.
+Chunking abstraction with a Chonkie adapter.
 
 Provides a normalized ``IndexChunk`` model that the rest of the codebase
-depends on.  Chonkie is used as the parser-backed backend for Python and
-Markdown; other languages fall back to the existing generic
-``RecursiveCharacterTextSplitter``.
+depends on. Chonkie is the parser-backed backend for Python and Markdown;
+everything else uses ``RecursiveCharacterTextSplitter``, with language-aware
+separators wherever langchain ships them.
 """
 
 from __future__ import annotations
 
-import bisect
 import hashlib
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from juena.core.log import get_logger
 
 logger = get_logger(__name__)
 
+# Increment whenever chunk boundaries or offset semantics change. The vector
+# index fingerprints this value so an existing collection is rebuilt once.
+CHUNKING_VERSION = 2
+
 _LANGUAGE_BY_EXT: dict[str, str] = {
     ".py": "python",
     ".md": "markdown",
-    ".rst": "markdown",
+    ".rst": "rst",
     ".c": "c",
     ".h": "c",
     ".cc": "cpp",
@@ -51,10 +53,26 @@ _LANGUAGE_BY_EXT: dict[str, str] = {
 
 _CHONKIE_LANGUAGES = {"python", "markdown"}
 
+# Languages for which langchain ships syntax-aware separators. Anything absent
+# here (notably Fortran, which has no Language member) uses the plain
+# recursive splitter.
+_LANGCHAIN_LANGUAGE_BY_NAME: dict[str, Language] = {
+    "python": Language.PYTHON,
+    "markdown": Language.MARKDOWN,
+    "rst": Language.RST,
+    "c": Language.C,
+    "cpp": Language.CPP,
+}
+
 
 @dataclass
 class IndexChunk:
-    """Normalized chunk emitted by the chunking layer."""
+    """Normalized chunk emitted by the chunking layer.
+
+    Fields for symbol/path-token enrichment were removed because they were
+    leftovers from a sparse retriever that no longer exists. Character offsets
+    remain part of the persisted retrieval contract.
+    """
 
     text: str
     file_path: str
@@ -64,24 +82,11 @@ class IndexChunk:
     is_doc: bool
     start_index: int = 0
     end_index: int = 0
-    symbol: str = ""
-    symbol_type: str = ""
-    path_tokens: List[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-def _path_tokens(rel_path: str) -> list[str]:
-    parts = Path(rel_path).parts
-    stem = Path(rel_path).stem
-    tokens = list(parts[:-1]) + [stem]
-    expanded: list[str] = []
-    for t in tokens:
-        expanded.extend(re.split(r"[_\-./]", t))
-    return [tok.lower() for tok in expanded if tok]
 
 
 def _detect_language(rel_path: str) -> str:
@@ -132,35 +137,51 @@ def _chonkie_chunk(
 # Generic fallback
 # ------------------------------------------------------------------
 
+def _make_splitter(
+    language: str,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> RecursiveCharacterTextSplitter:
+    """Build a splitter, syntax-aware when langchain knows the language.
+
+    ``add_start_index`` makes the splitter report each chunk's exact offset in
+    the source, which is the only reliable way to get it: searching for the
+    chunk text afterwards fails whenever the splitter strips whitespace.
+    """
+    kwargs: dict[str, Any] = {
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "length_function": len,
+        "add_start_index": True,
+    }
+
+    lc_language = _LANGCHAIN_LANGUAGE_BY_NAME.get(language)
+    if lc_language is not None:
+        return RecursiveCharacterTextSplitter.from_language(lc_language, **kwargs)
+    return RecursiveCharacterTextSplitter(**kwargs)
+
+
 def _generic_chunk(
     source: str,
+    language: str,
     chunk_size: int,
     chunk_overlap: int,
 ) -> list[dict[str, Any]]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-    )
-    texts = splitter.split_text(source)
-    result: list[dict[str, Any]] = []
-    offset = 0
-    for t in texts:
-        idx = source.find(t, offset)
-        if idx == -1:
-            idx = offset
-        result.append({
-            "text": t,
-            "start_index": idx,
-            "end_index": idx + len(t),
-            "token_count": len(t),
-        })
-        offset = idx + 1
-    return result
+    splitter = _make_splitter(language, chunk_size, chunk_overlap)
+    return [
+        {
+            "text": doc.page_content,
+            "start_index": doc.metadata.get("start_index", 0),
+            "end_index": doc.metadata.get("start_index", 0) + len(doc.page_content),
+            "token_count": len(doc.page_content),
+        }
+        for doc in splitter.create_documents([source])
+    ]
 
 
 def _split_oversized_chunks(
     chunks: list[dict[str, Any]],
+    language: str,
     chunk_size: int,
     chunk_overlap: int,
 ) -> list[dict[str, Any]]:
@@ -176,70 +197,14 @@ def _split_oversized_chunks(
             continue
 
         parent_start = chunk.get("start_index", 0)
-        for child in _generic_chunk(text, chunk_size, safe_overlap):
-            start_index = parent_start + child["start_index"]
+        for child in _generic_chunk(text, language, chunk_size, safe_overlap):
             capped.append({
                 **child,
-                "start_index": start_index,
+                "start_index": parent_start + child["start_index"],
                 "end_index": parent_start + child["end_index"],
             })
 
     return capped
-
-
-# ------------------------------------------------------------------
-# Enrichment
-# ------------------------------------------------------------------
-
-def _build_python_symbol_index(source: str) -> list[tuple[int, int, str, str]]:
-    """Parse the file once and index (start_line, end_line, name, type) for
-    every function/class definition, keyed by 1-indexed source line."""
-    import ast
-
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-
-    index: list[tuple[int, int, str, str]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            end_lineno = getattr(node, "end_lineno", None)
-            if end_lineno is None:
-                continue
-            kind = "class" if isinstance(node, ast.ClassDef) else "function"
-            index.append((node.lineno, end_lineno, node.name, kind))
-
-    return index
-
-
-def _line_start_offsets(source: str) -> list[int]:
-    """offsets[i] is the character offset where line i+1 (1-indexed) starts."""
-    offsets = [0]
-    for line in source.splitlines(keepends=True):
-        offsets.append(offsets[-1] + len(line))
-    return offsets
-
-
-def _symbol_at_offset(
-    symbol_index: list[tuple[int, int, str, str]],
-    line_offsets: list[int],
-    start: int,
-) -> tuple[str, str]:
-    """Find the innermost function/class enclosing a character offset."""
-    if not symbol_index:
-        return "", ""
-
-    line = bisect.bisect_right(line_offsets, start)
-    best: tuple[int, int, str, str] | None = None
-    for sym in symbol_index:
-        start_line, end_line, _, _ = sym
-        if start_line <= line <= end_line and (
-            best is None or (end_line - start_line) < (best[1] - best[0])
-        ):
-            best = sym
-
-    return (best[2], best[3]) if best else ("", "")
 
 
 # ------------------------------------------------------------------
@@ -255,50 +220,33 @@ def chunk_file(
     chunk_overlap: int = 200,
 ) -> list[IndexChunk]:
     """
-    Chunk a single file into enriched ``IndexChunk`` objects.
+    Chunk a single file into ``IndexChunk`` objects.
 
-    Uses Chonkie for Python and Markdown when available, falls back to
-    the generic ``RecursiveCharacterTextSplitter`` for other languages.
+    Uses Chonkie for Python and Markdown when available, and otherwise a
+    ``RecursiveCharacterTextSplitter`` with language-aware separators where
+    langchain provides them.
     """
     language = _detect_language(rel_path)
-    ptokens = _path_tokens(rel_path)
 
     raw_chunks: list[dict[str, Any]] = []
     if language in _CHONKIE_LANGUAGES:
         raw_chunks = _chonkie_chunk(source, language, chunk_size)
 
     if not raw_chunks:
-        raw_chunks = _generic_chunk(source, chunk_size, chunk_overlap)
+        raw_chunks = _generic_chunk(source, language, chunk_size, chunk_overlap)
     else:
-        raw_chunks = _split_oversized_chunks(raw_chunks, chunk_size, chunk_overlap)
+        raw_chunks = _split_oversized_chunks(raw_chunks, language, chunk_size, chunk_overlap)
 
-    symbol_index: list[tuple[int, int, str, str]] = []
-    line_offsets: list[int] = []
-    if language == "python":
-        symbol_index = _build_python_symbol_index(source)
-        line_offsets = _line_start_offsets(source)
-
-    results: list[IndexChunk] = []
-    for idx, rc in enumerate(raw_chunks):
-        text = rc["text"]
-        symbol = ""
-        symbol_type = ""
-
-        if language == "python":
-            symbol, symbol_type = _symbol_at_offset(symbol_index, line_offsets, rc.get("start_index", 0))
-
-        results.append(IndexChunk(
-            text=text,
+    return [
+        IndexChunk(
+            text=rc["text"],
             file_path=rel_path,
             chunk_index=idx,
-            content_hash=_content_hash(text),
+            content_hash=_content_hash(rc["text"]),
             language=language,
             is_doc=is_doc,
             start_index=rc.get("start_index", 0),
-            end_index=rc.get("end_index", len(text)),
-            symbol=symbol,
-            symbol_type=symbol_type,
-            path_tokens=ptokens,
-        ))
-
-    return results
+            end_index=rc.get("end_index", len(rc["text"])),
+        )
+        for idx, rc in enumerate(raw_chunks)
+    ]

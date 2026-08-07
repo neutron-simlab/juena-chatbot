@@ -13,12 +13,9 @@ class Provider(StrEnum):
 
 
 class OpenAIModelName(StrEnum):
-    """OpenAI model names - https://platform.openai.com/docs/models/gpt-4o"""
+    """OpenAI chat models intentionally offered by this deployment."""
     
     GPT_4O_MINI = "gpt-4o-mini"
-    GPT_4O = "gpt-4o"
-    GPT_4_TURBO = "gpt-4-turbo"
-    GPT_35_TURBO = "gpt-3.5-turbo"
 
 
 class BlabladorModelName(StrEnum):

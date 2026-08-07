@@ -277,9 +277,18 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
     return results
 
 
-def validate_bootstrap_ready(repo_manager: RepoManager, vector_index: RepoVectorIndex) -> None:
-    """Ensure repository clones and vector indices already exist locally."""
+def describe_bootstrap_problems(
+    repo_manager: RepoManager, vector_index: RepoVectorIndex
+) -> list[str]:
+    """Return the reasons repository research is unavailable, empty when ready.
+
+    Callers that can degrade gracefully should use this instead of
+    :func:`validate_bootstrap_ready`, which raises.
+    """
     problems: list[str] = []
+
+    if not repo_manager.repo_ids:
+        return ["no repositories configured"]
 
     for repo_id in repo_manager.repo_ids:
         if not repo_manager.has_local_root(repo_id):
@@ -292,11 +301,17 @@ def validate_bootstrap_ready(repo_manager: RepoManager, vector_index: RepoVector
         elif chunk_count == 0:
             problems.append(f"vector index empty for '{repo_id}'")
 
+    return problems
+
+
+def validate_bootstrap_ready(repo_manager: RepoManager, vector_index: RepoVectorIndex) -> None:
+    """Ensure repository clones and vector indices already exist locally."""
+    problems = describe_bootstrap_problems(repo_manager, vector_index)
     if problems:
         details = "; ".join(problems)
         raise RuntimeError(
             "Code-chat bootstrap is incomplete: "
-            f"{details}. Run `python -m juena.retrieval.bootstrap` before starting the server."
+            f"{details}. Run `python -m juena.indexing.bootstrap` before starting the server."
         )
 
 

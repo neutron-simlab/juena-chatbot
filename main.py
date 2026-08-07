@@ -10,9 +10,8 @@ import uvicorn
 from juena.core.config import global_config
 from juena.indexing.bootstrap import BOOTSTRAP_DONE_ENV, bootstrap_repositories
 
-# Import agent registrations – each module self-registers via register_agent_factory
-import juena.agents.react_agent       # default agent
-import juena.agents.code_chat_agent   # code-chat agent (hybrid search over repos)
+# Import agent registrations – the module self-registers via register_agent_factory
+import juena.agents.juena_agent  # the single JüNA agent  # noqa: F401
 
 
 def ensure_startup_bootstrap() -> None:

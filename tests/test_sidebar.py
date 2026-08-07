@@ -21,7 +21,6 @@ class _SessionState(dict):
 def _make_session_state(**overrides) -> _SessionState:
     defaults = {
         "client": Mock(),
-        "server_connected": True,
         "thread_id": "thread-1",
         "messages": ["current message"],
         "welcome_initialized": True,
@@ -52,6 +51,22 @@ def test_format_chat_history_title_collapses_whitespace_and_truncates() -> None:
     assert len(display) <= 22
 
 
+def test_logout_form_posts_directly_to_public_auth_endpoint() -> None:
+    html = sidebar._logout_form_html("https://juena.example.org/")
+
+    assert 'action="https://juena.example.org/auth/logout"' in html
+    assert 'method="post"' in html
+    assert "Sign out" in html
+    assert "javascript" not in html.lower()
+
+
+def test_logout_form_escapes_configured_public_url() -> None:
+    html = sidebar._logout_form_html('https://juena.example.org/" onsubmit="bad')
+
+    assert 'onsubmit="bad' not in html
+    assert "&quot;" in html
+
+
 def test_delete_current_chat_selects_most_recent_remaining_chat(monkeypatch) -> None:
     remaining_chat = Chat(thread_id="thread-2", title="Existing Chat")
     remaining_messages = ["loaded message"]
@@ -59,7 +74,7 @@ def test_delete_current_chat_selects_most_recent_remaining_chat(monkeypatch) -> 
     storage.list_chats.return_value = [remaining_chat]
     storage.load_messages.return_value = remaining_messages
     session_state = _make_session_state(welcome_initialized=False)
-    fake_st = SimpleNamespace(session_state=session_state)
+    fake_st = SimpleNamespace(session_state=session_state, query_params={})
 
     monkeypatch.setattr(sidebar, "st", fake_st)
 
@@ -71,7 +86,7 @@ def test_delete_current_chat_selects_most_recent_remaining_chat(monkeypatch) -> 
 
     assert deleted is True
     assert error_message is None
-    session_state.client.delete_thread.assert_called_once_with("thread-1")
+    session_state.client.delete_thread.assert_not_called()
     storage.delete_chat.assert_called_once_with("thread-1")
     storage.list_chats.assert_called_once_with(limit=1)
     storage.load_messages.assert_called_once_with("thread-2")
@@ -85,7 +100,7 @@ def test_delete_last_current_chat_creates_single_replacement_chat(monkeypatch) -
     storage = Mock()
     storage.list_chats.return_value = []
     session_state = _make_session_state()
-    fake_st = SimpleNamespace(session_state=session_state)
+    fake_st = SimpleNamespace(session_state=session_state, query_params={})
 
     monkeypatch.setattr(sidebar, "st", fake_st)
     monkeypatch.setattr(sidebar, "uuid4", lambda: "replacement-thread")
@@ -98,15 +113,15 @@ def test_delete_last_current_chat_creates_single_replacement_chat(monkeypatch) -
 
     assert deleted is True
     assert error_message is None
-    session_state.client.delete_thread.assert_called_once_with("thread-1")
+    session_state.client.delete_thread.assert_not_called()
     storage.delete_chat.assert_called_once_with("thread-1")
     storage.list_chats.assert_called_once_with(limit=1)
     storage.load_messages.assert_not_called()
-    storage.upsert_chat.assert_called_once()
-    replacement_chat = storage.upsert_chat.call_args.args[0]
-    assert isinstance(replacement_chat, Chat)
-    assert replacement_chat.thread_id == "replacement-thread"
+    # The blank replacement is not persisted; the server creates the row when
+    # the first message is sent, so unused chats never reach the history list.
+    storage.upsert_chat.assert_not_called()
     assert session_state.thread_id == "replacement-thread"
+    assert fake_st.query_params["thread"] == "replacement-thread"
     assert session_state.messages == []
     assert session_state.welcome_initialized is False
 
@@ -114,7 +129,7 @@ def test_delete_last_current_chat_creates_single_replacement_chat(monkeypatch) -
 def test_delete_non_current_chat_leaves_active_session_unchanged(monkeypatch) -> None:
     storage = Mock()
     session_state = _make_session_state()
-    fake_st = SimpleNamespace(session_state=session_state)
+    fake_st = SimpleNamespace(session_state=session_state, query_params={})
 
     monkeypatch.setattr(sidebar, "st", fake_st)
 
@@ -126,7 +141,7 @@ def test_delete_non_current_chat_leaves_active_session_unchanged(monkeypatch) ->
 
     assert deleted is True
     assert error_message is None
-    session_state.client.delete_thread.assert_called_once_with("thread-2")
+    session_state.client.delete_thread.assert_not_called()
     storage.delete_chat.assert_called_once_with("thread-2")
     storage.list_chats.assert_not_called()
     storage.load_messages.assert_not_called()

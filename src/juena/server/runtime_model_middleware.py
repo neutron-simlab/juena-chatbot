@@ -14,7 +14,7 @@ from typing import Any, Callable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langgraph.config import get_config
 
-from juena.core.llms_providers import LLMFactory
+from juena.core.llms_providers import build_chat_model
 from juena.core.log import get_logger
 
 logger = get_logger(__name__)
@@ -102,7 +102,9 @@ class RuntimeModelMiddleware(AgentMiddleware):
             return request
 
         try:
-            llm = LLMFactory.create_llm(
+            # build_chat_model caches on (provider, model, temperature, overrides),
+            # so this does not rebuild a connection pool on every model call.
+            llm = build_chat_model(
                 provider=provider,
                 model=model,
                 temperature=0.0,

@@ -29,7 +29,7 @@ def test_runtime_model_middleware_uses_runtime_context(monkeypatch) -> None:
         created["kwargs"] = kwargs
         return runtime_llm
 
-    monkeypatch.setattr(middleware_module.LLMFactory, "create_llm", fake_create_llm)
+    monkeypatch.setattr(middleware_module, "build_chat_model", fake_create_llm)
 
     request = _FakeRequest(
         context=middleware_module.RuntimeModelContext(
@@ -72,7 +72,7 @@ def test_runtime_model_middleware_falls_back_to_langgraph_config(monkeypatch) ->
         created["kwargs"] = kwargs
         return runtime_llm
 
-    monkeypatch.setattr(middleware_module.LLMFactory, "create_llm", fake_create_llm)
+    monkeypatch.setattr(middleware_module, "build_chat_model", fake_create_llm)
 
     request = _FakeRequest()
 

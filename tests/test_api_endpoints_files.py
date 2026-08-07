@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import UUID
+from datetime import datetime, timezone
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from juena.server import api_endpoints
+from juena.server.auth import AuthenticatedUser, get_current_user
+from juena.server.database import get_db_session
 
 
 class _FakeAgent:
@@ -23,9 +28,72 @@ class _FakeAgent:
         return [("values", {"messages": [AIMessage(content="ready")]})]
 
 
-def _build_test_client() -> TestClient:
+class _FakeSession:
+    async def commit(self) -> None:
+        return None
+
+    async def delete(self, value) -> None:  # noqa: ANN001
+        return None
+
+
+@pytest.mark.asyncio
+async def test_authorizing_a_message_touches_chat_recency(monkeypatch) -> None:
+    old_updated_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    chat = SimpleNamespace(thread_id="thread-1", updated_at=old_updated_at)
+    committed = False
+
+    async def fake_ensure_owned_chat(session, owner_id, thread_id):  # noqa: ANN001
+        return chat
+
+    class Session:
+        async def commit(self) -> None:
+            nonlocal committed
+            committed = True
+
+    monkeypatch.setattr(api_endpoints, "ensure_owned_chat", fake_ensure_owned_chat)
+    user = AuthenticatedUser(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        saml_subject="subject-1",
+        email=None,
+        display_name=None,
+    )
+
+    thread_id = await api_endpoints._authorize_thread(Session(), user, "thread-1")
+
+    assert thread_id == "thread-1"
+    assert chat.updated_at > old_updated_at
+    assert committed is True
+
+
+def _build_test_client(monkeypatch) -> TestClient:  # noqa: ANN001
     app = FastAPI()
     app.include_router(api_endpoints.router)
+    user_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    async def fake_user() -> AuthenticatedUser:
+        return AuthenticatedUser(
+            id=user_id,
+            saml_subject="subject-1",
+            email=None,
+            display_name=None,
+        )
+
+    async def fake_session():
+        yield _FakeSession()
+
+    async def fake_ensure_owned_chat(session, owner_id, thread_id):  # noqa: ANN001
+        return SimpleNamespace(
+            thread_id=thread_id or "generated-thread",
+            user_id=owner_id,
+        )
+
+    async def fake_get_owned_chat(session, owner_id, thread_id):  # noqa: ANN001
+        return SimpleNamespace(thread_id=thread_id, user_id=owner_id)
+
+    app.dependency_overrides[get_current_user] = fake_user
+    app.dependency_overrides[get_db_session] = fake_session
+    monkeypatch.setattr(api_endpoints, "ensure_owned_chat", fake_ensure_owned_chat)
+    monkeypatch.setattr(api_endpoints, "get_owned_chat", fake_get_owned_chat)
     return TestClient(app)
 
 
@@ -33,16 +101,16 @@ def test_invoke_with_files_stages_inputs_and_returns_chat_message(monkeypatch) -
     fake_agent = _FakeAgent()
 
     async def fake_get_agent(agent_id: str, provider: str | None = None, model: str | None = None):
-        assert agent_id == "code_chat_agent"
+        assert agent_id == "juena"
         assert provider == "openai"
         assert model == "gpt-test"
         return fake_agent
 
     monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
 
-    client = _build_test_client()
+    client = _build_test_client(monkeypatch)
     response = client.post(
-        "/code_chat_agent/invoke_with_files",
+        "/juena/invoke_with_files",
         data={
             "message": "Please inspect this upload",
             "thread_id": "thread-1",
@@ -76,9 +144,9 @@ def test_invoke_with_files_rejects_unsupported_file_types(monkeypatch) -> None:
 
     monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
 
-    client = _build_test_client()
+    client = _build_test_client(monkeypatch)
     response = client.post(
-        "/code_chat_agent/invoke_with_files",
+        "/juena/invoke_with_files",
         data={"message": "Please inspect this upload"},
         files=[
             ("attachments", ("report.pdf", b"%PDF-1.7", "application/pdf")),
@@ -98,7 +166,7 @@ def test_delete_thread_endpoint_removes_persisted_state(monkeypatch) -> None:
 
     monkeypatch.setattr(api_endpoints, "get_checkpointer", lambda: _FakeCheckpointer())
 
-    client = _build_test_client()
+    client = _build_test_client(monkeypatch)
     response = client.delete("/threads/thread-123")
 
     assert response.status_code == 200

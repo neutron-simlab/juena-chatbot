@@ -20,15 +20,23 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
     env["DEFAULT_PROVIDER"] = "openai"
     env["FALLBACK_PROVIDER"] = "openai"
     env["LANGSMITH_TRACING"] = "false"
+    env["ENVIRONMENT"] = "development"
+    env["AUTH_DEV_BYPASS"] = "false"
 
     for key in (
-        "DB_DIR",
-        "CHECKPOINT_DB_PATH",
-        "CHAT_DB_PATH",
+        "DATABASE_URL",
+        "LEGACY_SQLITE_ARCHIVE_DIR",
         "CONTEXT7_API_KEY",
         "CONTEXT7_MCP_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
         "TAVILY_API_KEY",
+        "JUENA_API_INTERNAL_URL",
+        "JUENA_PUBLIC_URL",
+        "UI_PUBLIC_URL",
+        "SAML_SP_ENTITY_ID",
+        "SAML_SP_ACS_URL",
+        "SAML_SP_SLS_URL",
+        "SESSION_COOKIE_SECURE",
     ):
         env.pop(key, None)
 
@@ -41,16 +49,16 @@ from pathlib import Path
 from juena.core.config import global_config
 
 print("JSON::" + json.dumps({
-    "db_dir": global_config.DB_DIR,
-    "checkpoint_db_path": global_config.CHECKPOINT_DB_PATH,
-    "chat_db_path": global_config.CHAT_DB_PATH,
-    "db_dir_exists": Path(global_config.DB_DIR).is_dir(),
-    "checkpoint_parent_exists": Path(global_config.CHECKPOINT_DB_PATH).parent.is_dir(),
-    "chat_parent_exists": Path(global_config.CHAT_DB_PATH).parent.is_dir(),
+    "database_url": global_config.DATABASE_URL,
+    "legacy_sqlite_archive_dir": global_config.LEGACY_SQLITE_ARCHIVE_DIR,
     "context7_api_key": global_config.CONTEXT7_API_KEY,
     "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
     "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
     "tavily_api_key": global_config.TAVILY_API_KEY,
+    "internal_api_url": global_config.JUENA_API_INTERNAL_URL,
+    "public_url": global_config.JUENA_PUBLIC_URL,
+    "ui_public_url": global_config.UI_PUBLIC_URL,
+    "cookie_secure": global_config.SESSION_COOKIE_SECURE,
 }))
 """
     result = subprocess.run(
@@ -69,32 +77,24 @@ print("JSON::" + json.dumps({
     raise AssertionError(f"Config snapshot marker not found in stdout: {result.stdout}")
 
 
-def test_default_db_dir_is_repo_local() -> None:
+def test_postgres_is_not_silently_defaulted_outside_compose() -> None:
     snapshot = _load_config_snapshot()
 
-    expected = REPO_ROOT / "data" / "db"
-    assert snapshot["db_dir"] == str(expected)
-    assert snapshot["checkpoint_db_path"] == str(expected / "checkpoints.sqlite")
-    assert snapshot["chat_db_path"] == str(expected / "chats.sqlite")
-    assert snapshot["db_dir_exists"] is True
+    assert snapshot["database_url"] is None
+    assert snapshot["legacy_sqlite_archive_dir"] is None
 
 
-def test_overridden_db_file_parents_are_created(tmp_path: Path) -> None:
-    checkpoint_db = tmp_path / "custom-checkpoints" / "checkpoints.sqlite"
-    chat_db = tmp_path / "custom-history" / "chats.sqlite"
-
+def test_postgres_and_legacy_archive_settings_are_explicit(tmp_path: Path) -> None:
     snapshot = _load_config_snapshot(
         {
-            "DB_DIR": str(tmp_path / "db-root"),
-            "CHECKPOINT_DB_PATH": str(checkpoint_db),
-            "CHAT_DB_PATH": str(chat_db),
+            "DATABASE_URL": "postgresql://juena:test@localhost/juena",
+            "LEGACY_SQLITE_ARCHIVE_DIR": str(tmp_path / "legacy"),
         }
     )
 
-    assert snapshot["checkpoint_db_path"] == str(checkpoint_db)
-    assert snapshot["chat_db_path"] == str(chat_db)
-    assert snapshot["checkpoint_parent_exists"] is True
-    assert snapshot["chat_parent_exists"] is True
+    assert snapshot["database_url"] == "postgresql://juena:test@localhost/juena"
+    assert snapshot["legacy_sqlite_archive_dir"] == str(tmp_path / "legacy")
+    assert not (tmp_path / "legacy").exists()
 
 
 def test_context7_defaults_are_parsed() -> None:
@@ -104,3 +104,69 @@ def test_context7_defaults_are_parsed() -> None:
     assert snapshot["context7_mcp_url"] == "https://mcp.context7.com/mcp"
     assert snapshot["context7_timeout_seconds"] == 30
     assert snapshot["tavily_api_key"] is None
+
+
+def test_development_url_and_cookie_defaults_remain_local() -> None:
+    snapshot = _load_config_snapshot()
+
+    assert snapshot["internal_api_url"] == "http://localhost:8080"
+    assert snapshot["public_url"] == "http://localhost:8080"
+    assert snapshot["ui_public_url"] == "http://localhost:9501"
+    assert snapshot["cookie_secure"] is False
+
+
+def test_production_requires_public_https_configuration() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+            "JUENA_ENV_PATH": str(REPO_ROOT / ".env.test.empty"),
+            "OPENAI_API_KEY": "test-key",
+            "DEFAULT_PROVIDER": "openai",
+            "FALLBACK_PROVIDER": "openai",
+            "LANGSMITH_TRACING": "false",
+            "ENVIRONMENT": "production",
+            "AUTH_DEV_BYPASS": "false",
+        }
+    )
+    for key in (
+        "JUENA_PUBLIC_URL",
+        "UI_PUBLIC_URL",
+        "SAML_SP_ENTITY_ID",
+        "SAML_SP_ACS_URL",
+        "SAML_SP_SLS_URL",
+        "SESSION_COOKIE_SECURE",
+    ):
+        env.pop(key, None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from juena.core.config import global_config"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "JUENA_PUBLIC_URL is required in production" in output
+    assert "SAML_SP_ACS_URL is required in production" in output
+
+
+def test_production_accepts_explicit_secure_public_origins() -> None:
+    snapshot = _load_config_snapshot(
+        {
+            "ENVIRONMENT": "production",
+            "JUENA_API_INTERNAL_URL": "http://api:8080",
+            "JUENA_PUBLIC_URL": "https://juena.example.org",
+            "SAML_SP_ENTITY_ID": "https://juena.example.org/auth/metadata",
+            "SAML_SP_ACS_URL": "https://juena.example.org/auth/acs",
+            "SAML_SP_SLS_URL": "https://juena.example.org/auth/sls",
+            "SESSION_COOKIE_SECURE": "true",
+        }
+    )
+
+    assert snapshot["internal_api_url"] == "http://api:8080"
+    assert snapshot["public_url"] == "https://juena.example.org"
+    assert snapshot["ui_public_url"] == "https://juena.example.org"
+    assert snapshot["cookie_secure"] is True

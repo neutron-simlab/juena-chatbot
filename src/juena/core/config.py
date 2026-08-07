@@ -4,6 +4,12 @@ from typing import Dict
 from dotenv import load_dotenv
 
 
+from juena.schema.llm_models import BlabladorModelName as _BlabladorModelName
+
+# Keep the built-in default in step with the enum the UI filters against.
+_BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.GPT_OSS.value
+
+
 def _find_repo_root() -> Path:
     """Resolve repo root by walking up from this file until we find pyproject.toml."""
     path = Path(__file__).resolve()
@@ -62,13 +68,16 @@ class Config:
     OPENAI_DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
     # Optional: Comma-separated list of available OpenAI models to show in UI
     # If not set, all models from OpenAIModelName enum will be shown
-    # Example: OPENAI_AVAILABLE_MODELS=gpt-4o-mini,gpt-4o
+    # Example: OPENAI_AVAILABLE_MODELS=gpt-4o-mini
     OPENAI_AVAILABLE_MODELS = os.getenv("OPENAI_AVAILABLE_MODELS")
     
     # Blablador (OpenAI-compatible API)
     BLABLADOR_API_KEY = os.getenv("BLABLADOR_API_KEY")
     BLABLADOR_BASE_URL = os.getenv("BLABLADOR_BASE_URL")
-    BLABLADOR_DEFAULT_MODEL = os.getenv("BLABLADOR_DEFAULT_MODEL", "1 - GPT-OSS-120b - an open model released by OpenAI in August 2025")
+    BLABLADOR_DEFAULT_MODEL = os.getenv(
+        "BLABLADOR_DEFAULT_MODEL",
+        _BLABLADOR_DEFAULT_MODEL_ID,
+    )
     BLABLADOR_EMBEDDING_MODEL = os.getenv("BLABLADOR_EMBEDDING_MODEL", "alias-qwen3-8b-embeddings")
     # Optional: Comma-separated list of available Blablador models to show in UI
     # If not set, all models from BlabladorModelName enum will be shown
@@ -94,6 +103,11 @@ class Config:
     TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "60"))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
+    # Send full tool results to the UI instead of a one-line activity summary.
+    # Off by default: payloads are large, the model has already consumed them,
+    # and rendering them buries the answer. Useful when debugging tool output.
+    STREAM_TOOL_PAYLOADS = os.getenv("STREAM_TOOL_PAYLOADS", "false").lower() == "true"
+
     # Context7 MCP (optional external library/framework documentation tools)
     CONTEXT7_API_KEY = os.getenv("CONTEXT7_API_KEY")
     CONTEXT7_MCP_URL = os.getenv("CONTEXT7_MCP_URL", "https://mcp.context7.com/mcp")
@@ -116,24 +130,87 @@ class Config:
     
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    _development = ENVIRONMENT.lower() != "production"
+
+    # Streamlit talks to FastAPI over this server-side URL. Browsers must never
+    # be sent here because production commonly uses private Compose DNS.
+    JUENA_API_INTERNAL_URL = os.getenv(
+        "JUENA_API_INTERNAL_URL",
+        "http://localhost:8080",
+    )
+    # Browser-facing origin used to construct authentication links. Production
+    # deliberately has no localhost default and is validated at startup.
+    JUENA_PUBLIC_URL = os.getenv(
+        "JUENA_PUBLIC_URL",
+        "http://localhost:8080" if _development else None,
+    )
+    # Compatibility alias for one release. It remains useful in development,
+    # where FastAPI and Streamlit run on separate localhost ports. A production
+    # gateway serves both from JUENA_PUBLIC_URL, so this defaults to that origin.
+    UI_PUBLIC_URL = os.getenv(
+        "UI_PUBLIC_URL",
+        "http://localhost:9501" if _development else JUENA_PUBLIC_URL,
+    )
     
     # Application log directory (for date-based log files)
     LOG_DIR = os.getenv("LOG_DIR", "/tmp/logs")
     
-    # =============================================================================
-    # DATABASE CONFIGURATION (SQLite)
-    # =============================================================================
-    
-    # Directory for SQLite databases (LangGraph checkpoints and chat history)
-    # In Docker this is typically overridden to /data/db via environment.
-    # For local runs, default to a writable path inside the repository.
-    DB_DIR = os.getenv("DB_DIR", str(_repo_data_dir("db")))
-    
-    # LangGraph checkpoint database path
-    CHECKPOINT_DB_PATH = os.getenv("CHECKPOINT_DB_PATH", os.path.join(DB_DIR, "checkpoints.sqlite"))
-    
-    # Chat history database path (for Streamlit sidebar)
-    CHAT_DB_PATH = os.getenv("CHAT_DB_PATH", os.path.join(DB_DIR, "chats.sqlite"))
+    # Postgres is required by the authenticated production service. Imports and
+    # unit tests remain possible without it; the FastAPI lifespan fails clearly.
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    # Upper bound for the psycopg pool shared by the LangGraph checkpointer
+    # and Store. SQLAlchemy manages its own pool for the application tables.
+    DATABASE_POOL_MAX_SIZE = int(os.getenv("DATABASE_POOL_MAX_SIZE", "20"))
+    # Optional read-only location where anonymous pre-cutover SQLite files are
+    # archived. Application code never opens or imports these files.
+    LEGACY_SQLITE_ARCHIVE_DIR = os.getenv("LEGACY_SQLITE_ARCHIVE_DIR")
+
+    # SAML service-provider settings.
+    SAML_IDP_METADATA_URL = os.getenv(
+        "SAML_IDP_METADATA_URL",
+        "https://ifflogin.fz-juelich.de/saml/idp.xml",
+    )
+    SAML_SP_ENTITY_ID = os.getenv(
+        "SAML_SP_ENTITY_ID",
+        "http://localhost:8080/auth/metadata" if _development else None,
+    )
+    SAML_SP_ACS_URL = os.getenv(
+        "SAML_SP_ACS_URL",
+        "http://localhost:8080/auth/acs" if _development else None,
+    )
+    SAML_SP_SLS_URL = os.getenv(
+        "SAML_SP_SLS_URL",
+        "http://localhost:8080/auth/sls" if _development else None,
+    )
+    SAML_SP_CERT_FILE = os.getenv(
+        "SAML_SP_CERT_FILE",
+        str(_repo_data_dir("saml", "sp.crt")) if _development else None,
+    )
+    SAML_SP_KEY_FILE = os.getenv(
+        "SAML_SP_KEY_FILE",
+        str(_repo_data_dir("saml", "sp.key")) if _development else None,
+    )
+    XMLSEC_BINARY = os.getenv("XMLSEC_BINARY", "/usr/bin/xmlsec1")
+
+    # Development-only authentication bypass, for use while SP registration
+    # with the FZJ IdP is pending. Refused outright outside development: the
+    # process will not start rather than silently exposing an unauthenticated
+    # login route. See SAML-IFFLOGIN.md.
+    _auth_dev_bypass = os.getenv("AUTH_DEV_BYPASS", "false").lower() == "true"
+    if _auth_dev_bypass and not _development:
+        raise RuntimeError(
+            "AUTH_DEV_BYPASS cannot be enabled when ENVIRONMENT is production. "
+            "It issues sessions without verifying any identity."
+        )
+    AUTH_DEV_BYPASS = _auth_dev_bypass
+    SESSION_COOKIE_SECURE = os.getenv(
+        "SESSION_COOKIE_SECURE",
+        "false" if _development else "true",
+    ).lower() == "true"
+    SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "8"))
+
+    # Global, curated Agent Skills library.
+    SKILLS_DIR = os.getenv("SKILLS_DIR", str(_find_repo_root() / "skills"))
     
     @classmethod
     def _check_provider_available(cls, provider_name: str) -> bool:
@@ -166,6 +243,13 @@ class Config:
         return {p.value: cls._check_provider_available(p.value) for p in Provider}
     
     @classmethod
+    def _default_model_for(cls, provider: str) -> str:
+        """Provider-specific default model, matching the class-body derivation."""
+        if provider.lower() == "blablador":
+            return cls.BLABLADOR_DEFAULT_MODEL
+        return cls.OPENAI_DEFAULT_MODEL
+
+    @classmethod
     def validate_required(cls):
         """Validate that required environment variables are set"""
         errors = []
@@ -181,23 +265,56 @@ class Config:
             available_list = [p for p, available in available_providers.items() if available]
             if available_list:
                 cls.DEFAULT_PROVIDER = available_list[0]
-                print(f"⚠️ DEFAULT_PROVIDER was unavailable, auto-adjusted to: {cls.DEFAULT_PROVIDER}")
+                # DEFAULT_MODEL was derived from the *original* provider at class
+                # definition time. Re-derive it, or the pair desyncs into
+                # something like provider=blablador with model=gpt-4o-mini.
+                cls.DEFAULT_MODEL = cls._default_model_for(cls.DEFAULT_PROVIDER)
+                print(
+                    f"⚠️ DEFAULT_PROVIDER was unavailable, auto-adjusted to: "
+                    f"{cls.DEFAULT_PROVIDER} (model: {cls.DEFAULT_MODEL})"
+                )
             else:
                 errors.append(
                     f"DEFAULT_PROVIDER '{cls.DEFAULT_PROVIDER}' is not available and no other providers are configured. "
                     f"Please configure at least one provider (OpenAI, Blablador, etc.) with valid API keys."
                 )
-        
+
         # Validate FALLBACK_PROVIDER if set
         if cls.FALLBACK_PROVIDER:
             fallback_available = available_providers.get(cls.FALLBACK_PROVIDER.lower(), False)
             if not fallback_available:
-                # Clear fallback if not available
+                # Read the name before clearing it: the old code interpolated
+                # after the assignment and so always printed 'None'.
+                unavailable = cls.FALLBACK_PROVIDER
                 cls.FALLBACK_PROVIDER = None
-                print(f"⚠️ FALLBACK_PROVIDER '{cls.FALLBACK_PROVIDER}' is not available, cleared fallback")
+                print(f"⚠️ FALLBACK_PROVIDER '{unavailable}' is not available, cleared fallback")
         
         if cls.LANGSMITH_TRACING and not cls.LANGSMITH_API_KEY:
             errors.append("LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled")
+
+        if not cls._development:
+            if not cls.JUENA_PUBLIC_URL:
+                errors.append("JUENA_PUBLIC_URL is required in production")
+            elif not cls.JUENA_PUBLIC_URL.lower().startswith("https://"):
+                errors.append("JUENA_PUBLIC_URL must use HTTPS in production")
+            if not cls.UI_PUBLIC_URL:
+                errors.append("UI_PUBLIC_URL is required in production")
+            elif not cls.UI_PUBLIC_URL.lower().startswith("https://"):
+                errors.append("UI_PUBLIC_URL must use HTTPS in production")
+            for setting_name in (
+                "SAML_SP_ENTITY_ID",
+                "SAML_SP_ACS_URL",
+                "SAML_SP_SLS_URL",
+            ):
+                value = getattr(cls, setting_name)
+                if not value:
+                    errors.append(f"{setting_name} is required in production")
+                elif not value.lower().startswith("https://") or "localhost" in value.lower():
+                    errors.append(
+                        f"{setting_name} must use a public HTTPS URL in production"
+                    )
+            if not cls.SESSION_COOKIE_SECURE:
+                errors.append("SESSION_COOKIE_SECURE must be true in production")
         
         if errors:
             raise ValueError(f"Missing required environment variables: {', '.join(errors)}")
@@ -222,14 +339,6 @@ class Config:
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
         
-        # Ensure database directories exist for both the base DB dir and the
-        # concrete SQLite file paths. This keeps local runs working even when
-        # callers override the individual database file locations.
-        db_dir = Path(cls.DB_DIR)
-        db_dir.mkdir(parents=True, exist_ok=True)
-        Path(cls.CHECKPOINT_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        Path(cls.CHAT_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        
         # Get and display available providers
         available_providers = cls.get_available_providers()
         available_list = [p for p, available in available_providers.items() if available]
@@ -239,7 +348,7 @@ class Config:
         print(f"✅ Default Provider: {cls.DEFAULT_PROVIDER}")
         print(f"✅ Available Providers: {', '.join(available_list) if available_list else 'None'}")
         print(f"✅ LangSmith: {'enabled' if langsmith_enabled else 'disabled'}")
-        print(f"✅ Database directory: {cls.DB_DIR}")
+        print("✅ Persistence: Postgres (required at service startup)")
         
         return cls
 

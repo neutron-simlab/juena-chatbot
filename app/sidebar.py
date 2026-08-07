@@ -1,15 +1,16 @@
 """
 Sidebar configuration UI for Streamlit app.
 """
+from html import escape
+
 import streamlit as st
 from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
 import textwrap
 
-import httpx
-
 from juena.clients.client import AgentClientError
+from juena.core.config import global_config
 from juena.schema.llm_models import Provider
 from juena.core.llms_providers import (
     get_available_providers,
@@ -17,19 +18,8 @@ from juena.core.llms_providers import (
     get_default_model,
     format_model_name,
 )
-from app.chat_storage import Chat, ChatStorage, get_chat_storage
-from app.file_management import check_server_health, initialize_client
+from app.chat_storage import Chat, ChatStorage
 
-
-def _fetch_agents(server_url: str) -> tuple[list[str], str]:
-    """Fetch registered agents from the backend.  Returns (agent_list, default)."""
-    try:
-        resp = httpx.get(f"{server_url}/agents", timeout=3.0)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("agents", []), data.get("default", "")
-    except Exception:
-        return [], ""
 
 # Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
@@ -48,22 +38,47 @@ def _format_chat_history_title(chat: Chat, max_chars: int = 22) -> tuple[str, st
     return textwrap.shorten(title, width=max_chars, placeholder="..."), title
 
 
+def _logout_form_html(public_url: str) -> str:
+    """Return a browser-submitted form so the HttpOnly cookie is cleared."""
+    action = escape(f"{public_url.rstrip('/')}/auth/logout", quote=True)
+    return f"""
+    <form action="{action}" method="post" target="_self">
+      <button type="submit" style="
+        width: 100%;
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        border-radius: 0.5rem;
+        padding: 0.45rem 0.75rem;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      ">Sign out</button>
+    </form>
+    """
+
+
 def _activate_chat(storage: ChatStorage, thread_id: str) -> None:
     """Load a saved chat into the current Streamlit session."""
 
     st.session_state.thread_id = thread_id
     st.session_state.messages = storage.load_messages(thread_id)
     st.session_state.welcome_initialized = True
+    st.query_params["thread"] = thread_id
 
 
-def _create_new_chat(storage: ChatStorage) -> None:
-    """Create and activate a new blank chat."""
+def _create_new_chat() -> None:
+    """Start a blank conversation.
+
+    Deliberately does not persist anything: the server creates the chat row
+    when the first message is sent. Writing it here would leave an empty
+    "Chat <id>" in the history for every new chat that is never used.
+    """
 
     new_thread_id = str(uuid4())
-    storage.upsert_chat(Chat(thread_id=new_thread_id))
     st.session_state.thread_id = new_thread_id
     st.session_state.messages = []
     st.session_state.welcome_initialized = False
+    st.query_params["thread"] = new_thread_id
 
 
 def _delete_chat_with_server_state(
@@ -72,25 +87,23 @@ def _delete_chat_with_server_state(
     *,
     is_current: bool,
 ) -> tuple[bool, str | None]:
-    """Delete both the server-side thread state and the local chat history."""
+    """Delete the user-owned chat and its server-side checkpoint state."""
 
     client = st.session_state.get("client")
-    if client is None or not st.session_state.get("server_connected", False):
+    if client is None:
         return False, "Server connection is required to delete the persisted conversation."
 
     try:
-        client.delete_thread(thread_id)
+        storage.delete_chat(thread_id)
     except AgentClientError as exc:
         return False, f"Failed to delete conversation state: {exc}"
-
-    storage.delete_chat(thread_id)
 
     if is_current:
         remaining_chats = storage.list_chats(limit=1)
         if remaining_chats:
             _activate_chat(storage, remaining_chats[0].thread_id)
         else:
-            _create_new_chat(storage)
+            _create_new_chat()
 
     return True, None
 
@@ -101,79 +114,17 @@ def render_sidebar() -> None:
         if _logo_path and _logo_path.exists():
             st.image(str(_logo_path), width='stretch')
         st.title("JüNA")
-        
-        # 1. Server Configuration
-        st.subheader("Server")
-        
-        # Server URL input
-        server_url = st.text_input(
-            "Server URL",
-            value=st.session_state.server_url,
-            help="URL of the backend API server",
-            key="server_url_input"
-        )
-        
-        # Update server URL if changed
-        if server_url != st.session_state.server_url:
-            st.session_state.server_url = server_url
-            st.session_state._health_checked = False  # Force re-check
-        
-        # Connection status and recheck button
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            if st.session_state.server_connected:
-                st.success("Connected")
-            else:
-                st.error("Disconnected")
-        with col2:
-            if st.button("Check", help="Recheck server connection"):
-                st.session_state.server_connected = check_server_health(st.session_state.server_url)
-                if st.session_state.server_connected:
-                    st.session_state.client = initialize_client(st.session_state.server_url)
-                    if st.session_state.client is None:
-                        st.session_state.server_connected = False
-                else:
-                    st.session_state.client = None
-                st.rerun()
-        
-        st.divider()
 
-        # 2. Agent Selection
-        st.subheader("Agent")
-
-        if st.session_state.server_connected:
-            agent_list, default_agent = _fetch_agents(st.session_state.server_url)
-        else:
-            agent_list, default_agent = [], ""
-
-        if not agent_list:
-            agent_list = [st.session_state.get("selected_agent", "react_agent")]
-
-        if "selected_agent" not in st.session_state:
-            st.session_state.selected_agent = default_agent or agent_list[0]
-
-        if st.session_state.selected_agent not in agent_list:
-            st.session_state.selected_agent = agent_list[0]
-
-        selected_agent = st.selectbox(
-            "Active agent",
-            options=agent_list,
-            index=agent_list.index(st.session_state.selected_agent),
-            help="Choose the LangGraph agent to handle messages",
-        )
-
-        if selected_agent != st.session_state.selected_agent:
-            st.session_state.selected_agent = selected_agent
-            if st.session_state.client:
-                st.session_state.client.update_agent(selected_agent)
-            st.info(f"Switched to agent **{selected_agent}**.")
-
-        if st.session_state.client and st.session_state.client.agent != st.session_state.selected_agent:
-            st.session_state.client.update_agent(st.session_state.selected_agent)
+        st.subheader("Account")
+        current_user = st.session_state.get("user") or {}
+        account_label = current_user.get("display_name") or current_user.get("email")
+        if account_label:
+            st.caption(str(account_label))
+        st.html(_logout_form_html(global_config.JUENA_PUBLIC_URL))
 
         st.divider()
 
-        # 3. LLM Configuration
+        # 1. LLM Configuration
         st.subheader("LLM Configuration")
         
         # Get available providers dynamically
@@ -238,13 +189,13 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        # 4. Chat History
+        # 2. Chat History
         st.subheader("Chat History")
-        storage = get_chat_storage()
+        storage = st.session_state.chat_storage
         
         # New Chat button
         if st.button("➕ New Chat", help="Start a new conversation", use_container_width=True):
-            _create_new_chat(storage)
+            _create_new_chat()
             st.rerun()
         
         # List saved chats
@@ -340,8 +291,7 @@ def render_sidebar() -> None:
         
         st.divider()
 
-       
-        # 5. Information
+        # 4. Information
         st.subheader("About")
         st.info(
             """

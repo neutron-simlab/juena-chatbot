@@ -1,8 +1,7 @@
 """
 API endpoints for agent invocation and streaming.
 
-This module provides endpoints for invoking agents, streaming responses,
-and restarting agents with new configurations.
+This module provides endpoints for invoking agents and streaming responses.
 """
 import asyncio
 import json
@@ -10,8 +9,8 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sse_starlette.sse import EventSourceResponse
 from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
@@ -20,12 +19,11 @@ from juena.server.agent_registry import (
     DEFAULT_AGENT,
     get_agent,
     list_registered_agents,
-    restart_agent,
 )
 from juena.schema.server import ChatMessage, StreamInput, UserInput
 from juena.core.config import global_config
-from juena.schema.llm_models import Provider, get_default_model_for_provider
-from juena.server.utils import langchain_to_chat_message, set_thread_id_env
+from juena.schema.llm_models import Provider
+from juena.server.utils import langchain_to_chat_message
 from juena.server.errors import (
     AgentNotFoundError,
     StreamingError,
@@ -35,7 +33,17 @@ from juena.server.errors import (
 from juena.server.agent_input_handler import AgentInputHandler
 from juena.server.checkpointer import get_checkpointer
 from juena.server.code_chat_inputs import prepare_code_chat_turn_inputs
-from juena.server.streaming import StreamEventProcessor
+from juena.server.streaming import StreamEventProcessor, events
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from juena.server.auth import AuthenticatedUser, get_current_user
+from juena.server.chat_repository import (
+    ChatNotFoundError,
+    ensure_owned_chat,
+    get_owned_chat,
+)
+from juena.server.database import get_db_session
+from juena.server.models import utc_now
 
 logger = get_logger(__name__)
 
@@ -58,7 +66,11 @@ def _sse_response_example() -> dict[int | str, Any]:
             "description": "Server Sent Event Response",
             "content": {
                 "text/event-stream": {
-                    "example": "data: {'type': 'token', 'content': 'Hello'}\n\ndata: {'type': 'token', 'content': ' World'}\n\ndata: [DONE]\n\n",
+                    "example": (
+                        'data: {"type": "status", "phase": "thinking", "label": "Thinking…"}\n\n'
+                        'data: {"type": "token", "content": "Hello"}\n\n'
+                        'data: {"type": "token", "content": " World"}\n\n'
+                    ),
                     "schema": {"type": "string"},
                 }
             },
@@ -75,6 +87,27 @@ def _form_field(value: str | None) -> str | None:
     return value or None
 
 
+async def _authorize_thread(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    thread_id: str | None,
+) -> str:
+    """Create or authorize a thread and return the id the agent must run on.
+
+    Every invocation entrypoint routes through here, so ownership is enforced
+    in exactly one place.  A plain helper rather than a `Depends` because
+    `thread_id` arrives in the request body or form, not the path or query.
+    """
+
+    try:
+        chat = await ensure_owned_chat(session, user.id, thread_id)
+    except ChatNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat not found") from exc
+    chat.updated_at = utc_now()
+    await session.commit()
+    return chat.thread_id
+
+
 async def _prepare_agent_invocation(
     *,
     agent: CompiledStateGraph,
@@ -88,9 +121,6 @@ async def _prepare_agent_invocation(
 ) -> PreparedAgentInvocation:
     """Prepare LangGraph invocation kwargs for JSON and multipart requests."""
 
-    if attachments and agent_id != "code_chat_agent":
-        raise ValueError("File attachments are only supported by code_chat_agent.")
-
     kwargs, run_id = await AgentInputHandler.prepare_input(
         message,
         thread_id=thread_id,
@@ -100,25 +130,25 @@ async def _prepare_agent_invocation(
     )
     effective_message = message
 
-    if agent_id == "code_chat_agent":
-        prepared_inputs = await prepare_code_chat_turn_inputs(
-            agent,
-            kwargs["config"],
+    # Every conversation can stage attachments now that there is a single agent.
+    prepared_inputs = await prepare_code_chat_turn_inputs(
+        agent,
+        kwargs["config"],
+        message,
+        attachments=attachments,
+    )
+    if prepared_inputs is not None:
+        kwargs, run_id = await AgentInputHandler.prepare_input(
             message,
-            attachments=attachments,
+            thread_id=thread_id,
+            user_id=user_id,
+            run_id=run_id,
+            provider=provider,
+            model=model,
+            message_override=prepared_inputs.message_override,
+            initial_files=prepared_inputs.files_update or None,
         )
-        if prepared_inputs is not None:
-            kwargs, run_id = await AgentInputHandler.prepare_input(
-                message,
-                thread_id=thread_id,
-                user_id=user_id,
-                run_id=run_id,
-                provider=provider,
-                model=model,
-                message_override=prepared_inputs.message_override,
-                initial_files=prepared_inputs.files_update or None,
-            )
-            effective_message = prepared_inputs.message_override
+        effective_message = prepared_inputs.message_override
 
     return PreparedAgentInvocation(
         kwargs=kwargs,
@@ -129,37 +159,36 @@ async def _prepare_agent_invocation(
 
 async def message_generator(
     user_input: StreamInput,
+    authenticated_user_id: str,
     agent_id: str = DEFAULT_AGENT,
     attachments: list[UploadFile] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
-    Generate a stream of messages from the agent.
+    Generate a stream of SSE payloads from the agent.
 
-    This is the workhorse method for the /stream endpoint.
+    Yields JSON strings; `EventSourceResponse` adds the SSE framing.
     """
     # Extract provider and model from request
     provider = user_input.provider.value if user_input.provider else None
     model = user_input.model
-    
+
+    def sse(payload: dict[str, Any]) -> str:
+        return json.dumps(payload)
+
     try:
         agent: CompiledStateGraph = await get_agent(agent_id, provider=provider, model=model)
     except AgentNotFoundError as e:
         logger.error(f"Agent not found: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Agent not found: {e.message}'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse(events.error_event(f"Agent not found: {e.message}"))
         return
-    
-    try:
-        # Set thread_id as environment variable for tools that need it
-        if user_input.thread_id:
-            set_thread_id_env(user_input.thread_id)
 
+    try:
         prepared = await _prepare_agent_invocation(
             agent=agent,
             agent_id=agent_id,
             message=user_input.message,
             thread_id=user_input.thread_id,
-            user_id=user_input.user_id,
+            user_id=authenticated_user_id,
             provider=provider,
             model=model,
             attachments=attachments,
@@ -168,63 +197,61 @@ async def message_generator(
         run_id = prepared.run_id
     except StateError as e:
         logger.error(f"Failed to prepare input: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Failed to prepare input: {e.message}'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse(events.error_event(f"Failed to prepare input: {e.message}"))
         return
     except ValueError as e:
         logger.error(f"Invalid request input: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse(events.error_event(str(e)))
         return
-    except Exception as e:
-        logger.error(f"Unexpected error preparing input: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error preparing input'})}\n\n"
-        yield "data: [DONE]\n\n"
+    except Exception:
+        logger.exception("Unexpected error preparing input")
+        yield sse(events.error_event("Unexpected error preparing input"))
         return
-    
+
     # Emit thread_id first so clients can use it for follow-up messages (checkpointer persistence)
     thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
     if thread_id_used:
-        yield f"data: {json.dumps({'type': 'thread', 'thread_id': thread_id_used})}\n\n"
-    
+        yield sse(events.thread_event(thread_id_used))
+
+    # Messages are not persisted here: the checkpointer commits the full thread
+    # history as the graph runs, and `/chats/{thread_id}` reads it back.
     try:
-        # Create stream event processor
         processor = StreamEventProcessor(
             agent,
             kwargs["config"],
             str(run_id),
             prepared.effective_user_message,
+            include_tool_payloads=global_config.STREAM_TOOL_PAYLOADS,
         )
-        
-        # Initialize streamed_message_ids from existing state to prevent duplicates
-        # This ensures that when the graph resumes from a checkpoint, old messages
-        # are not re-streamed to the client
-        await processor._initialize_streamed_message_ids()
-        
-        # Process streamed events from the graph and yield messages over the SSE stream
+
+        yield sse(events.status_event(events.PHASE_THINKING, "Thinking…"))
+
+        # `updates` carries completed messages, `messages` carries answer
+        # tokens. `custom` is not subscribed: nothing emits custom stream data.
+        # subgraphs=True is what lets the processor tell coordinator output
+        # apart from subagent activity.
         async for stream_event in agent.astream(
-            **kwargs, stream_mode=["updates", "messages", "custom"], subgraphs=True
+            **kwargs, stream_mode=["updates", "messages"], subgraphs=True
         ):
-            async for sse_string in processor.process_event(stream_event):
-                yield sse_string
-        
+            async for payload in processor.process_event(stream_event):
+                yield sse(payload)
+
     except asyncio.CancelledError:
         # Client disconnected or request cancelled; re-raise so the task is properly cancelled
         logger.debug("Stream cancelled (client disconnect or request cancelled)")
         raise
     except StreamingError as e:
         logger.error(f"Streaming error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Streaming error: {e.message}'})}\n\n"
-    except Exception as e:
-        logger.error(f"Unexpected error in message generator: {e}", exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
-    finally:
-        yield "data: [DONE]\n\n"
+        yield sse(events.error_event(f"Streaming error: {e.message}"))
+    except Exception:
+        logger.exception("Unexpected error in message generator")
+        yield sse(events.error_event("Internal server error"))
 
 
 async def _invoke_with_attachments(
     user_input: UserInput,
     *,
+    authenticated_user_id: str,
     agent_id: str,
     attachments: list[UploadFile],
 ) -> ChatMessage:
@@ -240,15 +267,13 @@ async def _invoke_with_attachments(
         raise HTTPException(status_code=404, detail=e.message) from e
 
     try:
-        if user_input.thread_id:
-            set_thread_id_env(user_input.thread_id)
 
         prepared = await _prepare_agent_invocation(
             agent=agent,
             agent_id=agent_id,
             message=user_input.message,
             thread_id=user_input.thread_id,
-            user_id=user_input.user_id,
+            user_id=authenticated_user_id,
             provider=provider,
             model=model,
             attachments=attachments,
@@ -300,16 +325,24 @@ async def _invoke_with_attachments(
 
 @router.post("/{agent_id}/invoke")
 @router.post("/invoke")
-async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMessage:
+async def invoke(
+    user_input: UserInput,
+    agent_id: str = DEFAULT_AGENT,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> ChatMessage:
     """
     Invoke an agent with user input to retrieve a final response.
 
     If agent_id is not provided, the default agent will be used.
     Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
     is also attached to messages for recording feedback.
-    Use user_id to persist and continue a conversation across multiple threads.
+    The deprecated request user_id field is ignored; identity comes from the
+    authenticated session.
     Provider and model can be specified in the request to use different LLMs.
     """
+    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
+
     # Extract provider and model from request
     provider = user_input.provider.value if user_input.provider else None
     model = user_input.model
@@ -321,16 +354,13 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
         raise HTTPException(status_code=404, detail=e.message)
     
     try:
-        # Set thread_id as environment variable for tools that need it
-        if user_input.thread_id:
-            set_thread_id_env(user_input.thread_id)
 
         prepared = await _prepare_agent_invocation(
             agent=agent,
             agent_id=agent_id,
             message=user_input.message,
             thread_id=user_input.thread_id,
-            user_id=user_input.user_id,
+            user_id=str(user.id),
             provider=provider,
             model=model,
         )
@@ -392,13 +422,14 @@ async def invoke_with_files(
     provider: str | None = Form(None),
     model: str | None = Form(None),
     attachments: list[UploadFile] | None = File(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
 ) -> ChatMessage:
     """Invoke an agent with multipart form data and text attachments."""
 
     user_input = UserInput(
         message=message,
         thread_id=_form_field(thread_id),
-        user_id=_form_field(user_id),
     )
     if (provider_value := _form_field(provider)) is not None:
         try:
@@ -407,8 +438,13 @@ async def invoke_with_files(
             raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider_value}") from e
     if (model_value := _form_field(model)) is not None:
         user_input.model = model_value
-    return await invoke(user_input, agent_id=agent_id) if not attachments else await _invoke_with_attachments(
+    if not attachments:
+        return await invoke(user_input, agent_id=agent_id, user=user, session=session)
+
+    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
+    return await _invoke_with_attachments(
         user_input,
+        authenticated_user_id=str(user.id),
         agent_id=agent_id,
         attachments=attachments,
     )
@@ -416,31 +452,37 @@ async def invoke_with_files(
 
 @router.post(
     "/{agent_id}/stream",
-    response_class=StreamingResponse,
+    response_class=EventSourceResponse,
     responses=_sse_response_example(),
 )
-@router.post("/stream", response_class=StreamingResponse, responses=_sse_response_example())
-async def stream(user_input: StreamInput, agent_id: str = DEFAULT_AGENT) -> StreamingResponse:
+@router.post("/stream", response_class=EventSourceResponse, responses=_sse_response_example())
+async def stream(
+    user_input: StreamInput,
+    agent_id: str = DEFAULT_AGENT,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> EventSourceResponse:
     """
     Stream an agent's response to a user input, including intermediate messages and tokens.
 
     If agent_id is not provided, the default agent will be used.
     Use thread_id to persist and continue a multi-turn conversation. 
     run_id kwarg is also attached to all messages for recording feedback.
-    Use user_id to persist and continue a conversation across multiple threads.
+    The deprecated request user_id field is ignored; identity comes from the
+    authenticated session.
     """
-    return StreamingResponse(
-        message_generator(user_input, agent_id),
-        media_type="text/event-stream",
+    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
+    return EventSourceResponse(
+        message_generator(user_input, str(user.id), agent_id),
     )
 
 
 @router.post(
     "/{agent_id}/stream_with_files",
-    response_class=StreamingResponse,
+    response_class=EventSourceResponse,
     responses=_sse_response_example(),
 )
-@router.post("/stream_with_files", response_class=StreamingResponse, responses=_sse_response_example())
+@router.post("/stream_with_files", response_class=EventSourceResponse, responses=_sse_response_example())
 async def stream_with_files(
     agent_id: str = DEFAULT_AGENT,
     message: str = Form(""),
@@ -449,13 +491,14 @@ async def stream_with_files(
     provider: str | None = Form(None),
     model: str | None = Form(None),
     attachments: list[UploadFile] | None = File(default=None),
-) -> StreamingResponse:
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> EventSourceResponse:
     """Stream an agent response from multipart form data and text attachments."""
 
     user_input = StreamInput(
         message=message,
         thread_id=_form_field(thread_id),
-        user_id=_form_field(user_id),
     )
     if (provider_value := _form_field(provider)) is not None:
         try:
@@ -464,23 +507,37 @@ async def stream_with_files(
             raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider_value}") from e
     if (model_value := _form_field(model)) is not None:
         user_input.model = model_value
-    return StreamingResponse(
-        message_generator(user_input, agent_id, attachments=attachments),
-        media_type="text/event-stream",
+    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
+    return EventSourceResponse(
+        message_generator(
+            user_input,
+            str(user.id),
+            agent_id,
+            attachments=attachments,
+        ),
     )
 
 
 @router.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str) -> dict[str, Any]:
+async def delete_thread(
+    thread_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
     """Delete all persisted LangGraph state for a conversation thread."""
 
     try:
+        chat = await get_owned_chat(session, user.id, thread_id)
         await get_checkpointer().adelete_thread(thread_id)
+        await session.delete(chat)
+        await session.commit()
         return {
             "status": "success",
             "thread_id": thread_id,
             "message": f"Thread {thread_id} deleted successfully",
         }
+    except ChatNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Chat not found") from e
     except RuntimeError as e:
         logger.error("Checkpointer unavailable while deleting thread %s: %s", thread_id, e)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -489,62 +546,12 @@ async def delete_thread(thread_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Failed to delete thread state") from e
 
 
-@router.post("/{agent_id}/restart")
-@router.post("/restart")
-async def restart(
-    agent_id: str = DEFAULT_AGENT,
-    provider: str | None = Query(None, description="New LLM provider (openai or blablador)"),
-    model: str | None = Query(None, description="New LLM model name"),
-) -> dict[str, Any]:
-    """
-    Restart an agent with new provider/model configuration.
-    
-    This endpoint forces reinitialization of the agent graph with new LLM configuration,
-    similar to refreshing the web page but keeping the new provider/model.
-    
-    Args:
-        agent_id: Agent identifier (e.g., "my_agent")
-        provider: New LLM provider (optional, uses current if not provided)
-        model: New LLM model name (optional, uses current if not provided)
-    
-    Returns:
-        Dictionary with restart status and agent info
-    """
-    try:
-        agent = await restart_agent(agent_id, provider=provider, model=model)
-        
-        # Determine the actual provider/model used
-        actual_provider = provider or global_config.DEFAULT_PROVIDER
-        if model is None:
-            try:
-                provider_enum = Provider(actual_provider)
-                actual_model = get_default_model_for_provider(provider_enum)
-            except ValueError:
-                actual_model = global_config.DEFAULT_MODEL
-        else:
-            actual_model = model
-        
-        return {
-            "status": "success",
-            "message": f"Agent {agent_id} restarted successfully",
-            "provider": actual_provider,
-            "model": actual_model,
-            "agent_id": agent_id
-        }
-    except AgentNotFoundError as e:
-        logger.error(f"Agent not found for restart: {e}")
-        raise HTTPException(status_code=404, detail=e.message)
-    except Exception as e:
-        logger.error(f"Failed to restart agent: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to restart agent: {str(e)}")
-
-
 # ------------------------------------------------------------------
 # Discovery endpoints
 # ------------------------------------------------------------------
 
 @router.get("/agents")
-async def get_agents() -> dict[str, Any]:
+async def get_agents(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
     """Return all registered agents and the current default."""
     return {
         "agents": list_registered_agents(),
@@ -553,7 +560,9 @@ async def get_agents() -> dict[str, Any]:
 
 
 @router.get("/repositories")
-async def get_repositories() -> list[dict[str, Any]]:
+async def get_repositories(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """Return metadata for all configured software repositories."""
     from juena.indexing.repo_manager import RepoManager
 

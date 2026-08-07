@@ -31,5 +31,15 @@ def test_blablador_display_name_for_qwen35_122b() -> None:
     )
 
 
+def test_blablador_display_names_hide_provider_ranking_prefixes() -> None:
+    labels = [
+        get_blablador_model_display_name(model.value)
+        for model in BlabladorModelName
+    ]
+
+    assert labels == ["GPT-OSS-120b", "MiniMax-M2.7", "QWEN3.5-122B"]
+    assert all(not label[:1].isdigit() for label in labels)
+
+
 def test_blablador_default_model_remains_gpt_oss() -> None:
     assert get_default_model_for_provider(Provider.BLABLADOR) == BlabladorModelName.GPT_OSS.value

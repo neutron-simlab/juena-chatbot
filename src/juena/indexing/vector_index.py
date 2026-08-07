@@ -21,7 +21,7 @@ from chromadb.api.types import DefaultEmbeddingFunction, Documents, EmbeddingFun
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 from juena.core.log import get_logger
-from juena.indexing.chunking import chunk_file
+from juena.indexing.chunking import CHUNKING_VERSION, chunk_file
 from juena.indexing.repo_config import RepoConfig
 from juena.indexing.repo_manager import RepoManager
 
@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 _INDEX_DIR_ENV = "VECTOR_INDEX_DIR"
 _DEFAULT_INDEX_DIR = "data/vector_index"
 _PROGRESS_STEP_PERCENT = 5
-_INDEX_SCHEMA_VERSION = 1
+_INDEX_SCHEMA_VERSION = 2
 _COLLECTION_BASE_METADATA = {"hnsw:space": "cosine"}
 _INDEX_META_SCHEMA_VERSION = "juena:index_schema_version"
 _INDEX_META_REPO_REVISION = "juena:repo_revision"
@@ -149,6 +149,7 @@ class RepoVectorIndex:
 
         payload = {
             "schema_version": _INDEX_SCHEMA_VERSION,
+            "chunking_version": CHUNKING_VERSION,
             "include_globs": cfg.include_globs,
             "exclude_globs": cfg.exclude_globs,
             "max_file_bytes": cfg.max_file_bytes,
@@ -231,6 +232,8 @@ class RepoVectorIndex:
                 "chunk_index": chunk.chunk_index,
                 "is_doc": chunk.is_doc,
                 "content_hash": chunk.content_hash,
+                "start_index": chunk.start_index,
+                "end_index": chunk.end_index,
                 "content": chunk.text,
             }
             for chunk in chunks
@@ -313,6 +316,8 @@ class RepoVectorIndex:
                         "chunk_index": chunk["chunk_index"],
                         "is_doc": chunk["is_doc"],
                         "content_hash": chunk["content_hash"],
+                        "start_index": chunk["start_index"],
+                        "end_index": chunk["end_index"],
                     }
                     chunk_token_estimate = _estimated_embedding_tokens(chunk["content"])
                     would_exceed_budget = (
@@ -371,7 +376,8 @@ class RepoVectorIndex:
         Semantic search against *repo_id*'s collection.
 
         Returns a list of dicts with keys:
-            file_path, chunk_index, is_doc, distance, content
+            file_path, chunk_index, start_index, end_index, is_doc, distance,
+            content
         """
         if self._repo_manager.get_config(repo_id) is None:
             raise ValueError(f"Unknown repo: {repo_id}")
@@ -397,6 +403,8 @@ class RepoVectorIndex:
                 "id": doc_id,
                 "file_path": metas[i].get("file_path", ""),
                 "chunk_index": metas[i].get("chunk_index", 0),
+                "start_index": metas[i].get("start_index", 0),
+                "end_index": metas[i].get("end_index", 0),
                 "is_doc": metas[i].get("is_doc", False),
                 "distance": dists[i] if i < len(dists) else None,
                 "content": docs[i] if i < len(docs) else "",
@@ -502,6 +510,8 @@ class RepoVectorIndex:
                 "chunk_index": chunk["chunk_index"],
                 "is_doc": chunk.get("is_doc", False),
                 "content_hash": c_hash,
+                "start_index": chunk.get("start_index", 0),
+                "end_index": chunk.get("end_index", 0),
             })
             token_estimate += chunk_token_estimate
         if ids:
@@ -513,7 +523,17 @@ class RepoVectorIndex:
         if col is None:
             return "vector index missing"
 
-        if col.count() == 0:
+        try:
+            count = col.count()
+        except chromadb.errors.ChromaError as exc:
+            # A process kill during HNSW backfill can leave the collection
+            # present but unreadable. Bootstrap treats other stale states as
+            # rebuildable, so surface this one the same way instead of entering
+            # a permanent container restart loop on every count attempt.
+            logger.warning("Vector index for %s is unreadable: %s", repo_id, exc)
+            return "vector index unreadable"
+
+        if count == 0:
             return "vector index empty"
 
         metadata = col.metadata or {}

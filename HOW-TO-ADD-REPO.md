@@ -1,13 +1,13 @@
-# How to Add a New Code Repository to `code_chat_agent`
+# How to Add a New Code Repository to JüNA
 
 This guide is for one specific job: making another codebase searchable by the
-existing `code_chat_agent`.
+existing JüNA agent.
 
 You do not need to create a new agent or change `main.py`. You only need to:
 
 1. Add the repo to `config/repositories.yaml`
-2. Fully restart the application
-3. Trigger `code_chat_agent` once so it clones and indexes the repo
+2. Rebuild/restart the application so startup bootstrap runs
+3. Verify the repository appears in the authenticated discovery endpoint
 
 ## What Actually Happens
 
@@ -15,16 +15,15 @@ The lifecycle is:
 
 1. `config/repositories.yaml` is loaded into `RepoManager`
 2. `/repositories` shows the configured repo metadata after a full app restart
-3. The first time `code_chat_agent` is created, it:
-   - clones the repo into `REPO_CACHE_DIR`
-   - builds a Chroma vector index in `VECTOR_INDEX_DIR`
-   - exposes that repo to the search tools used by the agent
+3. Startup bootstrap clones the repo into `REPO_CACHE_DIR`, builds its Chroma
+   vector index in `VECTOR_INDEX_DIR`, and exposes it to JüNA's repository
+   research tools before the API becomes healthy
 
 That means:
 
 - editing the YAML file alone is not enough
 - `/repositories` confirms the repo is registered
-- a real `code_chat_agent` request is what triggers clone + indexing
+- the API starts only after every configured repository has synchronized and indexed
 
 ## Step 1: Make Sure the Repo Is Reachable
 
@@ -154,7 +153,7 @@ uv run python main.py
 Docker run:
 
 ```bash
-docker compose up --build -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 ```
 
 Why `--build` is needed in Docker:
@@ -163,16 +162,15 @@ Why `--build` is needed in Docker:
 - editing `config/repositories.yaml` on the host does not update the running
   container unless you rebuild the image
 
-Do not rely on `/code_chat_agent/restart` for config reloads. That endpoint
-restarts the agent graph, but it does not reliably reload the repository tool
-context after `repositories.yaml` changes.
+There is intentionally no shared agent-restart endpoint. A full process restart
+reruns repository bootstrap and rebuilds the cached JüNA graph safely.
 
 ## Step 4: Verify the Repo Is Registered
 
 First verify that the app loaded the repo config:
 
 ```bash
-curl http://localhost:8080/repositories
+curl --cookie "juena_session=<opaque-session>" http://localhost:8080/repositories
 ```
 
 You should see your new repo in the JSON response.
@@ -180,10 +178,12 @@ You should see your new repo in the JSON response.
 Also verify the agent exists:
 
 ```bash
-curl http://localhost:8080/agents
+curl --cookie "juena_session=<opaque-session>" http://localhost:8080/agents
 ```
 
-You should see `code_chat_agent` in the `agents` list.
+You should see `juena` in the `agents` list. The retired `react_agent` and
+`code_chat_agent` ids remain request aliases for one compatibility release but
+are not advertised.
 
 ## Step 5: Trigger Clone and Index Build
 
@@ -270,13 +270,12 @@ uv run python main.py
 Docker:
 
 ```bash
-docker compose down
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 docker volume rm juena-chatbot-vector-index
-docker compose up --build -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 ```
 
-That rebuilds the semantic index from scratch on the next `code_chat_agent`
-request.
+That rebuilds the semantic index from scratch during the next startup.
 
 ## Useful Environment Variables
 
@@ -290,10 +289,10 @@ request.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| New repo does not appear in `/repositories` | App did not restart with updated config | Restart locally, or rebuild Docker image with `docker compose up --build -d` |
+| New repo does not appear in `/repositories` | App did not restart with updated config | Restart locally, or rebuild with `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d` |
 | `git clone` fails | Bad URL or missing access | Check the URL and ensure the runtime has network/SSH credentials |
 | Wrong branch error | `source.branch` is wrong | Check the repo's default branch and update the config |
-| First question is slow | Clone + indexing is happening | Normal for the first `code_chat_agent` request |
+| Service startup is slow | Clone + indexing is happening | Watch bootstrap progress and wait for the health check |
 | Docs search misses files | `docs_paths` does not match the repo layout | Add the correct paths and rebuild the index if needed |
 
 ## Short Version
@@ -304,4 +303,4 @@ If you just want the operator checklist:
 2. Set `id`, `source.url`, and the correct `source.branch`
 3. Fully restart the app
 4. Confirm the repo shows up in `GET /repositories`
-5. Send one request to `code_chat_agent` so it clones and indexes the repo
+5. Wait for startup bootstrap to finish, then ask JüNA about the repository
