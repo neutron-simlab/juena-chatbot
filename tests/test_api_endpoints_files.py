@@ -97,66 +97,6 @@ def _build_test_client(monkeypatch) -> TestClient:  # noqa: ANN001
     return TestClient(app)
 
 
-def test_invoke_with_files_stages_inputs_and_returns_chat_message(monkeypatch) -> None:
-    fake_agent = _FakeAgent()
-
-    async def fake_get_agent(agent_id: str, provider: str | None = None, model: str | None = None):
-        assert agent_id == "juena"
-        assert provider == "openai"
-        assert model == "gpt-test"
-        return fake_agent
-
-    monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
-
-    client = _build_test_client(monkeypatch)
-    response = client.post(
-        "/juena/invoke_with_files",
-        data={
-            "message": "Please inspect this upload",
-            "thread_id": "thread-1",
-            "provider": "openai",
-            "model": "gpt-test",
-        },
-        files=[
-            ("attachments", ("snippet.py", b"print('hello')\n", "text/x-python")),
-        ],
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["type"] == "ai"
-    assert payload["content"] == "ready"
-    assert payload["thread_id"] == "thread-1"
-
-    assert fake_agent.last_kwargs is not None
-    assert "Persistent uploaded files for this chat are available under `/inputs/uploads/`." in (
-        fake_agent.last_kwargs["input"]["messages"][0].content
-    )
-    assert fake_agent.last_kwargs["input"]["files"]["/inputs/old.txt"] is None
-    assert "/inputs/current_message.txt" in fake_agent.last_kwargs["input"]["files"]
-    assert "/inputs/uploads/snippet.py" in fake_agent.last_kwargs["input"]["files"]
-    assert "/inputs/uploads_manifest.md" in fake_agent.last_kwargs["input"]["files"]
-
-
-def test_invoke_with_files_rejects_unsupported_file_types(monkeypatch) -> None:
-    async def fake_get_agent(agent_id: str, provider: str | None = None, model: str | None = None):
-        return _FakeAgent()
-
-    monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
-
-    client = _build_test_client(monkeypatch)
-    response = client.post(
-        "/juena/invoke_with_files",
-        data={"message": "Please inspect this upload"},
-        files=[
-            ("attachments", ("report.pdf", b"%PDF-1.7", "application/pdf")),
-        ],
-    )
-
-    assert response.status_code == 400
-    assert "unsupported extension" in response.json()["detail"]
-
-
 def test_delete_thread_endpoint_removes_persisted_state(monkeypatch) -> None:
     deleted: dict[str, str] = {}
 
@@ -176,40 +116,3 @@ def test_delete_thread_endpoint_removes_persisted_state(monkeypatch) -> None:
         "message": "Thread thread-123 deleted successfully",
     }
     assert deleted == {"thread_id": "thread-123"}
-
-
-def test_agents_endpoint_reports_the_registry_default(monkeypatch) -> None:
-    """`GET /agents` must read the default at request time.
-
-    The default is rebound when an agent self-registers, which happens after
-    this module is imported. A `from ... import DEFAULT_AGENT` in the endpoint
-    module would freeze whatever value was current at import.
-    """
-
-    monkeypatch.setattr(api_endpoints, "list_registered_agents", lambda: ["late-agent"])
-    monkeypatch.setattr(api_endpoints, "get_default_agent", lambda: "late-agent")
-
-    client = _build_test_client(monkeypatch)
-    response = client.get("/agents")
-
-    assert response.status_code == 200
-    assert response.json() == {"agents": ["late-agent"], "default": "late-agent"}
-
-
-def test_invoke_without_an_agent_id_resolves_the_current_default(monkeypatch) -> None:
-    """`POST /invoke` has no `{agent_id}` path segment, so it must fall back."""
-
-    seen: dict[str, str] = {}
-
-    async def fake_get_agent(agent_id: str, provider: str | None = None, model: str | None = None):
-        seen["agent_id"] = agent_id
-        return _FakeAgent()
-
-    monkeypatch.setattr(api_endpoints, "get_agent", fake_get_agent)
-    monkeypatch.setattr(api_endpoints, "get_default_agent", lambda: "late-agent")
-
-    client = _build_test_client(monkeypatch)
-    response = client.post("/invoke", json={"message": "hello", "thread_id": "thread-1"})
-
-    assert response.status_code == 200
-    assert seen["agent_id"] == "late-agent"

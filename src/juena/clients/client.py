@@ -1,6 +1,6 @@
 import json
 import weakref
-from collections.abc import AsyncGenerator, Generator, Sequence
+from collections.abc import Generator, Sequence
 from typing import Any
 
 import httpx
@@ -10,7 +10,6 @@ from juena.schema.llm_models import Provider
 from juena.schema.server import (
     ChatMessage,
     StreamInput,
-    UserInput,
 )
 
 
@@ -138,28 +137,11 @@ class AgentClient:
             data["provider"] = provider_value
         return data
 
-    def update_agent(self, agent: str) -> None:
-        """Update the agent to use for requests."""
-        self.agent = agent
-
     def get_current_user(self) -> dict[str, Any]:
         """Return the user associated with the current session cookie."""
         try:
             response = self._client.get(
                 f"{self.base_url}/auth/me",
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise AgentClientError(_http_error_message(e))
-        return response.json()
-
-    def list_agents(self) -> dict[str, Any]:
-        """Return registered agents and the server-side default."""
-        try:
-            response = self._client.get(
-                f"{self.base_url}/agents",
                 headers=self._headers,
                 timeout=self.timeout,
             )
@@ -239,147 +221,6 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(_http_error_message(e))
         return response.json()
-
-    def list_repositories(self) -> list[dict[str, Any]]:
-        """Return configured repository metadata from the server."""
-        try:
-            response = self._client.get(
-                f"{self.base_url}/repositories",
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise AgentClientError(f"Error: {e}")
-
-        try:
-            payload = response.json()
-        except ValueError as e:
-            raise AgentClientError(f"Error: {e}")
-
-        if not isinstance(payload, list):
-            raise AgentClientError("Error: Invalid repository response from server")
-
-        return payload
-
-    async def ainvoke(
-        self,
-        message: str,
-        model: str | None = None,
-        provider: str | None = None,
-        thread_id: str | None = None,
-        attachments: Sequence[Any] | None = None,
-    ) -> ChatMessage:
-        """
-        Invoke the agent asynchronously. Only the final message is returned.
-
-        Args:
-            message (str): The message to send to the agent
-            model (str, optional): LLM model to use for the agent
-            provider (str, optional): LLM provider to use (openai or blablador)
-            thread_id (str, optional): Thread ID for continuing a conversation
-
-        Returns:
-            AnyMessage: The response from the agent
-        """
-        if not self.agent:
-            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        async with httpx.AsyncClient() as client:
-            try:
-                if attachments:
-                    response = await client.post(
-                        f"{self.base_url}/{self.agent}/invoke_with_files",
-                        data=self._build_file_request_data(
-                            message,
-                            model,
-                            provider,
-                            thread_id,
-                        ),
-                        files=self._build_attachment_payloads(attachments),
-                        headers=self._headers,
-                        timeout=self.timeout,
-                    )
-                else:
-                    request = UserInput(message=message)
-                    if thread_id:
-                        request.thread_id = thread_id
-                    if model:
-                        request.model = model  # type: ignore[assignment]
-                    if provider:
-                        if isinstance(provider, str):
-                            request.provider = Provider(provider)
-                        else:
-                            request.provider = provider
-                    response = await client.post(
-                        f"{self.base_url}/{self.agent}/invoke",
-                        json=request.model_dump(exclude_none=True),
-                        headers=self._headers,
-                        timeout=self.timeout,
-                    )
-                response.raise_for_status()
-            except httpx.HTTPError as e:
-                raise AgentClientError(_http_error_message(e))
-
-        return ChatMessage.model_validate(response.json())
-
-    def invoke(
-        self,
-        message: str,
-        model: str | None = None,
-        provider: str | None = None,
-        thread_id: str | None = None,
-        attachments: Sequence[Any] | None = None,
-    ) -> ChatMessage:
-        """
-        Invoke the agent synchronously. Only the final message is returned.
-
-        Args:
-            message (str): The message to send to the agent
-            model (str, optional): LLM model to use for the agent
-            provider (str, optional): LLM provider to use (openai or blablador)
-            thread_id (str, optional): Thread ID for continuing a conversation
-
-        Returns:
-            ChatMessage: The response from the agent
-        """
-        if not self.agent:
-            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
-        try:
-            if attachments:
-                response = self._client.post(
-                    f"{self.base_url}/{self.agent}/invoke_with_files",
-                    data=self._build_file_request_data(
-                        message,
-                        model,
-                        provider,
-                        thread_id,
-                    ),
-                    files=self._build_attachment_payloads(attachments),
-                    headers=self._headers,
-                    timeout=self.timeout,
-                )
-            else:
-                request = UserInput(message=message)
-                if thread_id:
-                    request.thread_id = thread_id
-                if model:
-                    request.model = model  # type: ignore[assignment]
-                if provider:
-                    if isinstance(provider, str):
-                        request.provider = Provider(provider)
-                    else:
-                        request.provider = provider
-                response = self._client.post(
-                    f"{self.base_url}/{self.agent}/invoke",
-                    json=request.model_dump(exclude_none=True),
-                    headers=self._headers,
-                    timeout=self.timeout,
-                )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise AgentClientError(_http_error_message(e))
-
-        return ChatMessage.model_validate(response.json())
 
     def _parse_sse_data(self, data: str) -> ChatMessage | dict | None:
         """
@@ -635,45 +476,6 @@ class AgentClient:
             raise AgentClientError("Error: Server returned an invalid approval response") from e
         approval = payload.get("approval") if isinstance(payload, dict) else None
         return approval if isinstance(approval, dict) else None
-
-    async def astream(
-        self,
-        message: str,
-        model: str | None = None,
-        provider: str | None = None,
-        thread_id: str | None = None,
-        attachments: Sequence[Any] | None = None,
-    ) -> AsyncGenerator[ChatMessage | dict, None]:
-        """
-        Stream the agent's response asynchronously.
-
-        Async twin of `stream`; see it for the yielded shapes.
-
-        Args:
-            message (str): The message to send to the agent
-            model (str, optional): LLM model to use for the agent
-            provider (str, optional): LLM provider to use (openai or blablador)
-            thread_id (str, optional): Thread ID for continuing a conversation
-            attachments (Sequence, optional): Files to stage for this turn
-
-        Returns:
-            AsyncGenerator[ChatMessage | dict, None]: The response from the agent
-        """
-        url, stream_kwargs = self._build_stream_request(
-            message, model, provider, thread_id, attachments
-        )
-        async with httpx.AsyncClient() as client:
-            try:
-                async with client.stream("POST", url, **stream_kwargs) as response:
-                    response.raise_for_status()
-                    async for sse in EventSource(response).aiter_sse():
-                        parsed = self._parse_sse_data(sse.data)
-                        if parsed is not None:
-                            yield parsed
-            except httpx.HTTPError as e:
-                raise AgentClientError(_http_error_message(e))
-            except SSEError as e:
-                raise AgentClientError(f"Error: {e}")
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """

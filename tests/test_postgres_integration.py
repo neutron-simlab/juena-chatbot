@@ -200,7 +200,7 @@ async def test_chat_and_agent_endpoints_enforce_thread_ownership(
             assert (await client.delete(f"/threads/{thread_id}")).status_code == 404
             assert (
                 await client.post(
-                    "/react_agent/invoke",
+                    "/stream",
                     json={"message": "resume", "thread_id": thread_id},
                 )
             ).status_code == 404

@@ -11,24 +11,20 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sse_starlette.sse import EventSourceResponse
-from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
 from juena.server.agent.registry import (
     get_agent,
     get_default_agent,
-    list_registered_agents,
 )
-from juena.schema.server import ChatMessage, StreamInput, UserInput
+from juena.schema.server import StreamInput
 from juena.core.config import global_config
 from juena.schema.llm_models import Provider
-from juena.server.utils import langchain_to_chat_message
 from juena.server.errors import (
     AgentNotFoundError,
     StreamingError,
     StateError,
-    ChatbotServerError
 )
 from juena.server.agent.input_handler import AgentInputHandler
 from juena.server.database.checkpointer import get_checkpointer
@@ -298,210 +294,6 @@ async def message_generator(
         yield sse(events.error_event("Internal server error"))
 
 
-async def _invoke_with_attachments(
-    user_input: UserInput,
-    *,
-    authenticated_user_id: str,
-    agent_id: str,
-    attachments: list[UploadFile],
-) -> ChatMessage:
-    """Invoke an agent with multipart file attachments."""
-
-    provider = user_input.provider.value if user_input.provider else None
-    model = user_input.model
-
-    try:
-        agent: CompiledStateGraph = await get_agent(agent_id, provider=provider, model=model)
-    except AgentNotFoundError as e:
-        logger.error(f"Agent not found: {e}")
-        raise HTTPException(status_code=404, detail=e.message) from e
-
-    try:
-
-        prepared = await _prepare_agent_invocation(
-            agent=agent,
-            agent_id=agent_id,
-            message=user_input.message,
-            thread_id=user_input.thread_id,
-            user_id=authenticated_user_id,
-            provider=provider,
-            model=model,
-            attachments=attachments,
-        )
-        kwargs = prepared.kwargs
-        run_id = prepared.run_id
-    except StateError as e:
-        logger.error(f"Failed to prepare input: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to prepare input: {e.message}") from e
-    except ValueError as e:
-        logger.error(f"Invalid request input: {e}")
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        logger.error(f"Unexpected error preparing input: {e}")
-        raise HTTPException(status_code=500, detail="Unexpected error preparing input") from e
-
-    try:
-        response_events: list[tuple[str, Any]] = await agent.ainvoke(**kwargs, stream_mode=["updates", "values"])  # type: ignore # fmt: skip
-        response_type, response = response_events[-1]
-
-        if response_type == "values":
-            output = langchain_to_chat_message(response["messages"][-1])
-        elif response_type == "updates" and "__interrupt__" in response:
-            interrupt_value = response["__interrupt__"][0].value
-            output = langchain_to_chat_message(
-                AIMessage(content=interrupt_value if isinstance(interrupt_value, str) else str(interrupt_value))
-            )
-        else:
-            logger.error(f"Unexpected response type: {response_type}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Unexpected response type: {response_type}",
-            )
-
-        output.run_id = str(run_id)
-        thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
-        if thread_id_used:
-            output.thread_id = thread_id_used
-        return output
-    except HTTPException:
-        raise
-    except ChatbotServerError as e:
-        logger.error(f"Server error during invocation: {e}")
-        raise HTTPException(status_code=500, detail=e.message) from e
-    except Exception as e:
-        logger.error(f"Unexpected error during invocation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Unexpected error during agent invocation") from e
-
-
-@router.post("/{agent_id}/invoke")
-@router.post("/invoke")
-async def invoke(
-    user_input: UserInput,
-    agent_id: str | None = None,
-    user: AuthenticatedUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> ChatMessage:
-    """
-    Invoke an agent with user input to retrieve a final response.
-
-    If agent_id is not provided, the default agent will be used.
-    Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
-    is also attached to messages for recording feedback.
-    The deprecated request user_id field is ignored; identity comes from the
-    authenticated session.
-    Provider and model can be specified in the request to use different LLMs.
-    """
-    agent_id = agent_id or get_default_agent()
-    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
-
-    # Extract provider and model from request
-    provider = user_input.provider.value if user_input.provider else None
-    model = user_input.model
-    
-    try:
-        agent: CompiledStateGraph = await get_agent(agent_id, provider=provider, model=model)
-    except AgentNotFoundError as e:
-        logger.error(f"Agent not found: {e}")
-        raise HTTPException(status_code=404, detail=e.message)
-    
-    try:
-
-        prepared = await _prepare_agent_invocation(
-            agent=agent,
-            agent_id=agent_id,
-            message=user_input.message,
-            thread_id=user_input.thread_id,
-            user_id=str(user.id),
-            provider=provider,
-            model=model,
-        )
-        kwargs = prepared.kwargs
-        run_id = prepared.run_id
-    except StateError as e:
-        logger.error(f"Failed to prepare input: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to prepare input: {e.message}")
-    except ValueError as e:
-        logger.error(f"Invalid request input: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Unexpected error preparing input: {e}")
-        raise HTTPException(status_code=500, detail="Unexpected error preparing input")
-
-    try:
-        response_events: list[tuple[str, Any]] = await agent.ainvoke(**kwargs, stream_mode=["updates", "values"])  # type: ignore # fmt: skip
-        response_type, response = response_events[-1]
-        
-        if response_type == "values":
-            # Normal response, the agent completed successfully
-            output = langchain_to_chat_message(response["messages"][-1])
-        elif response_type == "updates" and "__interrupt__" in response:
-            # The last thing to occur was an interrupt
-            # Return the value of the first interrupt as an AIMessage
-            interrupt_value = response["__interrupt__"][0].value
-            output = langchain_to_chat_message(
-                AIMessage(content=interrupt_value if isinstance(interrupt_value, str) else str(interrupt_value))
-            )
-        else:
-            logger.error(f"Unexpected response type: {response_type}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Unexpected response type: {response_type}"
-            )
-
-        output.run_id = str(run_id)
-        thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
-        if thread_id_used:
-            output.thread_id = thread_id_used
-        return output
-    except HTTPException:
-        raise
-    except ChatbotServerError as e:
-        logger.error(f"Server error during invocation: {e}")
-        raise HTTPException(status_code=500, detail=e.message)
-    except Exception as e:
-        logger.error(f"Unexpected error during invocation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Unexpected error during agent invocation")
-
-
-@router.post("/{agent_id}/invoke_with_files")
-@router.post("/invoke_with_files")
-async def invoke_with_files(
-    agent_id: str | None = None,
-    message: str = Form(""),
-    thread_id: str | None = Form(None),
-    user_id: str | None = Form(None),
-    provider: str | None = Form(None),
-    model: str | None = Form(None),
-    attachments: list[UploadFile] | None = File(default=None),
-    user: AuthenticatedUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> ChatMessage:
-    """Invoke an agent with multipart form data and text attachments."""
-
-    agent_id = agent_id or get_default_agent()
-    user_input = UserInput(
-        message=message,
-        thread_id=_form_field(thread_id),
-    )
-    if (provider_value := _form_field(provider)) is not None:
-        try:
-            user_input.provider = Provider(provider_value)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider_value}") from e
-    if (model_value := _form_field(model)) is not None:
-        user_input.model = model_value
-    if not attachments:
-        return await invoke(user_input, agent_id=agent_id, user=user, session=session)
-
-    user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
-    return await _invoke_with_attachments(
-        user_input,
-        authenticated_user_id=str(user.id),
-        agent_id=agent_id,
-        attachments=attachments,
-    )
-
-
 @router.post(
     "/{agent_id}/stream",
     response_class=EventSourceResponse,
@@ -730,22 +522,3 @@ async def get_artifact(
 # ------------------------------------------------------------------
 # Discovery endpoints
 # ------------------------------------------------------------------
-
-@router.get("/agents")
-async def get_agents(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
-    """Return all registered agents and the current default."""
-    return {
-        "agents": list_registered_agents(),
-        "default": get_default_agent(),
-    }
-
-
-@router.get("/repositories")
-async def get_repositories(
-    _user: AuthenticatedUser = Depends(get_current_user),
-) -> list[dict[str, Any]]:
-    """Return metadata for all configured software repositories."""
-    from juena.indexing.repo_manager import RepoManager
-
-    mgr = RepoManager()
-    return mgr.list_repo_metadata()

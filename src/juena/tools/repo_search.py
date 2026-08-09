@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from juena.retrieval.semantic_search import semantic_search
+from juena.indexing.semantic_search import semantic_search
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
 
