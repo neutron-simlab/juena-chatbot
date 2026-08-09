@@ -22,7 +22,14 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
-from juena.sandbox.constants import BROKER_AUTH_HEADER
+from juena.sandbox.constants import (
+    BROKER_AUTH_HEADER,
+    COLLECTED_EXTENSIONS,
+    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACTS_PER_EXECUTION,
+    MAX_FILE_ARTIFACT_BYTES,
+    MAX_FILE_ARTIFACTS_PER_EXECUTION,
+)
 from juena.sandbox.schemas import (
     BrokerArtifact,
     BrokerFileResult,
@@ -34,27 +41,6 @@ from juena.sandbox.schemas import (
 )
 
 MAX_STAGE_BYTES = 100 * 1024 * 1024
-MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
-MAX_FILE_ARTIFACT_BYTES = 10 * 1024 * 1024
-MAX_ARTIFACTS = 4
-MAX_FILES = 8
-COLLECTED_EXTENSIONS = frozenset(
-    {
-        ".csv",
-        ".ipynb",
-        ".json",
-        ".log",
-        ".md",
-        ".npy",
-        ".npz",
-        ".pdf",
-        ".png",
-        ".py",
-        ".sh",
-        ".tsv",
-        ".txt",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,7 +319,7 @@ class BrokerRuntime:
         output_root = output_dir.resolve()
         image_count = 0
         for path in sorted(output_dir.iterdir()):
-            if len(artifacts) >= MAX_FILES:
+            if len(artifacts) >= MAX_FILE_ARTIFACTS_PER_EXECUTION:
                 break
             if path.is_symlink() or not path.is_file():
                 continue
@@ -347,7 +333,7 @@ class BrokerRuntime:
             if previous.get(path.name) == (stat.st_mtime_ns, stat.st_size):
                 continue
             if extension == ".png":
-                if image_count >= MAX_ARTIFACTS or stat.st_size > MAX_ARTIFACT_BYTES:
+                if image_count >= MAX_ARTIFACTS_PER_EXECUTION or stat.st_size > MAX_ARTIFACT_BYTES:
                     continue
                 image_count += 1
             elif stat.st_size > MAX_FILE_ARTIFACT_BYTES:

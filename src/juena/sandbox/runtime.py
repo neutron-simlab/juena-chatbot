@@ -29,14 +29,14 @@ def _context_value(context: Any, name: str) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class SandboxIdentity:
+class _SandboxIdentity:
     user_id: str
     thread_id: str
     run_id: str | None
     workspace_id: str
 
     @classmethod
-    def from_runtime(cls, runtime: Any) -> "SandboxIdentity":
+    def from_runtime(cls, runtime: Any) -> "_SandboxIdentity":
         context = getattr(runtime, "context", None)
         user_id = _context_value(context, "user_id")
         thread_id = _context_value(context, "thread_id")
@@ -87,7 +87,7 @@ class SandboxBackendFactory:
         )
 
     def __call__(self, runtime: Any) -> CompositeBackend:
-        identity = SandboxIdentity.from_runtime(runtime)
+        identity = _SandboxIdentity.from_runtime(runtime)
         sandbox = PodmanSandboxBackend(
             broker=get_broker_client(),
             workspace_id=identity.workspace_id,

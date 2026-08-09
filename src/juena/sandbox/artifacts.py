@@ -19,31 +19,20 @@ from uuid import uuid4
 from PIL import Image
 
 from juena.core.config import global_config
+from juena.sandbox.constants import (
+    DOWNLOAD_TYPES,
+    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACTS_PER_EXECUTION,
+    MAX_FILE_ARTIFACT_BYTES,
+    MAX_FILE_ARTIFACTS_PER_EXECUTION,
+)
 from juena.sandbox.schemas import ArtifactRef, BrokerArtifact
 
-MAX_ARTIFACTS_PER_EXECUTION = 4
-MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
-MAX_FILE_ARTIFACTS_PER_EXECUTION = 8
-MAX_FILE_ARTIFACT_BYTES = 10 * 1024 * 1024
 MAX_ARTIFACTS_PER_TURN = 12
 MAX_IMAGE_EDGE = 4096
 MAX_IMAGE_PIXELS = 16_000_000
 ARTIFACT_MESSAGE_KEY = "juena_artifacts"
 
-_DOWNLOAD_TYPES = {
-    ".csv": "text/csv",
-    ".ipynb": "application/x-ipynb+json",
-    ".json": "application/json",
-    ".log": "text/plain",
-    ".md": "text/markdown",
-    ".npy": "application/octet-stream",
-    ".npz": "application/zip",
-    ".pdf": "application/pdf",
-    ".py": "text/x-python",
-    ".sh": "text/x-shellscript",
-    ".tsv": "text/tab-separated-values",
-    ".txt": "text/plain",
-}
 _TEXT_EXTENSIONS = frozenset(
     {".csv", ".ipynb", ".json", ".log", ".md", ".py", ".sh", ".tsv", ".txt"}
 )
@@ -134,7 +123,7 @@ class ArtifactStore:
         if extension == ".png":
             width, height = cls._validate_png(content)
             return "image/png", "image", width, height
-        mime_type = _DOWNLOAD_TYPES.get(extension)
+        mime_type = DOWNLOAD_TYPES.get(extension)
         if mime_type is None:
             raise ValueError("Generated file type is not allowed")
         if not content or len(content) > MAX_FILE_ARTIFACT_BYTES:
@@ -158,9 +147,7 @@ class ArtifactStore:
         return self._user_root(user_id) / f"{artifact_id}.json"
 
     def _content_path(self, user_id: str, artifact_id: str) -> Path:
-        path = self._user_root(user_id) / f"{artifact_id}.bin"
-        legacy_png = self._user_root(user_id) / f"{artifact_id}.png"
-        return path if path.exists() or not legacy_png.exists() else legacy_png
+        return self._user_root(user_id) / f"{artifact_id}.bin"
 
     def register_artifact(
         self,
@@ -219,26 +206,6 @@ class ArtifactStore:
             self._pending_events.setdefault(key, []).append(artifact_id)
         return stored.public_ref()
 
-    def register_png(
-        self,
-        *,
-        user_id: str,
-        thread_id: str,
-        run_id: str | None,
-        filename: str,
-        content: bytes,
-        caption: str | None = None,
-    ) -> ArtifactRef:
-        """Compatibility wrapper for callers that explicitly produce a PNG."""
-        return self.register_artifact(
-            user_id=user_id,
-            thread_id=thread_id,
-            run_id=run_id,
-            filename=filename,
-            content=content,
-            caption=caption,
-        )
-
     def register_broker_artifacts(
         self,
         *,
@@ -273,8 +240,6 @@ class ArtifactStore:
         path = self._metadata_path(user_id, artifact_id)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            if "kind" not in payload and payload.get("mime_type") == "image/png":
-                payload["kind"] = "image"
             stored = _StoredArtifact(**payload)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return None

@@ -8,14 +8,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage
 
 from juena.sandbox.artifacts import ARTIFACT_MESSAGE_KEY, get_artifact_store
-
-
-def _context_value(context: Any, name: str) -> str | None:
-    if isinstance(context, dict):
-        value = context.get(name)
-    else:
-        value = getattr(context, name, None)
-    return str(value) if value else None
+from juena.sandbox.runtime import _context_value
 
 
 class ArtifactMessageMiddleware(AgentMiddleware):
