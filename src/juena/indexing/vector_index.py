@@ -13,6 +13,8 @@ import json
 import os
 import re
 import warnings
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -352,15 +354,32 @@ class RepoVectorIndex:
     # Semantic search
     # ------------------------------------------------------------------
 
+    def embed_query(self, query: str) -> list[float]:
+        """Embed one query string, so a fan-out can reuse a single round-trip.
+
+        The embedding backend is remote, so this is the expensive part of a
+        search. Searching every repository used to pay for it once per
+        repository even though the query never changes.
+
+        Coerced to plain floats: the embedding function yields ``numpy.float32``
+        scalars, and Chroma's ``query_embeddings`` validation rejects a list of
+        those even though it accepts a bare numpy array.
+        """
+        return [float(value) for value in self._embedding_function([query])[0]]
+
     def search(
         self,
         repo_id: str,
         query: str,
         n_results: int = 10,
         where: dict[str, Any] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Semantic search against *repo_id*'s collection.
+
+        Pass ``query_embedding`` to reuse an embedding produced by
+        :meth:`embed_query`; otherwise Chroma embeds ``query`` itself.
 
         Returns a list of dicts with keys:
             file_path, chunk_index, start_index, end_index, is_doc, distance,
@@ -371,9 +390,12 @@ class RepoVectorIndex:
 
         col = self._get_or_create_collection(repo_id)
         kwargs: dict[str, Any] = {
-            "query_texts": [query],
             "n_results": min(n_results, col.count() or 1),
         }
+        if query_embedding is not None:
+            kwargs["query_embeddings"] = [query_embedding]
+        else:
+            kwargs["query_texts"] = [query]
         if where:
             kwargs["where"] = where
 
@@ -396,6 +418,84 @@ class RepoVectorIndex:
                 "distance": dists[i] if i < len(dists) else None,
                 "content": docs[i] if i < len(docs) else "",
             })
+        return hits
+
+    def warm(self, repo_ids: Sequence[str] | None = None) -> int:
+        """Load the on-disk collections so the first user query does not.
+
+        Chroma loads a collection's HNSW index lazily on first query. Across
+        nine repositories that is several seconds paid by whoever searches
+        first after a restart. Calling this at startup moves the cost off the
+        request path; afterwards the instance-level collection cache keeps
+        searches fast for the life of the process.
+
+        Returns the number of collections warmed. Never raises: a repository
+        that cannot be loaded is logged and skipped, because failing to warm
+        must not prevent the server from starting.
+        """
+        targets = list(repo_ids) if repo_ids is not None else list(self._repo_manager.repo_ids)
+        warmed = 0
+        for repo_id in targets:
+            try:
+                collection = self._get_collection_if_exists(repo_id)
+                if collection is None:
+                    continue
+                # A tiny query forces the HNSW segment to load; count() alone
+                # reads metadata without touching the index itself.
+                collection.query(query_embeddings=[[0.0] * self._embedding_dim()], n_results=1)
+                warmed += 1
+            except Exception:
+                logger.warning("Could not warm vector index for %s", repo_id, exc_info=True)
+        logger.info("Vector index warmed for %d/%d repositories", warmed, len(targets))
+        return warmed
+
+    def _embedding_dim(self) -> int:
+        """Dimension of the configured embedding model, discovered once."""
+        if getattr(self, "_cached_embedding_dim", None) is None:
+            self._cached_embedding_dim = len(self.embed_query("warmup"))
+        return self._cached_embedding_dim
+
+    def search_many(
+        self,
+        repo_ids: Sequence[str],
+        query: str,
+        n_results: int = 10,
+        where: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search several repositories, tagging each hit with its ``repo_id``.
+
+        Embeds the query once and queries the collections concurrently. The
+        per-repository work is a Chroma call that releases the GIL, so threads
+        overlap the collection loads that dominate a cold fan-out.
+
+        A repository that fails is skipped rather than failing the whole search:
+        one unreadable collection should not make every repository unsearchable.
+        """
+        if not repo_ids:
+            return []
+
+        embedding = self.embed_query(query)
+
+        def _one(repo_id: str) -> list[dict[str, Any]]:
+            try:
+                return [
+                    {**hit, "repo_id": repo_id}
+                    for hit in self.search(
+                        repo_id,
+                        query,
+                        n_results=n_results,
+                        where=where,
+                        query_embedding=embedding,
+                    )
+                ]
+            except Exception:
+                logger.warning("Search failed for repository %s", repo_id, exc_info=True)
+                return []
+
+        hits: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=min(8, len(repo_ids))) as pool:
+            for repo_hits in pool.map(_one, repo_ids):
+                hits.extend(repo_hits)
         return hits
 
     # ------------------------------------------------------------------

@@ -19,6 +19,7 @@ from deepagents.backends.protocol import (
     GrepResult,
     LsResult,
     ReadResult,
+    SandboxBackendProtocol,
     WriteResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
@@ -270,7 +271,7 @@ class PodmanSandboxBackend(BaseSandbox):
 class ReadOnlySandboxInputsBackend(BackendProtocol):
     """Route-local `/inputs` adapter over the sandbox's read-only input mount."""
 
-    def __init__(self, sandbox: PodmanSandboxBackend) -> None:
+    def __init__(self, sandbox: SandboxBackendProtocol) -> None:
         self._sandbox = sandbox
 
     @staticmethod

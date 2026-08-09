@@ -22,7 +22,7 @@ from juena.agents.specialists.software.tools import (
 from juena.core.llms_providers import build_chat_model
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext
-from juena.sandbox.runtime import build_sandbox_backend_factory, sandbox_enabled
+from juena.sandbox.runtime import build_sandbox_backend, sandbox_enabled
 from juena.sandbox.software import repository_software_prompt
 
 SOFTWARE_SPECIALIST_NAME = "software-specialist"
@@ -87,7 +87,7 @@ def build_software_specialist(
 
     repo_cache_root = repo_manager.cache_dir if has_repo_research else None
     backend = (
-        build_sandbox_backend_factory(
+        build_sandbox_backend(
             repo_cache_root=repo_cache_root,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             has_skills=has_authored_skills(_SPECIALIST_SKILLS_PATH),

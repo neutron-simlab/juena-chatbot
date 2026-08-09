@@ -134,6 +134,9 @@ async def test_supervisor_assembly_registers_both_specialists(
             self.cache_dir = Path("/tmp/test-repos")
 
     class StubVectorIndex:
+        def warm(self, repo_ids=None):
+            return 0
+
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.repo_manager = repo_manager
 

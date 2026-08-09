@@ -99,10 +99,12 @@ def _search_repos_semantic(
 ) -> list[dict[str, Any]]:
     """Search all indexed repositories and return globally ranked hits."""
 
-    hits: list[dict[str, Any]] = []
-    for repo_id in repo_manager.repo_ids:
-        for hit in vector_index.search(repo_id, query, n_results=n_results, where=where):
-            hits.append({**hit, "repo_id": repo_id})
+    hits = vector_index.search_many(
+        repo_manager.repo_ids,
+        query,
+        n_results=n_results,
+        where=where,
+    )
     hits.sort(key=_distance_sort_key)
     return hits[:n_results]
 

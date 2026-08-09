@@ -243,3 +243,49 @@ def test_build_embedding_function_falls_back_without_blablador_config(
     embedding_function = vector_index_module._build_embedding_function()
 
     assert isinstance(embedding_function, DefaultEmbeddingFunction)
+
+
+def test_search_many_embeds_the_query_once_for_all_repositories(monkeypatch, repo_config_path: Path):
+    """The fan-out must not pay a remote embedding round-trip per repository."""
+    from juena.indexing.vector_index import RepoVectorIndex
+
+    index = RepoVectorIndex.__new__(RepoVectorIndex)
+    embed_calls: list[str] = []
+    searched: list[str] = []
+
+    def fake_embed(query: str) -> list[float]:
+        embed_calls.append(query)
+        return [0.1, 0.2]
+
+    def fake_search(repo_id, query, n_results=10, where=None, query_embedding=None):
+        searched.append(repo_id)
+        assert query_embedding == [0.1, 0.2], "each repo must reuse the single embedding"
+        return [{"id": f"{repo_id}-hit", "distance": 0.3}]
+
+    monkeypatch.setattr(index, "embed_query", fake_embed)
+    monkeypatch.setattr(index, "search", fake_search)
+
+    hits = index.search_many(["a", "b", "c"], "structure factor", n_results=5)
+
+    assert embed_calls == ["structure factor"]
+    assert sorted(searched) == ["a", "b", "c"]
+    assert sorted(h["repo_id"] for h in hits) == ["a", "b", "c"]
+
+
+def test_search_many_skips_a_failing_repository_instead_of_failing_all(monkeypatch, repo_config_path: Path):
+    """One unreadable collection must not make every repository unsearchable."""
+    from juena.indexing.vector_index import RepoVectorIndex
+
+    index = RepoVectorIndex.__new__(RepoVectorIndex)
+    monkeypatch.setattr(index, "embed_query", lambda q: [0.0])
+
+    def fake_search(repo_id, query, n_results=10, where=None, query_embedding=None):
+        if repo_id == "broken":
+            raise RuntimeError("collection is corrupt")
+        return [{"id": f"{repo_id}-hit", "distance": 0.2}]
+
+    monkeypatch.setattr(index, "search", fake_search)
+
+    hits = index.search_many(["ok", "broken", "other"], "q")
+
+    assert sorted(h["repo_id"] for h in hits) == ["ok", "other"]

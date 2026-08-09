@@ -57,15 +57,13 @@ command, hides raw `execute` output from the transcript, ignores the already
 handled interrupt when resuming, and stores Deep Agents' internal files under
 the writable `/workspace` directory.
 
-A later clean rerun exposed a related backend-factory regression. The factory
-had been made to look like a completed `CompositeBackend` so Deep Agents would
-use `/workspace` for its internal files. Deep Agents therefore used the
-factory's read-only placeholder instead of resolving the authenticated sandbox,
-removed the `execute` tool, and left the specialist able to write a script but
-unable to run it. The factory is now a plain runtime callable again, while the
-filesystem and summarization middleware receive their `/workspace` paths
-explicitly. In beginner terms: the agent once again receives the Python **Run**
-tool, and its private notes still go to a directory where writing is allowed.
+A later clean rerun exposed a related backend regression. Deep Agents now
+deprecates callable backend factories, so the software specialist receives a
+concrete `CompositeBackend`. Its default `RuntimePodmanSandboxBackend` resolves
+the authenticated user and thread internally for each operation using the
+active LangGraph runtime. Deep Agents can therefore discover both the
+execution-capable default and the writable `/workspace` artifact root directly,
+without private middleware overrides.
 
 The corrected flow was rerun through the real API on 2026-08-09. It paused on
 `python /workspace/outputs/sine_wave_plot.py`, resumed after approval, completed
@@ -85,8 +83,8 @@ through the new Podman path remain unverified.
 
 - Only `software-specialist` receives the execution-capable backend.
 - The supervisor and neutron specialist remain unable to execute commands.
-- A backend factory creates an isolated identity from the authenticated
-  `user_id` and owned `thread_id` for every invocation.
+- A runtime-aware backend instance resolves an isolated identity from the
+  authenticated `user_id` and owned `thread_id` for every invocation.
 - The sandbox is the default backend required by Deep Agents execution.
 - `/inputs`, `/repos`, and `/skills` use explicit read-only routes.
 - Uploaded files are copied to the broker's read-only `/inputs` mount.

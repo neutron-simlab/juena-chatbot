@@ -7,8 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from deepagents.backends import CompositeBackend
-from deepagents.backends.protocol import BackendFactory
+from deepagents.backends.protocol import (
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileUploadResponse,
+)
+from deepagents.backends.sandbox import BaseSandbox
 from deepagents.backends.utils import file_data_to_string
+from langgraph.config import get_config
+from langgraph.runtime import get_runtime
 
 from juena.agents.backends import ReadOnlyFilesystemBackend
 from juena.core.config import global_config
@@ -42,7 +49,12 @@ class _SandboxIdentity:
         thread_id = _context_value(context, "thread_id")
         if not user_id or not thread_id:
             raise RuntimeError("Sandbox execution requires authenticated user_id and thread_id")
-        config = getattr(runtime, "config", {}) or {}
+        config = getattr(runtime, "config", None)
+        if config is None:
+            try:
+                config = get_config()
+            except (KeyError, RuntimeError):
+                config = {}
         run_id = config.get("run_id") if hasattr(config, "get") else None
         token = global_config.SANDBOX_BROKER_TOKEN
         if not token:
@@ -55,75 +67,67 @@ class _SandboxIdentity:
         )
 
 
-class SandboxBackendFactory:
-    """Build one composite view for the authenticated runtime invocation."""
+class RuntimePodmanSandboxBackend(BaseSandbox):
+    """Resolve the tenant-bound Podman sandbox from the active graph runtime."""
 
-    artifacts_root = "/workspace"
-
-    def __init__(
-        self,
-        *,
-        repo_cache_root: Path | None,
-        skills_dir: Path | None,
-        has_skills: bool,
-    ) -> None:
-        self._repo_backend = (
-            ReadOnlyFilesystemBackend(
-                root_dir=repo_cache_root,
-                virtual_mode=True,
-                label="read-only repository",
-            )
-            if repo_cache_root is not None
-            else None
-        )
-        self._skills_backend = (
-            ReadOnlyFilesystemBackend(
-                root_dir=skills_dir,
-                virtual_mode=True,
-                label="read-only skill",
-            )
-            if skills_dir is not None and has_skills
-            else None
-        )
-
-    def __call__(self, runtime: Any) -> CompositeBackend:
+    @staticmethod
+    def _resolve() -> PodmanSandboxBackend:
+        runtime = get_runtime()
         identity = _SandboxIdentity.from_runtime(runtime)
-        sandbox = PodmanSandboxBackend(
+        return PodmanSandboxBackend(
             broker=get_broker_client(),
             workspace_id=identity.workspace_id,
             user_id=identity.user_id,
             thread_id=identity.thread_id,
             run_id=identity.run_id,
         )
-        routes: dict[str, Any] = {
-            "/inputs/": ReadOnlySandboxInputsBackend(sandbox),
-        }
-        if self._repo_backend is not None:
-            routes["/repos/"] = self._repo_backend
-        if self._skills_backend is not None:
-            routes["/skills/"] = self._skills_backend
-        return CompositeBackend(
-            default=sandbox,
-            routes=routes,
-            # Deep Agents stores oversized tool output and conversation summaries
-            # beneath this root. The sandbox root filesystem is intentionally
-            # read-only; `/workspace` is its only writable area.
-            artifacts_root="/workspace",
-        )
+
+    @property
+    def id(self) -> str:
+        return self._resolve().id
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        return self._resolve().execute(command, timeout=timeout)
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return self._resolve().upload_files(files)
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return self._resolve().download_files(paths)
 
 
-def build_sandbox_backend_factory(
+def build_sandbox_backend(
     *,
     repo_cache_root: Path | None,
     skills_dir: Path | None,
     has_skills: bool,
-) -> BackendFactory:
+) -> CompositeBackend:
     if not sandbox_enabled():
         raise RuntimeError("Cannot build a sandbox backend while SANDBOX_ENABLED is false")
-    return SandboxBackendFactory(
-        repo_cache_root=repo_cache_root,
-        skills_dir=skills_dir,
-        has_skills=has_skills,
+
+    sandbox = RuntimePodmanSandboxBackend()
+    routes: dict[str, Any] = {
+        "/inputs/": ReadOnlySandboxInputsBackend(sandbox),
+    }
+    if repo_cache_root is not None:
+        routes["/repos/"] = ReadOnlyFilesystemBackend(
+            root_dir=repo_cache_root,
+            virtual_mode=True,
+            label="read-only repository",
+        )
+    if skills_dir is not None and has_skills:
+        routes["/skills/"] = ReadOnlyFilesystemBackend(
+            root_dir=skills_dir,
+            virtual_mode=True,
+            label="read-only skill",
+        )
+    return CompositeBackend(
+        default=sandbox,
+        routes=routes,
+        # Deep Agents stores oversized tool output and conversation summaries
+        # beneath this root. The sandbox root filesystem is intentionally
+        # read-only; `/workspace` is its only writable area.
+        artifacts_root="/workspace",
     )
 
 

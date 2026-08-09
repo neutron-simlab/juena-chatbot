@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 from deepagents.backends import CompositeBackend
-from deepagents.backends.protocol import BACKEND_TYPES
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
@@ -163,7 +163,7 @@ def build_fallback_models() -> list[Any]:
 
 def build_specialist_middleware(
     *,
-    backend: BACKEND_TYPES,
+    backend: BackendProtocol,
     summarizer_model: Any,
     fallback_models: list[Any],
     filesystem_tool_descriptions: dict[str, str],
@@ -187,11 +187,6 @@ def build_specialist_middleware(
         max_execute_timeout=global_config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
     )
     summarization_middleware = create_summarization_middleware(summarizer_model, backend)
-    _apply_declared_artifacts_root(
-        backend=backend,
-        filesystem_middleware=filesystem_middleware,
-        summarization_middleware=summarization_middleware,
-    )
     middleware.extend([
         filesystem_middleware,
         summarization_middleware,
@@ -218,39 +213,3 @@ def build_specialist_middleware(
             )
         )
     return middleware
-
-
-def _apply_declared_artifacts_root(
-    *,
-    backend: BACKEND_TYPES,
-    filesystem_middleware: Any,
-    summarization_middleware: Any,
-) -> None:
-    """Honor an artifact root declared by a runtime backend factory.
-
-    Deep Agents currently discovers ``artifacts_root`` only on an already-built
-    ``CompositeBackend``. The sandbox backend must remain a callable factory so
-    it can bind each invocation to the authenticated user and thread.
-    """
-
-    if isinstance(backend, CompositeBackend):
-        return
-    root = getattr(backend, "artifacts_root", None)
-    if not isinstance(root, str) or not root.startswith("/"):
-        return
-    normalized_root = root.rstrip("/")
-    filesystem_middleware._large_tool_results_prefix = (
-        f"{normalized_root}/large_tool_results"
-    )
-    filesystem_middleware._conversation_history_prefix = (
-        f"{normalized_root}/conversation_history"
-    )
-    summarization_middleware._history_path_prefix = (
-        f"{normalized_root}/conversation_history"
-    )
-    summarization_middleware._large_tool_results_prefix = (
-        f"{normalized_root}/large_tool_results"
-    )
-    summarization_middleware._media_prefix = (
-        f"{summarization_middleware._history_path_prefix}/media"
-    )

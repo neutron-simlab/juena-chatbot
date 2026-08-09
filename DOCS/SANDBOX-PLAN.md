@@ -266,15 +266,15 @@ Two consequences:
 ### Runtime ownership
 
 The compiled JüNA graph is process-global and reused across users. Therefore the
-software specialist must receive a **backend factory**, not one static
-`PodmanSandboxBackend` instance. `FilesystemMiddleware` supports a callable
-backend resolved from `ToolRuntime`; use its trusted runtime context to require
-both `user_id` and `thread_id`, then construct or retrieve the corresponding
-composite backend.
+software specialist must receive a **runtime-aware backend instance**, not one
+tenant-bound `PodmanSandboxBackend` instance. Callable backends are deprecated
+in Deep Agents 0.5 and removed in 0.7. The concrete backend must use LangGraph's
+runtime helpers internally to require both `user_id` and `thread_id`, then
+construct the tenant-bound Podman delegate for the current operation.
 
 The broker key is `(user_id, thread_id)`, never `thread_id` alone. A caller
 presenting an existing thread ID under another authenticated user must be
-rejected before sandbox lookup. The backend factory must also be used by every
+rejected before sandbox lookup. The same backend instance must also be used by every
 specialist middleware that accesses the filesystem so they all resolve the same
 workspace for one invocation.
 
@@ -512,7 +512,7 @@ small and makes the security boundary easier to review.
    tests. Verify user/thread isolation and route resolution first.
 3. Implement the rootless Podman backend and independently prove its network,
    mount, secret, filesystem, and resource restrictions.
-4. Connect the per-runtime backend factory to the software specialist. Confirm
+4. Connect the runtime-aware backend instance to the software specialist. Confirm
    that the supervisor and neutron specialist still have no `execute` tool.
 5. Add `HumanInTheLoopMiddleware`, authenticated resume handling, v2 stream
    parsing, replay prevention, and ownership checks.
@@ -532,7 +532,7 @@ ownership, cleanup, and failure behavior must also pass.
   secrets, container sockets, PostgreSQL, or the host filesystem.
 - **[revised]** Exhaustive route-resolution test (see
   [Backend composition](#backend-composition)), not a single `/inputs` case.
-- Backend-factory tests require authenticated `user_id` and `thread_id`, reject
+- Runtime-backend tests require authenticated `user_id` and `thread_id`, reject
   cross-user reuse of a thread ID, reuse one workspace for the same identity,
   and isolate all different identity pairs.
 - `/inputs` tests verify route-prefix stripping is restored by the adapter,

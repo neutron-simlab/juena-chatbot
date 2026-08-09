@@ -58,36 +58,6 @@ def test_neutron_tool_assembly_adds_tavily_only_when_available() -> None:
     assert neutron_tools.build_tools(None) == []
 
 
-def test_runtime_factory_artifacts_use_writable_workspace_paths() -> None:
-    backend = SimpleNamespace(artifacts_root="/workspace")
-    filesystem_middleware = SimpleNamespace()
-    summarization_middleware = SimpleNamespace()
-
-    specialist_runtime._apply_declared_artifacts_root(
-        backend=backend,  # type: ignore[arg-type]
-        filesystem_middleware=filesystem_middleware,
-        summarization_middleware=summarization_middleware,
-    )
-
-    assert (
-        filesystem_middleware._large_tool_results_prefix
-        == "/workspace/large_tool_results"
-    )
-    assert (
-        filesystem_middleware._conversation_history_prefix
-        == "/workspace/conversation_history"
-    )
-    assert (
-        summarization_middleware._history_path_prefix
-        == "/workspace/conversation_history"
-    )
-    assert (
-        summarization_middleware._large_tool_results_prefix
-        == "/workspace/large_tool_results"
-    )
-    assert summarization_middleware._media_prefix == "/workspace/conversation_history/media"
-
-
 def test_software_specialist_owns_fixed_model_and_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

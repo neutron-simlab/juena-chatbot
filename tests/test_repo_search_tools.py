@@ -10,6 +10,24 @@ from juena.indexing.vector_index import RepoVectorIndex
 from juena.tools import repo_search
 
 
+class _FanOutStub:
+    """Mirrors ``RepoVectorIndex.search_many`` on top of a stub's own ``search``.
+
+    The real implementation embeds once and fans out concurrently; the ordering
+    and repo_id tagging it guarantees are what these tests exercise.
+    """
+
+    def search_many(self, repo_ids, query, n_results=10, where=None):
+        hits = []
+        for repo_id in repo_ids:
+            hits.extend(
+                {**hit, "repo_id": repo_id}
+                for hit in self.search(repo_id, query, n_results=n_results, where=where)
+            )
+        return hits
+
+
+
 def test_search_code_semantic_returns_compact_preview() -> None:
     content = "def login(user):\n" + ("x" * 400)
 
@@ -66,7 +84,7 @@ def test_search_code_semantic_all_repositories_returns_globally_ranked_hits() ->
     class StubRepoManager:
         repo_ids = ["repo-a", "repo-b"]
 
-    class StubVectorIndex:
+    class StubVectorIndex(_FanOutStub):
         def search(self, repo_id: str, query: str, n_results: int = 10, where: dict | None = None) -> list[dict]:
             assert query == "instrument control"
             assert n_results == 2
@@ -173,7 +191,7 @@ def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
     class StubRepoManager:
         repo_ids = ["repo-a"]
 
-    class StubVectorIndex:
+    class StubVectorIndex(_FanOutStub):
         def search(self, repo_id: str, query: str, n_results: int = 10, where: dict | None = None) -> list[dict]:
             assert repo_id == "repo-a"
             assert query == "setup"

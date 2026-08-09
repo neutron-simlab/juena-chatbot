@@ -88,16 +88,12 @@ If both programs could see that folder directly, all of this conversion code wou
 But that ties the two programs to the same server and moves some safety checks around, so it is a
 separate decision for another day.
 
-Three smaller findings are also recorded here so they are not forgotten:
+Two smaller findings are also recorded here so they are not forgotten:
 
-1. **`_apply_declared_artifacts_root` in `specialist_runtime.py` reaches into five private
-   internal variables of the `deepagents` library.** Private means "the library authors may rename
-   or delete these at any time, without warning". This is why `deepagents` is currently pinned to
-   exactly version `0.6.12` — upgrading would likely break it silently.
-2. **Artifacts are queued in plain Python dictionaries held in memory.** That works only because
+1. **Artifacts are queued in plain Python dictionaries held in memory.** That works only because
    the server runs as a single process. Running two copies of the server for more capacity would
    break plot delivery, because each copy would have its own separate dictionary.
-3. Some smaller things: the same "create-this-once" pattern copy-pasted in two places, a new HTTP
+2. Some smaller things: the same "create-this-once" pattern copy-pasted in two places, a new HTTP
    connection opened and thrown away on every call instead of reusing one, and the approval card
    showing hardcoded text `"2 vCPU"` / `"4 GB"` that is not connected to the real limits — if
    someone changes the actual limit, the card keeps showing the old number.

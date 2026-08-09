@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -83,6 +84,18 @@ async def create_juena_agent(
             "Run `python -m juena.indexing.bootstrap` to enable them.",
             "; ".join(bootstrap_problems),
         )
+    else:
+        # Chroma loads each collection's HNSW index on first query, which costs
+        # several seconds across all repositories. Pay it here, in the
+        # background, instead of on whoever searches first after a restart.
+        # A daemon thread rather than an asyncio task: this runs during agent
+        # construction, which is not guaranteed to have a running event loop,
+        # and a fire-and-forget task can be garbage-collected mid-flight.
+        threading.Thread(
+            target=vector_index.warm,
+            name="vector-index-warm",
+            daemon=True,
+        ).start()
 
     supervisor_model = build_chat_model(provider=provider, model=model)
     summarizer_model = build_chat_model(
