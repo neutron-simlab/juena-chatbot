@@ -12,12 +12,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from juena.core.log import get_logger
-from juena.schema.upload_limits import (  # noqa: F401 - re-exported for callers
-    CHAT_INPUT_MAX_CHARS,
+from juena.schema.upload_limits import (
     CHAT_INPUT_MAX_UPLOAD_MB,
     MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS_PER_MESSAGE,
-    TEXT_READABLE_FILE_TYPES,
     is_text_readable_filename,
 )
 from juena.server.chat.input_constants import (

@@ -107,19 +107,6 @@ class ChatMessage(BaseModel):
         default=None,
     )
 
-    def pretty_repr(self) -> str:
-        """Get a pretty representation of the message."""
-        base_title = self.type.title() + " Message"
-        padded = " " + base_title + " "
-        sep_len = (80 - len(padded)) // 2
-        sep = "=" * sep_len
-        second_sep = sep + "=" if len(padded) % 2 else sep
-        title = f"{sep}{padded}{second_sep}"
-        return f"{title}\n\n{self.content}"
-
-    def pretty_print(self) -> None:
-        print(self.pretty_repr())  # noqa: T201
-
 
 # =================
 # HEALTH CHECK MODELS

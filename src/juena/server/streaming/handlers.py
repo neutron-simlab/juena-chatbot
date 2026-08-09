@@ -11,7 +11,7 @@ execution backend. The stream processor rejects every other custom payload.
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage
 from langgraph.types import Interrupt, Overwrite
 
 # With subgraphs=True the namespace of a subagent contains a `tools:`-prefixed

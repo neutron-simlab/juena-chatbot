@@ -65,15 +65,3 @@ def get_default_model_for_provider(provider: Provider) -> str:
     }
     return defaults.get(provider, "")
 
-
-def is_valid_model_for_provider(provider: Provider, model: str) -> bool:
-    """Check if a model is valid for a specific provider"""
-    return model in get_models_for_provider(provider)
-
-
-def get_provider_for_model(model: str) -> Provider | None:
-    """Get the provider that supports a specific model"""
-    for provider, models in PROVIDER_MODELS.items():
-        if model in models:
-            return provider
-    return None

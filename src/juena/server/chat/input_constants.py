@@ -4,13 +4,6 @@ from __future__ import annotations
 
 import re
 
-# Canonical home is `juena.schema.upload_limits`, which the Streamlit UI also
-# imports; re-exported here so server-side callers keep a single import site.
-from juena.schema.upload_limits import (  # noqa: F401
-    ALLOWED_SUFFIXES,
-    TEXT_READABLE_FILE_TYPES,
-)
-
 INPUTS_PREFIX = "/inputs/"
 
 # `additional_kwargs` keys on the staged human message. The manifest is what the
