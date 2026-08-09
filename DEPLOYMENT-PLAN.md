@@ -1,4 +1,9 @@
-# JüNA Production Deployment and Sandbox Plan
+# JüNA Production Deployment Plan
+
+Code-execution sandbox design lives in [SANDBOX-PLAN.md](SANDBOX-PLAN.md). This
+document covers only what the sandbox needs from the deployment: a
+`sandbox-broker` service, rootless Podman on the host, and disk for disposable
+workspaces.
 
 ## Summary
 
@@ -82,82 +87,15 @@ Production target:
 
 ## Python/Shell Sandbox and Plot Streaming
 
-### Backend composition — settled before implementation
+Moved to [SANDBOX-PLAN.md](SANDBOX-PLAN.md), which supersedes the text that was
+here. Deployment obligations that remain in scope for this document:
 
-Three constraints from `deepagents==0.6.12` decide the shape of this work. They
-were verified against the installed source and the upstream documentation.
-
-1. **Execution is not path-routable.** `CompositeBackend.execute` delegates to
-   `self.default` only, and raises `NotImplementedError` unless that default
-   implements `SandboxBackendProtocol`. Routing `/workspace/` to a sandbox while
-   keeping a state backend as the default does not work.
-2. **The tool is gated dynamically, not at registration.** `FilesystemMiddleware`
-   always registers `execute` among its eight tools, then filters it out of
-   `request.tools` on every model call when `supports_execution(backend)` is
-   false. That is why the model sees no `execute` tool today, and why enabling
-   the sandbox needs no separate tool wiring.
-3. **Tool-level permissions and execution are mutually exclusive.**
-   `FilesystemMiddleware` raises `NotImplementedError` when `_permissions` are
-   combined with an execution-capable backend whose paths are not all scoped to
-   routes. The approve/edit/reject gate must therefore be
-   `HumanInTheLoopMiddleware`, not filesystem permissions.
-
-So the sandbox becomes the **default** backend and everything else becomes an
-explicit route:
-
-```
-CompositeBackend(
-    default = <PodmanSandboxBackend>,        # /workspace, satisfies execute
-    routes  = {
-        "/inputs/":   <read-only guard over staged uploads>,
-        "/repos/":    ReadOnlyFilesystemBackend(repo cache),
-        "/skills/":   ReadOnlyFilesystemBackend(SKILLS_DIR),
-        "/memories/": StoreBackend(per-user namespace),
-    },
-)
-```
-
-Two things must not be lost in that move:
-
-- The `/inputs` read-only guard currently lives in `ReadOnlyInputsStateBackend`
-  ([skills_backend.py](src/juena/agents/skills_backend.py)) — i.e. in the class
-  that is the default today. Once the sandbox is the default, `/inputs` needs an
-  explicit read-only route or staged uploads silently become writable. Add a
-  test asserting `/inputs/...` writes are still rejected under the new
-  composition.
-- `CompositeBackend` aggregates its routes’ state schemas at construction, so
-  the full route table must be passed up front; routes cannot be added later.
-
-Decide explicitly whether `execute` belongs to the coordinator or to the
-`code-chat-expert` subagent before writing code — they have separate backends
-today ([juena_agent.py](src/juena/agents/juena_agent.py)).
-
-### Implementation
-
-- Integrate execution through Deep Agents’ `SandboxBackendProtocol`; never use `LocalShellBackend` in production.
-- Run a dedicated rootless Podman service under an unprivileged `juena-sandbox` account. Only the broker may access its socket; FastAPI and the agent containers must not receive either Docker or Podman sockets.
-- Create a per-thread workspace and start an ephemeral container for each approved execution.
-- Initial scientific image contains Python 3.11, NumPy, SciPy, pandas, matplotlib, seaborn, SymPy, scikit-learn, Pillow, and basic shell utilities. Runtime package installation is disabled.
-- Apply these default limits:
-  - Four concurrent jobs; excess jobs queue.
-  - 2 vCPU, 4 GB RAM, 256 PIDs, 1 GB temporary filesystem per job.
-  - Ten-minute hard execution timeout.
-  - 5 GB per-thread workspace and 24-hour idle expiry.
-  - Read-only root filesystem, non-root user, all Linux capabilities dropped, `no-new-privileges`, default seccomp confinement, and no network.
-  - Maximum 100 MB uploaded input per turn.
-  - Truncate excessive stdout/stderr before returning it to the model.
-- Copy accepted user files into the thread workspace as read-only inputs; never mount application repositories, database data, credentials, or SAML material into a sandbox.
-- Add LangChain `HumanInTheLoopMiddleware` for the `execute` tool with approve, edit, and reject decisions. The UI may edit command arguments but may not change the tool name or resource policy.
-- Add an authenticated resume SSE endpoint that resumes the existing LangGraph checkpoint using the interrupt ID and `Command(resume=...)`. Reject stale, replayed, cross-thread, or cross-user decisions.
-- Stream these new structured events:
-  - `approval_required`: interrupt ID, command, description, limits, and allowed decisions.
-  - `sandbox_status`: queued, running, completed, timed out, or rejected.
-  - `artifact`: artifact ID, filename, MIME type, size, and base64 payload.
-- Generated plots go under `/workspace/outputs`. After execution, validate and import PNG images into persistent artifact storage.
-- Limit plots to four images per execution, 5 MB per image, and safe pixel dimensions. Reject malformed data and active formats such as SVG.
-- Use LangChain custom streaming/`ToolMessage.artifact` so raw base64 is never placed in model context. Streamlit decodes validated base64 and renders the bytes with `st.image`.
-- Persist artifact metadata by authenticated user and thread. Provide authenticated artifact retrieval for chat reloads, and delete associated files when the thread is deleted.
-- Record an audit entry containing user, thread, interrupt, original and edited commands, decision, sandbox job ID, timestamps, exit status, and generated artifact references.
+- Install rootless Podman under an unprivileged `juena-sandbox` account.
+- Add the internal-only `sandbox-broker` service to Compose. It alone reaches
+  the Podman socket; `api` and `ui` receive neither Docker nor Podman sockets.
+- Reserve approximately 140 GB for disposable sandbox workspaces on a host path
+  owned only by `juena-sandbox`.
+- Size for a maximum of four concurrent sandbox jobs.
 
 ## Verification and Acceptance
 
@@ -167,10 +105,11 @@ today ([juena_agent.py](src/juena/agents/juena_agent.py)).
 - Verify Compose exposes only the gateway port and uses service-name DNS, health-gated startup, non-root application processes, persistent volumes, and bounded log rotation.
 - Test the complete institutional-proxy flow: HTTPS origin, forwarded scheme, SAML login/logout, secure cookie, Streamlit WebSocket, and browser refresh.
 - Verify the chatbot contains no server address, connection control, or internal hostname.
-- Test approve, edited approval, rejection, timeout, replay prevention, ownership enforcement, queue saturation, workspace cleanup, and thread deletion.
-- Demonstrate that sandbox jobs cannot reach the network, application volumes, environment secrets, container sockets, PostgreSQL, or the host filesystem.
-- Run an end-to-end matplotlib test: approved Python creates a PNG, the API streams validated base64, Streamlit renders it, and it remains available after reloading the chat.
+- Verify the `sandbox-broker` is unreachable from outside the Compose network and that no application container holds a Docker or Podman socket.
 - Load-test 30 active chat sessions with four simultaneous sandbox jobs; confirm bounded memory, stable PostgreSQL pools, and predictable queueing.
 - Perform a documented backup-and-restore rehearsal before production sign-off.
 
-Assumptions: the first release stays on one VM despite the weaker shared-kernel boundary; only authenticated FZJ users can request execution; sandboxes have no egress or runtime package installation; the institutional proxy terminates TLS; SearXNG and Valkey are not deployed because current JüNA code does not consume them.
+Sandbox-specific acceptance criteria — isolation proofs, approval flow, artifact
+streaming — are in [SANDBOX-PLAN.md](SANDBOX-PLAN.md#acceptance).
+
+Assumptions: the first release stays on one VM despite the weaker shared-kernel boundary; only authenticated FZJ users can request execution; the institutional proxy terminates TLS; SearXNG and Valkey are not deployed because current JüNA code does not consume them.

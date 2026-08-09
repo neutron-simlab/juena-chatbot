@@ -13,7 +13,7 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, on
 - SSE streaming for chat responses
 - FZJ SAML2 login with user-owned conversations
 - Postgres persistence for identity, sessions, chat history, checkpoints, and agent files
-- Global, read-only Agent Skills with progressive disclosure
+- Specialist-owned, optional Agent Skills with progressive disclosure
 - Per-user Deep Agents memory stored as `AGENTS.md`
 - Repository bootstrap and vector indexing for code-aware retrieval
 - OpenAI and Blablador model support
@@ -21,13 +21,13 @@ JüNA is a Docker-first chatbot stack with a FastAPI backend, a Streamlit UI, on
 
 ## Included Agent
 
-`juena` is the only advertised agent. It answers general neutron-science and
-software questions, accepts text-file attachments, and can optionally use
-Tavily for current web information and Context7 for dependency documentation.
-When repository indexing is available, it delegates detailed code and
-documentation research to a repository expert with read-only access to the
-configured clones and persistent vector index. An empty repository
-configuration disables repository research without taking down general chat.
+`juena` is the only advertised agent. It is a strict supervisor over two
+first-class specialists. `software-specialist` handles software, repositories,
+and upstream documentation; `neutron-research-specialist` handles neutron
+science and broader factual research in JueNA's domain. Both accept staged text
+attachments through read-only `/inputs` access. Missing repository indexing,
+Context7, or Tavily degrades only the corresponding capability and does not
+remove either specialist.
 
 The retired ids `react_agent` and `code_chat_agent` resolve to `juena` for one
 compatibility release, but they are not shown by the discovery endpoint.
@@ -99,9 +99,12 @@ docker compose -f docker-compose.yml \
 
 The base configuration does not publish PostgreSQL and does not supply
 localhost SAML URLs or an insecure cookie override. It requires explicit
-production secrets and public HTTPS settings. The future gateway, split-service
-stack, sandbox, and plot streaming remain specified in
-[`DEPLOYMENT-AND-SANDBOX-PLAN.md`](DEPLOYMENT-AND-SANDBOX-PLAN.md).
+production secrets and public HTTPS settings. The future gateway and
+split-service stack remain specified in
+[`DEPLOYMENT-PLAN.md`](DEPLOYMENT-PLAN.md); the code-execution sandbox and plot
+streaming in [`SANDBOX-PLAN.md`](SANDBOX-PLAN.md); the implemented supervisor,
+specialist, and skills architecture in
+[`PROMPT-AND-SKILLS-PLAN.md`](PROMPT-AND-SKILLS-PLAN.md).
 
 ## Startup and Bootstrap
 
@@ -203,29 +206,32 @@ logout itself — and is authorized by SAML signature validation, whereas
 `/auth/logout` requires an authenticated session. Pointing `SAML_SP_SLS_URL` at
 `/auth/logout` will make IdP-initiated logout fail with 401.
 
-## Skills and memory
+## Specialists, skills, and memory
 
-Global skills live under `skills/<name>/SKILL.md`. The JüNA coordinator uses
-Deep Agents' native `SkillsMiddleware`: only names and descriptions are loaded
-up front, and the complete Markdown is read on demand. The skills filesystem is
-read-only to agents. Add or update Markdown and restart the service; no Python
-catalog changes are required.
+JüNA uses a strict supervisor with two explicitly registered specialists:
+`software-specialist` owns repository and upstream-library research, while
+`neutron-research-specialist` owns scientific and external factual research.
+The supervisor owns delegation, memory, reconciliation, and the final answer;
+it has no repository, Context7, or Tavily tools itself.
 
-Skills are baked into the image by the Dockerfile. `docker-compose.dev.yml`
-bind-mounts `./skills` over them for local authoring, so deploy production with
-`docker compose -f docker-compose.yml ...` to run the image's own copy.
+Each specialist package contains its own plain `AGENT.md`, model choice, and tool
+builder. Optional skills belong under that package as
+`skills/<name>/SKILL.md`. `SkillsMiddleware` is enabled for that specialist only
+when at least one valid skill exists, so an empty skill library adds no prompt
+overhead. New specialists are added explicitly rather than discovered through
+filesystem imports.
 
-The coordinator also uses Deep Agents' native `MemoryMiddleware` with
+The supervisor uses Deep Agents' native `MemoryMiddleware` with
 `/memories/AGENTS.md`. That file is stored in the LangGraph Postgres Store under
 the `("memories", <user-uuid>)` namespace, so it persists across threads without
-being shared across users. The narrow repository subagent receives neither the
-memory file nor global skills.
+being shared across users. Specialists receive only relevant preferences that
+the supervisor includes in a delegated task, never the complete memory file.
 
 The default Deep Agents memory prompt instructs the model to save anything it
 judges useful. JueNA replaces it (`JUENA_MEMORY_SYSTEM_PROMPT` in
-[`skills_backend.py`](src/juena/agents/skills_backend.py)) so memories are
-written **only** when the user explicitly asks, never inferred, and never used
-for credentials or secrets.
+[`backends.py`](src/juena/agents/backends.py)) so memories are written **only**
+when the user explicitly asks, never inferred, and never used for credentials or
+secrets.
 
 For a step-by-step guide to adding repositories, see [`HOW-TO-ADD-REPO.md`](HOW-TO-ADD-REPO.md).
 
@@ -273,9 +279,9 @@ Optional environment variables:
 
 ## Tavily Web Search
 
-JüNA can optionally use Tavily at the coordinator level for non-repository or
-current web questions, while its repository expert remains limited to local
-repository tools plus Context7.
+JüNA can optionally give Tavily to the neutron-research specialist for current
+or externally verifiable questions. The supervisor never receives the tool;
+software and repository research remains limited to local tools plus Context7.
 
 Optional environment variables:
 

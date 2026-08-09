@@ -2,7 +2,7 @@
 
 Two rules shape this module:
 
-1. Only the coordinator's tokens are the answer. A subagent's tokens are its
+1. Only the supervisor's tokens are the answer. A subagent's tokens are its
    internal reasoning; streaming them makes the UI show text that is later
    replaced by the real answer.
 2. Tool results are activity, not transcript. They are large, the model has
@@ -96,7 +96,7 @@ class StreamEventProcessor:
                 if from_subagent:
                     # Subagent reasoning is activity, not the answer.
                     status = self._status(
-                        events.PHASE_RESEARCHING, "Researching the repository…"
+                        events.PHASE_RESEARCHING, "Consulting a specialist…"
                     )
                     if status:
                         yield status
@@ -142,8 +142,8 @@ class StreamEventProcessor:
             chat_message = langchain_to_chat_message(message)
             chat_message.run_id = str(self.run_id)
 
-            # A subagent's final packet is input to the coordinator, not an
-            # answer for the user; the coordinator synthesizes from it.
+            # A specialist's final report is input to the supervisor, not an
+            # answer for the user; the supervisor synthesizes from it.
             if from_subagent and chat_message.type == "ai":
                 return
 

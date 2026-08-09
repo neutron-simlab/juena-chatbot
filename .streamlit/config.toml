@@ -6,7 +6,7 @@
 #
 # One deliberate difference: the demo loads Inter from Google Fonts. JüNA does
 # not, for two reasons -- fonts.googleapis.com is not in the production egress
-# allowlist (DEPLOYMENT-AND-SANDBOX-PLAN.md), and a browser-side Google Fonts
+# allowlist (DEPLOYMENT-PLAN.md), and a browser-side Google Fonts
 # request from an FZJ-hosted page is a GDPR problem in Germany. Inter is
 # resolved locally instead and falls back to the platform UI font, which is
 # metrically close. To get Inter everywhere, self-host the woff2 files and add

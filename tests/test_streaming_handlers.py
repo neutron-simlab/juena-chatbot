@@ -1,4 +1,4 @@
-"""Tests for stream event handling and the coordinator/subagent split."""
+"""Tests for stream event handling and the supervisor/subagent split."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def test_token_text_returns_only_text_blocks() -> None:
 @pytest.mark.asyncio
 async def test_subagent_tokens_never_reach_the_answer_stream() -> None:
     """Subagent tokens are internal reasoning. Streaming them made the UI show
-    text that was then replaced by the coordinator's real answer."""
+    text that was then replaced by the supervisor's real answer."""
     payloads = await _collect(
         _processor(),
         (("tools:abc",), "messages", (AIMessageChunk(content="thinking out loud"), {})),
@@ -102,7 +102,7 @@ async def test_subagent_tokens_never_reach_the_answer_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_coordinator_tokens_are_streamed() -> None:
+async def test_supervisor_tokens_are_streamed() -> None:
     payloads = await _collect(
         _processor(),
         (("model",), "messages", (AIMessageChunk(content="the answer"), {})),
@@ -173,7 +173,7 @@ async def test_user_echo_and_empty_tool_call_messages_are_dropped() -> None:
 
 @pytest.mark.asyncio
 async def test_subagent_final_packet_is_not_shown_as_an_answer() -> None:
-    """The subagent returns a research packet for the coordinator to synthesize,
+    """The subagent returns a research packet for the supervisor to synthesize,
     not a user-facing answer."""
     payloads = await _collect(
         _processor(),
@@ -208,7 +208,7 @@ async def test_subagent_detection_matches_real_langgraph_namespaces() -> None:
         tools=[],
         name="researcher",
     )
-    coordinator = create_agent(
+    supervisor = create_agent(
         model=_Model(
             responses=[
                 AIMessage(
@@ -238,7 +238,7 @@ async def test_subagent_detection_matches_real_langgraph_namespaces() -> None:
     )
 
     namespaces = set()
-    async for node_path, _mode, _event in coordinator.astream(
+    async for node_path, _mode, _event in supervisor.astream(
         {"messages": [{"role": "user", "content": "hi"}]},
         config={"configurable": {"thread_id": "t"}},
         stream_mode=["updates", "messages"],
@@ -248,4 +248,4 @@ async def test_subagent_detection_matches_real_langgraph_namespaces() -> None:
 
     classified = {ns: is_subagent_namespace(ns) for ns in namespaces}
     assert any(classified.values()), f"no subagent namespace detected in {namespaces}"
-    assert any(not flag for flag in classified.values()), "coordinator traffic missing"
+    assert any(not flag for flag in classified.values()), "supervisor traffic missing"

@@ -51,6 +51,9 @@ docker-compose*.yml
 # Documentation
 *.md
 !README.md
+!src/**/SUPERVISOR.md
+!src/**/AGENT.md
+!src/**/skills/**/*.md
 docs/
 
 # Testing

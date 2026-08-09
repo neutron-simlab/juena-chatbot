@@ -56,9 +56,6 @@ services:
       - chatbot-vector-index:/data/vector_index
       - chatbot-manifests:/data/manifests
       - chatbot-saml:/data/saml
-      # Skills are baked into the image (see Dockerfile). For local authoring,
-      # docker-compose.dev.yml bind-mounts ./skills over them so you can
-      # edit without rebuilding; the image copy is what production runs.
     environment:
       # Server configuration
       - SERVER_HOST=0.0.0.0
@@ -119,8 +116,6 @@ services:
       - JUENA_API_INTERNAL_URL=http://localhost:8080
       - JUENA_PUBLIC_URL=${JUENA_PUBLIC_URL:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
-      - SKILLS_DIR=/app/skills
-      
       # Code-chat agent settings
       - REPO_CACHE_DIR=/data/repos
       - VECTOR_INDEX_DIR=/data/vector_index

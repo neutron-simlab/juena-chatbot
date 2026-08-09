@@ -12,7 +12,6 @@ services:
   juena-chatbot:
     volumes:
       - ./.env:/app/.env:ro
-      - ./skills:/app/skills:ro
     environment:
       - ENVIRONMENT=development
       # DATABASE_URL is not repeated here: the base file already builds the

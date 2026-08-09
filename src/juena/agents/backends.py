@@ -1,26 +1,22 @@
-"""Shared Deep Agents backends for the global skills library and per-user memory.
+"""Filesystem backends shared by the supervisor and specialists."""
 
-The agent composes three pieces: a read-only global skills tree, a per-user
-memory namespace in the LangGraph Store, and ephemeral scratch state that must
-not be writable under ``/inputs``.
-"""
+from __future__ import annotations
 
 from typing import Any
 from uuid import UUID
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend, StoreBackend
-from deepagents.backends.protocol import EditResult, WriteResult
+from deepagents.backends.protocol import (
+    EditResult,
+    GrepMatch,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
 
 MEMORY_NAMESPACE_PREFIX = "memories"
-
-# Mount point for the global skills library used by SkillsMiddleware.
-SKILLS_SOURCE_PATH = "/skills/"
-
 MEMORY_SOURCES = ["/memories/AGENTS.md"]
 
-# Replaces the Deep Agents default, which instructs the model to persist
-# anything it judges useful even when the user never asked. JueNA stores
-# memories per authenticated FZJ user, so writes are opt-in only.
 JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
 {agent_memory}
 
@@ -36,6 +32,8 @@ JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
       user's request, with these guidelines, or with verified tool output.
     - When memory disagrees with the user or with evidence you can check,
       prefer the user and the evidence.
+    - Use only relevant saved preferences to choose a specialist and formulate
+      its task. Never paste the complete memory file into a delegated task.
 
     **When to save (call `edit_file` on /memories/AGENTS.md):**
     - Only when the user explicitly asks you to remember, save, or note
@@ -57,12 +55,30 @@ JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
 """
 
 
-class ReadOnlyFilesystemBackend(FilesystemBackend):
-    """Root-scoped filesystem backend that rejects agent-authored changes.
+SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS = {
+    "ls": (
+        "List the supervisor's persistent memory directory. Domain files and "
+        "staged inputs belong to specialists."
+    ),
+    "read_file": (
+        "Read `/memories/AGENTS.md` when saved preferences are relevant to "
+        "delegation or the final answer. Do not use this tool for domain research."
+    ),
+    "grep": "Search only the supervisor's saved memory for an exact preference.",
+    "glob": "Find only files under `/memories/`; normally only `AGENTS.md` exists.",
+    "write_file": (
+        "Create `/memories/AGENTS.md` only when the user explicitly asks you to "
+        "remember something."
+    ),
+    "edit_file": (
+        "Edit `/memories/AGENTS.md` only when the user explicitly asks you to "
+        "remember or forget something."
+    ),
+}
 
-    Used for both the global skills library and the indexed repository cache;
-    ``label`` only shapes the error text the model sees.
-    """
+
+class ReadOnlyFilesystemBackend(FilesystemBackend):
+    """Root-scoped filesystem backend that rejects agent-authored changes."""
 
     def __init__(self, *args: Any, label: str = "read-only", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -82,13 +98,10 @@ class ReadOnlyFilesystemBackend(FilesystemBackend):
 
 
 class ReadOnlyInputsStateBackend(StateBackend):
-    """Ephemeral scratch state that blocks mutations under ``/inputs``.
+    """Ephemeral specialist state that blocks mutations under ``/inputs``."""
 
-    Staged user uploads are evidence, not a workspace.  Every agent that can
-    see them - coordinator and subagent alike - must route through this.
-    """
-
-    def _is_read_only_path(self, file_path: str) -> bool:
+    @staticmethod
+    def _is_read_only_path(file_path: str) -> bool:
         return file_path == "/inputs" or file_path.startswith("/inputs/")
 
     def write(self, file_path: str, content: str) -> WriteResult:
@@ -108,8 +121,44 @@ class ReadOnlyInputsStateBackend(StateBackend):
         return super().edit(file_path, old_string, new_string, replace_all=replace_all)
 
 
+class SupervisorStateBackend(StateBackend):
+    """State channel for staged files without exposing them to supervisor tools."""
+
+    _ERROR = "The supervisor can access only /memories; delegate domain files to a specialist."
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return ReadResult(error=self._ERROR)
+
+    def ls(self, path: str) -> LsResult:
+        return LsResult(entries=[])
+
+    def glob_info(self, pattern: str, path: str = "/") -> list[dict[str, Any]]:
+        return []
+
+    def grep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> list[GrepMatch] | str:
+        return self._ERROR
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error=self._ERROR)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        return EditResult(error=self._ERROR)
+
+
 def user_store_namespace(runtime: Any) -> tuple[str, str]:
     """Scope persistent files to the trusted authenticated user UUID."""
+
     context = runtime.context
     value = context.get("user_id") if isinstance(context, dict) else getattr(context, "user_id", None)
     if not value:
@@ -117,24 +166,12 @@ def user_store_namespace(runtime: Any) -> tuple[str, str]:
     return (MEMORY_NAMESPACE_PREFIX, str(UUID(str(value))))
 
 
-def _skills_route(skills_dir: str) -> ReadOnlyFilesystemBackend:
-    """The read-only global skills tree."""
-    return ReadOnlyFilesystemBackend(
-        root_dir=skills_dir,
-        virtual_mode=True,
-        label="read-only skill",
-    )
+def build_supervisor_backend(store: Any) -> CompositeBackend:
+    """Expose per-user memory while retaining the shared staged-files state channel."""
 
-
-def build_user_context_backend(skills_dir: str, store: Any) -> CompositeBackend:
-    """Combine global read-only skills with per-user writable memory files."""
-    # Routes must be passed at construction: CompositeBackend aggregates the
-    # state schema of its routes up front, so mutating .routes afterwards
-    # leaves the state channels unregistered.
     return CompositeBackend(
-        default=ReadOnlyInputsStateBackend(),
+        default=SupervisorStateBackend(),
         routes={
-            SKILLS_SOURCE_PATH: _skills_route(skills_dir),
             "/memories/": StoreBackend(
                 store=store,
                 namespace=user_store_namespace,

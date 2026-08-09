@@ -28,7 +28,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ ./src/
 COPY app/ ./app/
 COPY config/ ./config/
-COPY skills/ ./skills/
 # The Streamlit theme. Resolved relative to the working directory, which is
 # where the entrypoint runs `streamlit run`, so it must land at /app/.streamlit.
 COPY .streamlit/ ./.streamlit/

@@ -28,7 +28,7 @@ from juena.server.database.store import store_lifespan
 # and the deployment plan splits the API and the UI into separate containers.
 # Registering only from `main.py` leaves those processes with an empty registry,
 # so every invocation would 404.
-import juena.agents.juena_agent  # noqa: F401  the single JüNA agent
+import juena.agents.juena_agent  # noqa: F401  register the JüNA supervisor
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)

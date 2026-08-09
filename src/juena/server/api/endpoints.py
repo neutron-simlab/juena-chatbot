@@ -238,7 +238,7 @@ async def message_generator(
 
         # `updates` carries completed messages, `messages` carries answer
         # tokens. `custom` is not subscribed: nothing emits custom stream data.
-        # subgraphs=True is what lets the processor tell coordinator output
+        # subgraphs=True is what lets the processor tell supervisor output
         # apart from subagent activity.
         async for stream_event in agent.astream(
             **kwargs, stream_mode=["updates", "messages"], subgraphs=True

@@ -9,11 +9,11 @@ from juena.core.log import get_logger
 
 logger = get_logger(__name__)
 
-TAVILY_MAX_RESULTS = 3
+TAVILY_MAX_RESULTS = 2
 TAVILY_TOPIC = "general"
-TAVILY_SEARCH_DEPTH = "basic"
+TAVILY_SEARCH_DEPTH = None
 TAVILY_INCLUDE_ANSWER = False
-TAVILY_INCLUDE_RAW_CONTENT = False
+TAVILY_INCLUDE_RAW_CONTENT = "markdown"
 TAVILY_INCLUDE_IMAGES = False
 TAVILY_INCLUDE_IMAGE_DESCRIPTIONS = False
 

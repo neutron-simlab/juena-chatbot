@@ -17,14 +17,14 @@ from langgraph.types import Interrupt, Overwrite
 
 # With subgraphs=True the namespace of a subagent contains a `tools:`-prefixed
 # segment, because subagents are invoked through the parent's tool node.
-# Verified against a real run: the coordinator streams under `()` and a subagent
+# Verified against a real run: the supervisor streams under `()` and a subagent
 # under `('tools:<task-uuid>',)`. The suffix is a task id, not a readable name,
 # so there is nothing here worth showing the user.
 _SUBAGENT_NAMESPACE_PREFIX = "tools:"
 
 
 def is_subagent_namespace(node_path: Any) -> bool:
-    """Whether a stream event originated inside a subagent rather than the coordinator."""
+    """Whether a stream event originated inside a subagent rather than the supervisor."""
     if not node_path:
         return False
     return any(str(segment).startswith(_SUBAGENT_NAMESPACE_PREFIX) for segment in node_path)

@@ -209,9 +209,6 @@ class Config:
     ).lower() == "true"
     SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "8"))
 
-    # Global, curated Agent Skills library.
-    SKILLS_DIR = os.getenv("SKILLS_DIR", str(_find_repo_root() / "skills"))
-    
     @classmethod
     def _check_provider_available(cls, provider_name: str) -> bool:
         """

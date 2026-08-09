@@ -1,0 +1,193 @@
+"""Small shared runtime helpers for first-class JueNA specialists."""
+
+from __future__ import annotations
+
+import re
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+import yaml
+from deepagents.backends import CompositeBackend
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+from deepagents.middleware.skills import SkillsMiddleware
+from deepagents.middleware.summarization import create_summarization_middleware
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    ModelFallbackMiddleware,
+    ModelRetryMiddleware,
+    TodoListMiddleware,
+    ToolCallLimitMiddleware,
+    ToolRetryMiddleware,
+)
+
+from juena.agents.backends import ReadOnlyFilesystemBackend, ReadOnlyInputsStateBackend
+from juena.core.config import global_config
+from juena.core.llms_providers import build_chat_model, get_available_providers, get_default_model
+from juena.core.log import get_logger
+
+logger = get_logger(__name__)
+
+SUPERVISOR_MODEL_CALL_LIMIT = 50
+SUPERVISOR_TOOL_CALL_LIMIT = 100
+SPECIALIST_MODEL_CALL_LIMIT = 60
+SPECIALIST_TOOL_CALL_LIMIT = 150
+MODEL_MAX_RETRIES = 3
+TOOL_MAX_RETRIES = 2
+
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class PromptResourceError(RuntimeError):
+    """Raised when a required packaged prompt cannot be loaded."""
+
+
+def load_markdown(package: str, filename: str) -> str:
+    """Load one required Markdown resource and fail loudly when packaging is broken."""
+
+    try:
+        text = resources.files(package).joinpath(filename).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, OSError) as exc:
+        raise PromptResourceError(f"Unable to load prompt resource {package}:{filename}") from exc
+    if not text.strip():
+        raise PromptResourceError(f"Prompt resource {package}:{filename} is empty")
+    return text.rstrip() + "\n"
+
+
+def _valid_skill_file(skill_file: Path) -> bool:
+    """Perform the minimum Agent Skills validation needed before enabling middleware."""
+
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not text.startswith("---\n"):
+        return False
+    try:
+        _marker, frontmatter, body = text.split("---", 2)
+        metadata = yaml.safe_load(frontmatter)
+    except (ValueError, yaml.YAMLError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    name = metadata.get("name")
+    description = metadata.get("description")
+    return bool(
+        isinstance(name, str)
+        and name == skill_file.parent.name
+        and len(name) <= 64
+        and _SKILL_NAME_RE.fullmatch(name)
+        and isinstance(description, str)
+        and description.strip()
+        and len(description) <= 1024
+        and body.strip()
+    )
+
+
+def has_authored_skills(skills_dir: Path | None) -> bool:
+    """Return whether a specialist owns at least one valid ``SKILL.md``."""
+
+    if skills_dir is None or not skills_dir.is_dir():
+        return False
+    return any(
+        child.is_dir() and _valid_skill_file(child / "SKILL.md")
+        for child in skills_dir.iterdir()
+    )
+
+
+def build_specialist_backend(
+    *,
+    repo_cache_root: Path | None = None,
+    skills_dir: Path | None = None,
+) -> CompositeBackend:
+    """Build isolated staged-input, repository, and optional skill routes."""
+
+    routes: dict[str, Any] = {}
+    if repo_cache_root is not None:
+        routes["/repos/"] = ReadOnlyFilesystemBackend(
+            root_dir=repo_cache_root,
+            virtual_mode=True,
+            label="read-only repository",
+        )
+    if has_authored_skills(skills_dir):
+        routes["/skills/"] = ReadOnlyFilesystemBackend(
+            root_dir=skills_dir,
+            virtual_mode=True,
+            label="read-only skill",
+        )
+    return CompositeBackend(default=ReadOnlyInputsStateBackend(), routes=routes)
+
+
+def resilience_middleware(
+    fallback_models: list[Any],
+    *,
+    model_call_limit: int,
+    tool_call_limit: int,
+) -> list[Any]:
+    """Build retry, fallback, and loop-limit middleware in nesting order."""
+
+    middleware: list[Any] = []
+    if fallback_models:
+        middleware.append(ModelFallbackMiddleware(*fallback_models))
+    middleware.extend([
+        ModelRetryMiddleware(max_retries=MODEL_MAX_RETRIES, on_failure="error"),
+        ToolRetryMiddleware(max_retries=TOOL_MAX_RETRIES),
+        ModelCallLimitMiddleware(run_limit=model_call_limit, exit_behavior="end"),
+        ToolCallLimitMiddleware(run_limit=tool_call_limit, exit_behavior="continue"),
+    ])
+    return middleware
+
+
+def build_fallback_models() -> list[Any]:
+    """Build deployment-level fallbacks independently of the first request model."""
+
+    fallback_provider = (global_config.FALLBACK_PROVIDER or "").strip().lower()
+    if not fallback_provider:
+        return []
+    if not get_available_providers().get(fallback_provider, False):
+        logger.warning(
+            "FALLBACK_PROVIDER '%s' is not configured; running without a model fallback",
+            fallback_provider,
+        )
+        return []
+    fallback_model = get_default_model(fallback_provider)
+    if not fallback_model:
+        return []
+    logger.info("Model fallback enabled: %s/%s", fallback_provider, fallback_model)
+    return [build_chat_model(provider=fallback_provider, model=fallback_model)]
+
+
+def build_specialist_middleware(
+    *,
+    backend: CompositeBackend,
+    summarizer_model: Any,
+    fallback_models: list[Any],
+    filesystem_tool_descriptions: dict[str, str],
+    skills_dir: Path | None,
+    skills_label: str,
+) -> list[Any]:
+    """Build the common middleware stack while keeping agent choices local."""
+
+    middleware: list[Any] = [TodoListMiddleware()]
+    if has_authored_skills(skills_dir):
+        middleware.append(
+            SkillsMiddleware(
+                backend=backend,
+                sources=[("/skills/", skills_label)],
+            )
+        )
+    middleware.extend([
+        FilesystemMiddleware(
+            backend=backend,
+            custom_tool_descriptions=filesystem_tool_descriptions,
+        ),
+        create_summarization_middleware(summarizer_model, backend),
+        PatchToolCallsMiddleware(),
+        *resilience_middleware(
+            fallback_models,
+            model_call_limit=SPECIALIST_MODEL_CALL_LIMIT,
+            tool_call_limit=SPECIALIST_TOOL_CALL_LIMIT,
+        ),
+    ])
+    return middleware

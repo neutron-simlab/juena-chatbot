@@ -167,7 +167,7 @@ destination; in production it defaults to `JUENA_PUBLIC_URL`. See §5.2.
 
 > `JUENA_API_INTERNAL_URL=http://localhost:8080` is correct **only while FastAPI
 > and Streamlit share one container**, which is the current layout.
-> [DEPLOYMENT-AND-SANDBOX-PLAN.md](DEPLOYMENT-AND-SANDBOX-PLAN.md) splits them
+> [DEPLOYMENT-PLAN.md](DEPLOYMENT-PLAN.md) splits them
 > into separate `api` and `ui` services, where `localhost` inside the UI
 > container is the UI itself and the value becomes `http://api:8080`. Change it
 > in the same release as the split; nothing else in this file is affected,
