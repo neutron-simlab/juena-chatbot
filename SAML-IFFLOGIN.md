@@ -166,12 +166,11 @@ links. `UI_PUBLIC_URL` is a one-release compatibility setting for the post-login
 destination; in production it defaults to `JUENA_PUBLIC_URL`. See §5.2.
 
 > `JUENA_API_INTERNAL_URL=http://localhost:8080` is correct **only while FastAPI
-> and Streamlit share one container**, which is the current layout.
-> [DEPLOYMENT-PLAN.md](DEPLOYMENT-PLAN.md) splits them
-> into separate `api` and `ui` services, where `localhost` inside the UI
-> container is the UI itself and the value becomes `http://api:8080`. Change it
-> in the same release as the split; nothing else in this file is affected,
-> because every other URL here is browser-facing.
+> and Streamlit share one container**, which is the current layout. Splitting
+> them into separate `api` and `ui` services would make `localhost` inside the
+> UI container the UI itself, and the value would become `http://api:8080`.
+> Change it in the same release as any such split; nothing else in this file is
+> affected, because every other URL here is browser-facing.
 
 ### 5.2 Both services must share one hostname
 

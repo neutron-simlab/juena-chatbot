@@ -87,3 +87,55 @@ deployment on the same Linux host, the default URL is
 After restart, confirm the JüNA health endpoint and broker logs are clean. The
 empty-chat UI will then show the `Plot with Python` starter. Every command still
 requires a user click before execution.
+
+## Threat model
+
+The trust question is *not* "is the user malicious." It is: **model-authored code
+runs on shared institutional infrastructure, and the human approving it owns
+none of that infrastructure.**
+
+With a local coding assistant, the operator usually owns the machine, files, and
+consequences. In JüNA the user, the infrastructure owner, and the possible blast
+radius are different parties, so user consent cannot transfer the institution's
+risk or serve as the security boundary. Containment must.
+
+Threats, in priority order:
+
+1. **Prompt injection into executable code.** Indexed repository content and
+   uploaded files are untrusted; either can steer the model toward code it would
+   not otherwise write. Assume this succeeds — the container is what makes it
+   harmless.
+2. **Cross-tenant data access.** One user's uploads, memories, or artifacts
+   reachable from another user's execution.
+3. **Host and infrastructure escape.** Container breakout, socket access,
+   credential or SAML material exposure.
+4. **Resource exhaustion.** One thread starving the other chat sessions.
+5. **Egress.** Exfiltration of uploaded scientific data.
+
+Explicitly accepted: the model may produce *incorrect* scientific results. No
+sandbox or approval gate addresses that — it is a UI and prompting concern, and
+outputs must be presented as agent-generated and unverified.
+
+## Before enabling in production
+
+Keep `SANDBOX_ENABLED=false` in production until every item below passes. A
+working development Podman VM and green unit tests are *not* sufficient evidence
+to enable untrusted code execution on shared infrastructure — a Podman VM proves
+nothing about target-host filesystem quotas, systemd identity, firewalling, Linux
+host mounts, or production load behaviour.
+
+1. Install the broker under a dedicated unprivileged account on the target Linux
+   host, following the host preparation section above.
+2. Build and inspect the image with rootless Podman on that host.
+3. Configure a private/firewalled broker address and the shared random token.
+4. Configure and prove a hard 5 GB filesystem/project quota per workspace. This
+   quota is **required**, not advisory.
+5. Decide whether to enable and test gVisor (`runsc`).
+6. Repeat the complete `Plot with Python` agent/UI flow through the Podman path,
+   including approval, inline plot, downloads, chat reload, and thread deletion.
+7. Prove the job cannot reach the network, host filesystem, application data,
+   database, credentials, SAML material, or container sockets.
+8. Test approve, edit, reject, timeout, broker outage, replay, cross-user access,
+   malformed files, quota exhaustion, and cleanup against the deployed broker.
+9. Run the planned load test with 30 active chat sessions and four simultaneous
+   sandbox jobs.

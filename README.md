@@ -117,12 +117,11 @@ docker compose -f docker-compose.yml \
 
 The base configuration does not publish PostgreSQL and does not supply
 localhost SAML URLs or an insecure cookie override. It requires explicit
-production secrets and public HTTPS settings. The future gateway and
-split-service stack remain specified in
-[`DEPLOYMENT-PLAN.md`](DEPLOYMENT-PLAN.md); the code-execution sandbox and plot
-streaming in [`SANDBOX-PLAN.md`](SANDBOX-PLAN.md); the implemented supervisor,
-specialist, and skills architecture in
-[`PROMPT-AND-SKILLS-PLAN.md`](PROMPT-AND-SKILLS-PLAN.md).
+production secrets and public HTTPS settings.
+
+Sandbox deployment, the threat model, and the checklist that gates production
+enablement live in [`deploy/SANDBOX.md`](deploy/SANDBOX.md). The superseded
+planning documents are archived under `DOCS/` and are not maintained.
 
 ## Startup and Bootstrap
 
