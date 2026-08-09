@@ -55,6 +55,25 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
         yield
 
 
+def _warm_vector_index() -> None:
+    """Load the repository collections before the first search needs them.
+
+    Chroma loads a collection's HNSW segment lazily, which costs several
+    seconds across all repositories. Chroma shares those segments per index
+    path within the process, so warming here also serves the separate
+    ``RepoVectorIndex`` the agent builds later.
+
+    Never raises: an unsearchable index must not stop the server from starting.
+    """
+    try:
+        from juena.indexing.repo_manager import RepoManager
+        from juena.indexing.vector_index import RepoVectorIndex
+
+        RepoVectorIndex(RepoManager()).warm()
+    except Exception:
+        logger.warning("Vector index warm-up failed; searches stay cold", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -62,6 +81,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     if global_config.SANDBOX_ENABLED:
         await asyncio.to_thread(get_broker_client().assert_healthy)
+    # Deliberately not awaited: warming takes seconds and the service is
+    # perfectly usable while it runs, so it must not delay readiness.
+    warm_task = asyncio.create_task(asyncio.to_thread(_warm_vector_index))
     async with database_lifespan():
         async with checkpointer_lifespan():
             async with store_lifespan():
@@ -69,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     try:
                         yield
                     finally:
+                        warm_task.cancel()
                         # Agents hold network clients (Context7 MCP) for the
                         # process lifetime; close them before the pools go.
                         await shutdown_agents()
