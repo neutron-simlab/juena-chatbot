@@ -3,6 +3,7 @@ FastAPI service for Chatbot Template.
 
 This module sets up the FastAPI application and registers all endpoint routers.
 """
+import asyncio
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -21,6 +22,7 @@ from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan
 from juena.server.auth.saml import saml_lifespan
 from juena.server.database.store import store_lifespan
+from juena.sandbox.broker_client import close_broker_client, get_broker_client
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API
@@ -58,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Initialize Postgres, the LangGraph checkpointer, and SAML metadata.
     """
+    if global_config.SANDBOX_ENABLED:
+        await asyncio.to_thread(get_broker_client().assert_healthy)
     async with database_lifespan():
         async with checkpointer_lifespan():
             async with store_lifespan():
@@ -68,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         # Agents hold network clients (Context7 MCP) for the
                         # process lifetime; close them before the pools go.
                         await shutdown_agents()
+                        close_broker_client()
 
 
 app = FastAPI(

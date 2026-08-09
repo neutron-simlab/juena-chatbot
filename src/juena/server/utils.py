@@ -14,6 +14,7 @@ from juena.server.chat.input_constants import (
     DISPLAY_ATTACHMENTS_KEY,
     DISPLAY_TEXT_KEY,
 )
+from juena.sandbox.artifacts import ARTIFACT_MESSAGE_KEY
 
 # Content-block types that carry the model's internal reasoning rather than the
 # answer. Surfaced separately so the UI can collapse them instead of splicing
@@ -104,6 +105,11 @@ def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
                 ai_message.response_metadata = message.response_metadata
             if reasoning := reasoning_from(message):
                 ai_message.custom_data["reasoning"] = reasoning
+            artifacts = message.additional_kwargs.get(ARTIFACT_MESSAGE_KEY)
+            if isinstance(artifacts, list):
+                ai_message.custom_data["artifacts"] = [
+                    item for item in artifacts if isinstance(item, dict)
+                ]
             return ai_message
         case ToolMessage():
             tool_message = ChatMessage(

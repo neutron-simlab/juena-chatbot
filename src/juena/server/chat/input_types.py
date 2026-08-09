@@ -42,3 +42,7 @@ class PreparedCodeChatInputs:
     # Uploads accepted this turn, recorded on the human message so the transcript
     # can show which files were attached -- including after a reload.
     attachments: tuple[UploadedAttachment, ...] = ()
+    # Fully merged `/inputs` view copied into the sandbox's read-only input
+    # mount. Unlike `files_update`, this includes persistent files from earlier
+    # turns and excludes deletion markers.
+    sandbox_files: dict[str, Any] | None = None

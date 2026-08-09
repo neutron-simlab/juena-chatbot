@@ -56,6 +56,10 @@ services:
       - chatbot-vector-index:/data/vector_index
       - chatbot-manifests:/data/manifests
       - chatbot-saml:/data/saml
+      # Generated files live outside the temporary sandbox workspace so chat
+      # reloads can retrieve them through the authenticated API.
+      - chatbot-artifacts:/data/artifacts
+      - chatbot-audit:/data/audit
     environment:
       # Server configuration
       - SERVER_HOST=0.0.0.0
@@ -82,6 +86,17 @@ services:
 
       # Tavily web search (optional)
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+
+      # Optional host-installed rootless-Podman broker. No container socket is
+      # mounted into this application container.
+      - SANDBOX_ENABLED=${SANDBOX_ENABLED:-false}
+      - SANDBOX_BROKER_URL=${SANDBOX_BROKER_URL:-http://host.docker.internal:8090}
+      - SANDBOX_BROKER_TOKEN=${SANDBOX_BROKER_TOKEN:-}
+      - SANDBOX_BROKER_TIMEOUT_SECONDS=${SANDBOX_BROKER_TIMEOUT_SECONDS:-620}
+      - SANDBOX_EXECUTION_TIMEOUT_SECONDS=${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-600}
+      - SANDBOX_MAX_OUTPUT_BYTES=${SANDBOX_MAX_OUTPUT_BYTES:-100000}
+      - SANDBOX_ARTIFACT_ROOT=/data/artifacts
+      - SANDBOX_AUDIT_FILE=/data/audit/sandbox.jsonl
       
       # LangSmith Tracing (optional)
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
@@ -125,6 +140,8 @@ services:
       - "9501:9501"  # Streamlit UI
     networks:
       - chatbot-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,6 +194,12 @@ volumes:
   chatbot-saml:
     driver: local
     name: juena-chatbot-saml
+  chatbot-artifacts:
+    driver: local
+    name: juena-chatbot-artifacts
+  chatbot-audit:
+    driver: local
+    name: juena-chatbot-audit
 
 networks:
   chatbot-network:

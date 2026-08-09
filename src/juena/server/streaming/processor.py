@@ -18,6 +18,7 @@ from juena.core.log import get_logger
 from juena.server.errors import MessageProcessingError, StreamingError
 from juena.server.streaming import events
 from juena.server.streaming.handlers import (
+    extract_interrupts,
     extract_update_messages,
     is_subagent_namespace,
     token_text,
@@ -49,24 +50,29 @@ class StreamEventProcessor:
         user_input_message: str,
         *,
         include_tool_payloads: bool = False,
+        ignored_interrupt_ids: set[str] | None = None,
     ):
         self.agent = agent
         self.config = config
         self.run_id = run_id
         self.user_input_message = user_input_message
         self.include_tool_payloads = include_tool_payloads
+        self.ignored_interrupt_ids = frozenset(ignored_interrupt_ids or ())
 
         # Messages already sent this run, keyed by LangChain message id.
         # `updates` only emits new messages -- including on a resumed thread --
         # so this guards against the same message arriving twice within one run,
         # not against replayed history.
         self._streamed_message_ids: set[str] = set()
+        self._streamed_interrupt_ids: set[str] = set()
 
         # Tracks the last status emitted so identical ones are not repeated.
         self._last_status: tuple[str, str] | None = None
 
     def _parse_stream_event(self, stream_event: Any) -> tuple[str, Any, Any]:
         """Split a raw stream event into (stream_mode, event, node_path)."""
+        if isinstance(stream_event, dict) and {"type", "data"}.issubset(stream_event):
+            return stream_event["type"], stream_event["data"], stream_event.get("ns")
         if not isinstance(stream_event, tuple):
             raise StreamingError(f"Unexpected stream event type: {type(stream_event)}")
 
@@ -92,6 +98,11 @@ class StreamEventProcessor:
             stream_mode, event, node_path = self._parse_stream_event(stream_event)
             from_subagent = is_subagent_namespace(node_path)
 
+            if stream_mode == "custom":
+                if isinstance(event, dict) and event.get("type") == "sandbox_status":
+                    yield event
+                return
+
             if stream_mode == "messages":
                 if from_subagent:
                     # Subagent reasoning is activity, not the answer.
@@ -111,6 +122,15 @@ class StreamEventProcessor:
                 return
 
             if stream_mode == "updates":
+                for interrupt in extract_interrupts(event):
+                    if (
+                        interrupt.id in self.ignored_interrupt_ids
+                        or interrupt.id in self._streamed_interrupt_ids
+                    ):
+                        continue
+                    if isinstance(interrupt.value, dict):
+                        self._streamed_interrupt_ids.add(interrupt.id)
+                        yield events.approval_required_event(interrupt.id, interrupt.value)
                 for message in extract_update_messages(event):
                     async for payload in self._handle_message(message, from_subagent):
                         yield payload
@@ -130,6 +150,11 @@ class StreamEventProcessor:
 
             if isinstance(message, ToolMessage):
                 tool_name = getattr(message, "name", None) or "tool"
+                # `execute` has dedicated bounded sandbox-status events. Its
+                # stdout may be very large or binary-like and never belongs in
+                # either the transcript or the activity preview.
+                if tool_name == "execute":
+                    return
                 yield events.status_event(
                     events.PHASE_TOOL,
                     f"Ran {tool_name}",

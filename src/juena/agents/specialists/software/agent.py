@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from juena.agents.specialist_runtime import (
     build_specialist_backend,
     build_specialist_middleware,
+    has_authored_skills,
     load_markdown,
 )
 from juena.agents.specialists.software.tools import (
@@ -21,12 +22,16 @@ from juena.agents.specialists.software.tools import (
 from juena.core.llms_providers import build_chat_model
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena.sandbox.runtime import build_sandbox_backend_factory, sandbox_enabled
+from juena.sandbox.software import repository_software_prompt
 
 SOFTWARE_SPECIALIST_NAME = "software-specialist"
 SOFTWARE_SPECIALIST_DESCRIPTION = (
     "Investigate research software, staged code or errors, indexed JueNA "
     "repositories, and upstream library documentation. Use this specialist for "
-    "code reading, repository behavior, configuration, debugging, and software guidance."
+    "code reading, repository behavior, configuration, debugging, and software guidance. "
+    "Delegate Python or shell execution, calculations, plots, and generated files here; "
+    "when the sandbox is enabled, this specialist can execute them with user approval."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
 SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.MINIMAX_M27.value
@@ -53,7 +58,20 @@ def build_software_prompt(*, has_repo_research: bool, has_context7: bool) -> str
             "state when an answer requires external verification."
         )
     )
-    return f"{prompt}\n## Runtime capabilities\n\n- {repo_status}\n- {context7_status}\n"
+    execution_status = (
+        "Sandboxed Python and shell execution is available. Write generated plots as PNG "
+        "files under `/workspace/outputs`. Save reusable scripts and requested result files "
+        "there too; the application collects, displays, and attaches them automatically. "
+        f"{repository_software_prompt()} "
+        "After a successful command reports collected artifacts, do not inspect, encode, "
+        "or print those files. Never attempt package installation or network access."
+        if sandbox_enabled()
+        else "Sandboxed execution is unavailable. Do not claim to run Python or generate plots."
+    )
+    return (
+        f"{prompt}\n## Runtime capabilities\n\n"
+        f"- {repo_status}\n- {context7_status}\n- {execution_status}\n"
+    )
 
 
 def build_software_specialist(
@@ -67,9 +85,18 @@ def build_software_specialist(
 ) -> CompiledSubAgent:
     """Compile the software specialist with its own model, tools, and backend."""
 
-    backend = build_specialist_backend(
-        repo_cache_root=repo_manager.cache_dir if has_repo_research else None,
-        skills_dir=_SPECIALIST_SKILLS_PATH,
+    repo_cache_root = repo_manager.cache_dir if has_repo_research else None
+    backend = (
+        build_sandbox_backend_factory(
+            repo_cache_root=repo_cache_root,
+            skills_dir=_SPECIALIST_SKILLS_PATH,
+            has_skills=has_authored_skills(_SPECIALIST_SKILLS_PATH),
+        )
+        if sandbox_enabled()
+        else build_specialist_backend(
+            repo_cache_root=repo_cache_root,
+            skills_dir=_SPECIALIST_SKILLS_PATH,
+        )
     )
     model = build_chat_model(
         provider=SOFTWARE_SPECIALIST_PROVIDER,
@@ -95,6 +122,7 @@ def build_software_specialist(
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
+            enable_execution_approval=sandbox_enabled(),
         ),
         context_schema=RuntimeModelContext,
         name="juena_software_specialist",

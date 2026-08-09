@@ -9,11 +9,13 @@ from typing import Any
 
 import yaml
 from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import BACKEND_TYPES
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents.middleware import (
+    HumanInTheLoopMiddleware,
     ModelCallLimitMiddleware,
     ModelFallbackMiddleware,
     ModelRetryMiddleware,
@@ -26,6 +28,7 @@ from juena.agents.backends import ReadOnlyFilesystemBackend, ReadOnlyInputsState
 from juena.core.config import global_config
 from juena.core.llms_providers import build_chat_model, get_available_providers, get_default_model
 from juena.core.log import get_logger
+from juena.sandbox.policy import requires_execution_approval
 
 logger = get_logger(__name__)
 
@@ -160,12 +163,13 @@ def build_fallback_models() -> list[Any]:
 
 def build_specialist_middleware(
     *,
-    backend: CompositeBackend,
+    backend: BACKEND_TYPES,
     summarizer_model: Any,
     fallback_models: list[Any],
     filesystem_tool_descriptions: dict[str, str],
     skills_dir: Path | None,
     skills_label: str,
+    enable_execution_approval: bool = False,
 ) -> list[Any]:
     """Build the common middleware stack while keeping agent choices local."""
 
@@ -177,12 +181,20 @@ def build_specialist_middleware(
                 sources=[("/skills/", skills_label)],
             )
         )
+    filesystem_middleware = FilesystemMiddleware(
+        backend=backend,
+        custom_tool_descriptions=filesystem_tool_descriptions,
+        max_execute_timeout=global_config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
+    )
+    summarization_middleware = create_summarization_middleware(summarizer_model, backend)
+    _apply_declared_artifacts_root(
+        backend=backend,
+        filesystem_middleware=filesystem_middleware,
+        summarization_middleware=summarization_middleware,
+    )
     middleware.extend([
-        FilesystemMiddleware(
-            backend=backend,
-            custom_tool_descriptions=filesystem_tool_descriptions,
-        ),
-        create_summarization_middleware(summarizer_model, backend),
+        filesystem_middleware,
+        summarization_middleware,
         PatchToolCallsMiddleware(),
         *resilience_middleware(
             fallback_models,
@@ -190,4 +202,55 @@ def build_specialist_middleware(
             tool_call_limit=SPECIALIST_TOOL_CALL_LIMIT,
         ),
     ])
+    if enable_execution_approval:
+        middleware.append(
+            HumanInTheLoopMiddleware(
+                interrupt_on={
+                    "execute": {
+                        "allowed_decisions": ["approve", "edit", "reject"],
+                        "description": (
+                            "Review the generated command before it runs in the "
+                            "isolated sandbox."
+                        ),
+                        "when": requires_execution_approval,
+                    }
+                },
+            )
+        )
     return middleware
+
+
+def _apply_declared_artifacts_root(
+    *,
+    backend: BACKEND_TYPES,
+    filesystem_middleware: Any,
+    summarization_middleware: Any,
+) -> None:
+    """Honor an artifact root declared by a runtime backend factory.
+
+    Deep Agents currently discovers ``artifacts_root`` only on an already-built
+    ``CompositeBackend``. The sandbox backend must remain a callable factory so
+    it can bind each invocation to the authenticated user and thread.
+    """
+
+    if isinstance(backend, CompositeBackend):
+        return
+    root = getattr(backend, "artifacts_root", None)
+    if not isinstance(root, str) or not root.startswith("/"):
+        return
+    normalized_root = root.rstrip("/")
+    filesystem_middleware._large_tool_results_prefix = (
+        f"{normalized_root}/large_tool_results"
+    )
+    filesystem_middleware._conversation_history_prefix = (
+        f"{normalized_root}/conversation_history"
+    )
+    summarization_middleware._history_path_prefix = (
+        f"{normalized_root}/conversation_history"
+    )
+    summarization_middleware._large_tool_results_prefix = (
+        f"{normalized_root}/large_tool_results"
+    )
+    summarization_middleware._media_prefix = (
+        f"{summarization_middleware._history_path_prefix}/media"
+    )

@@ -419,6 +419,41 @@ class AgentClient:
                 "summary": parsed.get("summary"),
             }
 
+        if parsed_type == "sandbox_status":
+            return {
+                "type": "sandbox_status",
+                "status": parsed.get("status", ""),
+                "label": parsed.get("label", ""),
+                "job_id": parsed.get("job_id"),
+                "exit_code": parsed.get("exit_code"),
+            }
+
+        if parsed_type == "approval_required":
+            return {
+                "type": "approval_required",
+                "interrupt_id": parsed.get("interrupt_id", ""),
+                "action_name": parsed.get("action_name", ""),
+                "command": parsed.get("command", ""),
+                "description": parsed.get("description", ""),
+                "limits": parsed.get("limits") or {},
+                "allowed_decisions": parsed.get("allowed_decisions") or [],
+            }
+
+        if parsed_type == "artifact":
+            return {
+                "type": "artifact",
+                "artifact_id": parsed.get("artifact_id", ""),
+                "filename": parsed.get("filename", "plot.png"),
+                "mime_type": parsed.get("mime_type", "image/png"),
+                "kind": parsed.get("kind", "image"),
+                "size": parsed.get("size"),
+                "width": parsed.get("width"),
+                "height": parsed.get("height"),
+                "caption": parsed.get("caption", "Plot"),
+                "created_at": parsed.get("created_at"),
+                "content_base64": parsed.get("content_base64", ""),
+            }
+
         return {"type": "unknown", "content": parsed.get("content", str(parsed))}
 
     def _build_stream_request(
@@ -504,6 +539,102 @@ class AgentClient:
             raise AgentClientError(_http_error_message(e))
         except SSEError as e:
             raise AgentClientError(f"Error: {e}")
+
+    def resume_stream(
+        self,
+        *,
+        thread_id: str,
+        interrupt_id: str,
+        decision: str,
+        edited_command: str | None = None,
+        model: str | None = None,
+        provider: str | Provider | None = None,
+    ) -> Generator[ChatMessage | dict, None, None]:
+        """Resume a pending sandbox command after a user decision."""
+        if not self.agent:
+            raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+
+        payload: dict[str, Any] = {
+            "thread_id": thread_id,
+            "interrupt_id": interrupt_id,
+            "decision": decision,
+        }
+        if edited_command is not None:
+            payload["edited_command"] = edited_command
+        if model:
+            payload["model"] = model
+        if provider_value := _provider_value(provider):
+            payload["provider"] = provider_value
+
+        timeout = (
+            httpx.Timeout(connect=self.timeout, read=None, write=self.timeout, pool=self.timeout)
+            if self.timeout is not None
+            else None
+        )
+        try:
+            with self._client.stream(
+                "POST",
+                f"{self.base_url}/{self.agent}/resume",
+                json=payload,
+                headers=self._headers,
+                timeout=timeout,
+            ) as response:
+                response.raise_for_status()
+                for sse in EventSource(response).iter_sse():
+                    parsed = self._parse_sse_data(sse.data)
+                    if parsed is not None:
+                        yield parsed
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        except SSEError as e:
+            raise AgentClientError(f"Error: {e}")
+
+    def get_artifact(self, artifact_id: str) -> bytes:
+        """Download one generated image owned by the current user."""
+        try:
+            response = self._client.get(
+                f"{self.base_url}/artifacts/{artifact_id}",
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(_http_error_message(e))
+        if not response.content:
+            raise AgentClientError("Error: Server returned an empty generated file")
+        return response.content
+
+    def get_pending_approval(
+        self,
+        thread_id: str,
+        *,
+        model: str | None = None,
+        provider: str | Provider | None = None,
+    ) -> dict[str, Any] | None:
+        """Return a thread's pending sandbox confirmation, if one exists."""
+        params = {
+            key: value
+            for key, value in {
+                "model": model,
+                "provider": _provider_value(provider),
+            }.items()
+            if value
+        }
+        try:
+            response = self._client.get(
+                f"{self.base_url}/threads/{thread_id}/pending-approval",
+                params=params,
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            if isinstance(e, httpx.HTTPError):
+                raise AgentClientError(_http_error_message(e))
+            raise AgentClientError("Error: Server returned an invalid approval response") from e
+        approval = payload.get("approval") if isinstance(payload, dict) else None
+        return approval if isinstance(approval, dict) else None
 
     async def astream(
         self,

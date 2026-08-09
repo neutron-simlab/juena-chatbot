@@ -5,8 +5,11 @@ This module provides functions for rendering chat messages and content
 with consistent styling across the application.
 """
 import base64
+import binascii
+import html
 import io
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,9 +26,17 @@ CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM = 5.5
 # alpha channel, so it sits directly on the themed background with no plate.
 LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
 HEADER_LOGO_WIDTH_PX = 88
+PLOT_PREVIEW_WIDTH_PX = 720
 # Emit the bitmap at this multiple of the displayed size. 3 covers every common
 # device pixel ratio; the file stays a few kilobytes at this scale.
 HEADER_LOGO_PIXEL_DENSITY = 3
+_DATA_IMAGE_MARKER_RE = re.compile(
+    r"data:image/[a-z0-9.+-]+;base64,",
+    flags=re.IGNORECASE,
+)
+_BASE64_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+)
 
 
 @lru_cache(maxsize=4)
@@ -95,6 +106,38 @@ def render_chat_input_styles() -> None:
     )
 
 
+def sanitize_assistant_content(content: Any) -> Any:
+    """Remove obsolete inline image data while preserving surrounding text.
+
+    Generated images are rendered from validated artifacts. Older sandbox
+    turns may still contain a very large Base64 data URI copied into Markdown;
+    sending that string to Streamlit is slow and can produce a broken image.
+    """
+    if not isinstance(content, str):
+        return content
+
+    cleaned = content
+    search_from = 0
+    while match := _DATA_IMAGE_MARKER_RE.search(cleaned, search_from):
+        start = match.start()
+        markdown_start = cleaned.rfind("![", max(0, start - 512), start)
+        if markdown_start >= 0 and re.fullmatch(
+            r"!\[[^\]\n]*\]\(\s*",
+            cleaned[markdown_start:start],
+        ):
+            start = markdown_start
+
+        end = match.end()
+        while end < len(cleaned) and cleaned[end] in _BASE64_CHARACTERS:
+            end += 1
+        if end < len(cleaned) and cleaned[end] == ")":
+            end += 1
+        cleaned = cleaned[:start] + cleaned[end:]
+        search_from = start
+
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
 def render_content(content: Any) -> None:
     """
     Render message content uniformly (JSON or markdown).
@@ -129,7 +172,107 @@ def should_collapse_tool_payload(custom_data: Optional[Dict[str, Any]]) -> bool:
     return True
 
 
-def finalize_streaming_message(message_placeholder, content: Any) -> None:
+def _artifact_bytes(artifact: dict[str, Any]) -> bytes | None:
+    """Resolve an artifact from a live SSE payload or its authenticated URL."""
+    encoded = artifact.get("content_base64")
+    if isinstance(encoded, str) and encoded:
+        try:
+            return base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            return None
+
+    artifact_id = str(artifact.get("artifact_id") or "").strip()
+    client = getattr(st.session_state, "client", None)
+    if not artifact_id or client is None:
+        return None
+    try:
+        return client.get_artifact(artifact_id)
+    except Exception:
+        return None
+
+
+@st.dialog("Plot preview", width="large", icon=":material/monitoring:")
+def _render_plot_dialog(content: bytes, caption: str) -> None:
+    """Show a generated PNG at the dialog's available width."""
+    _render_png(content, caption, max_width="100%")
+
+
+def _render_png(content: bytes, caption: str, *, max_width: str) -> None:
+    """Render validated PNG bytes without a temporary Streamlit media URL."""
+    encoded = base64.b64encode(content).decode("ascii")
+    safe_caption = html.escape(caption, quote=True)
+    st.html(
+        f"""
+        <figure style="margin:0;max-width:{max_width};width:100%;">
+          <img
+            src="data:image/png;base64,{encoded}"
+            alt="{safe_caption}"
+            style="display:block;max-width:100%;width:100%;height:auto;"
+          >
+          <figcaption style="margin-top:0.35rem;color:#6b7280;font-size:0.875rem;">
+            {safe_caption}
+          </figcaption>
+        </figure>
+        """
+    )
+
+
+def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
+    """Render plots and authenticated downloads beneath the assistant response."""
+    artifacts = (custom_data or {}).get("artifacts") or []
+    if not isinstance(artifacts, list):
+        return
+
+    ordered = sorted(
+        (item for item in artifacts if isinstance(item, dict)),
+        key=lambda item: 0 if item.get("kind") == "image" else 1,
+    )
+    for artifact in ordered:
+        content = _artifact_bytes(artifact)
+        if not content:
+            st.caption("This generated file is no longer available.")
+            continue
+        caption = str(artifact.get("caption") or artifact.get("filename") or "Plot")
+        filename = str(artifact.get("filename") or "result.txt")
+        mime_type = str(artifact.get("mime_type") or "application/octet-stream")
+        if artifact.get("kind") == "image":
+            if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+                st.caption("This generated plot is no longer available.")
+                continue
+            _render_png(content, caption, max_width=f"{PLOT_PREVIEW_WIDTH_PX}px")
+            with st.container(horizontal=True):
+                if st.button(
+                    "Expand plot",
+                    icon=":material/open_in_full:",
+                    help="Open a larger plot preview",
+                    key=f"artifact-expand:{artifact.get('artifact_id') or filename}",
+                ):
+                    _render_plot_dialog(content, caption)
+                st.download_button(
+                    f"Download {filename}",
+                    data=content,
+                    file_name=filename,
+                    mime=mime_type,
+                    icon=":material/download:",
+                    key=f"artifact-download:{artifact.get('artifact_id') or filename}",
+                )
+        else:
+            st.caption(caption)
+            st.download_button(
+                f"Download {filename}",
+                data=content,
+                file_name=filename,
+                mime=mime_type,
+                icon=":material/download:",
+                key=f"artifact-download:{artifact.get('artifact_id') or filename}",
+            )
+
+
+def finalize_streaming_message(
+    message_placeholder,
+    content: Any,
+    custom_data: Optional[Dict[str, Any]] = None,
+) -> None:
     """
     Render the final AI message using the same content renderer as history.
 
@@ -139,7 +282,8 @@ def finalize_streaming_message(message_placeholder, content: Any) -> None:
     """
     with message_placeholder.container():
         if content:
-            render_content(content)
+            render_content(sanitize_assistant_content(content))
+        render_artifacts(custom_data)
 
 
 def render_attachment_chips(custom_data: Optional[Dict[str, Any]]) -> None:
@@ -161,7 +305,9 @@ def render_attachment_chips(custom_data: Optional[Dict[str, Any]]) -> None:
         if not name:
             continue
         chars = attachment.get("chars")
-        labels.append(f"📎 `{name}` ({chars} chars)" if isinstance(chars, int) else f"📎 `{name}`")
+        labels.append(
+            f"📎 `{name}` ({chars} chars)" if isinstance(chars, int) else f"📎 `{name}`"
+        )
 
     if labels:
         st.caption(" · ".join(labels))
@@ -193,7 +339,8 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
         # AI messages
         with st.chat_message("assistant"):
             if message.content:
-                render_content(message.content)
+                render_content(sanitize_assistant_content(message.content))
+            render_artifacts(message.custom_data)
     
     elif message.type == "tool":
         # Tool messages
@@ -234,4 +381,4 @@ def render_streaming_token(
         message_placeholder: Streamlit placeholder for the message
     """
     # Display content with cursor
-    message_placeholder.markdown(f"{response_text}▌")
+    message_placeholder.markdown(f"{sanitize_assistant_content(response_text)}▌")

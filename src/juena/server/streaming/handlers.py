@@ -5,9 +5,8 @@ Two modes are consumed:
 ``updates``   complete messages as each node finishes
 ``messages``  token chunks from LLM calls
 
-``custom`` is deliberately not subscribed: nothing in this codebase calls
-``get_stream_writer()``, and the old handler passed raw payloads into the
-message converter, which rejected them.
+``custom`` carries only bounded sandbox-status dictionaries written by the
+execution backend. The stream processor rejects every other custom payload.
 """
 
 from typing import Any
@@ -36,9 +35,6 @@ def extract_update_messages(event: dict[str, Any]) -> list[BaseMessage]:
 
     for node, updates in (event or {}).items():
         if node == "__interrupt__":
-            interrupt: Interrupt
-            for interrupt in updates:
-                new_messages.append(AIMessage(content=interrupt.value))
             continue
 
         update_messages = (updates or {}).get("messages", [])
@@ -53,6 +49,13 @@ def extract_update_messages(event: dict[str, Any]) -> list[BaseMessage]:
             new_messages.extend(m for m in update_messages if isinstance(m, BaseMessage))
 
     return new_messages
+
+
+def extract_interrupts(event: dict[str, Any]) -> list[Interrupt]:
+    """Return structured LangGraph interrupts from one updates payload."""
+
+    updates = (event or {}).get("__interrupt__", ())
+    return [item for item in updates if isinstance(item, Interrupt)]
 
 
 def token_text(event: tuple[BaseMessage, dict[str, Any]]) -> str | None:

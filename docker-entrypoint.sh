@@ -1,10 +1,17 @@
 #!/bin/sh
 set -e
 
+STREAMLIT_PID=""
+FASTAPI_PID=""
+
 # Function to handle shutdown
 cleanup() {
+    trap - TERM INT
     echo "Shutting down services..."
-    kill $STREAMLIT_PID 2>/dev/null || true
+    [ -z "$FASTAPI_PID" ] || kill "$FASTAPI_PID" 2>/dev/null || true
+    [ -z "$STREAMLIT_PID" ] || kill "$STREAMLIT_PID" 2>/dev/null || true
+    [ -z "$FASTAPI_PID" ] || wait "$FASTAPI_PID" 2>/dev/null || true
+    [ -z "$STREAMLIT_PID" ] || wait "$STREAMLIT_PID" 2>/dev/null || true
     exit 0
 }
 
@@ -68,6 +75,16 @@ else
     echo "⚠️  Warning: Streamlit failed to start"
 fi
 
-# Start FastAPI in the foreground (so we see logs and it's the main process)
+# Keep the shell as PID 1 so it can forward Docker stop signals to both servers.
 echo "Starting FastAPI server on port 8080..."
-python main.py
+python main.py &
+FASTAPI_PID=$!
+
+set +e
+wait "$FASTAPI_PID"
+FASTAPI_STATUS=$?
+set -e
+
+kill "$STREAMLIT_PID" 2>/dev/null || true
+wait "$STREAMLIT_PID" 2>/dev/null || true
+exit "$FASTAPI_STATUS"

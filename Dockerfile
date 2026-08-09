@@ -46,7 +46,8 @@ RUN uv sync --frozen --no-dev
 RUN chmod +x docker-entrypoint.sh
 
 # Create directories for logs, data, vector index, and manifests
-RUN mkdir -p /data/logs /data/repos /data/vector_index /data/manifests /data/saml
+RUN mkdir -p /data/logs /data/repos /data/vector_index /data/manifests /data/saml \
+    /data/artifacts /data/audit
 
 # Expose ports
 # 8080: FastAPI server

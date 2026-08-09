@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sse_starlette.sse import EventSourceResponse
 from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -44,6 +44,14 @@ from juena.server.chat.repository import (
 )
 from juena.server.database import get_db_session
 from juena.server.database.models import utc_now
+from juena.sandbox.runtime import delete_runtime_workspace, stage_runtime_inputs
+from juena.sandbox.approvals import (
+    ApprovalError,
+    build_resume_command,
+    get_first_pending_execute_interrupt,
+)
+from juena.sandbox.artifacts import get_artifact_store
+from juena.sandbox.schemas import ApprovalResumeInput
 
 logger = get_logger(__name__)
 
@@ -57,6 +65,44 @@ class PreparedAgentInvocation:
     kwargs: dict[str, Any]
     run_id: Any
     effective_user_message: str
+
+
+async def _stream_agent_payloads(
+    *,
+    agent: CompiledStateGraph,
+    kwargs: dict[str, Any],
+    run_id: Any,
+    authenticated_user_id: str,
+    effective_user_message: str,
+    ignored_interrupt_ids: set[str] | None = None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream one new or resumed graph invocation using LangGraph v2 events."""
+
+    processor = StreamEventProcessor(
+        agent,
+        kwargs["config"],
+        str(run_id),
+        effective_user_message,
+        include_tool_payloads=global_config.STREAM_TOOL_PAYLOADS,
+        ignored_interrupt_ids=ignored_interrupt_ids,
+    )
+    thread_id = str(kwargs["config"]["configurable"]["thread_id"])
+    artifact_store = get_artifact_store()
+    yield events.status_event(events.PHASE_THINKING, "Thinking…")
+
+    async for stream_event in agent.astream(
+        **kwargs,
+        stream_mode=["updates", "messages", "custom"],
+        subgraphs=True,
+        version="v2",
+    ):
+        async for payload in processor.process_event(stream_event):
+            yield payload
+        for artifact in artifact_store.drain_events(authenticated_user_id, thread_id):
+            yield artifact
+
+    for artifact in artifact_store.drain_events(authenticated_user_id, thread_id):
+        yield artifact
 
 
 def _sse_response_example() -> dict[int | str, Any]:
@@ -136,6 +182,11 @@ async def _prepare_agent_invocation(
         run.config,
         message,
         attachments=attachments,
+    )
+    await stage_runtime_inputs(
+        user_id=str(user_id),
+        thread_id=run.thread_id,
+        files=(prepared_inputs.sandbox_files or {}) if prepared_inputs is not None else {},
     )
 
     kwargs = {
@@ -226,25 +277,14 @@ async def message_generator(
     # Messages are not persisted here: the checkpointer commits the full thread
     # history as the graph runs, and `/chats/{thread_id}` reads it back.
     try:
-        processor = StreamEventProcessor(
-            agent,
-            kwargs["config"],
-            str(run_id),
-            prepared.effective_user_message,
-            include_tool_payloads=global_config.STREAM_TOOL_PAYLOADS,
-        )
-
-        yield sse(events.status_event(events.PHASE_THINKING, "Thinking…"))
-
-        # `updates` carries completed messages, `messages` carries answer
-        # tokens. `custom` is not subscribed: nothing emits custom stream data.
-        # subgraphs=True is what lets the processor tell supervisor output
-        # apart from subagent activity.
-        async for stream_event in agent.astream(
-            **kwargs, stream_mode=["updates", "messages"], subgraphs=True
+        async for payload in _stream_agent_payloads(
+            agent=agent,
+            kwargs=kwargs,
+            run_id=run_id,
+            authenticated_user_id=authenticated_user_id,
+            effective_user_message=prepared.effective_user_message,
         ):
-            async for payload in processor.process_event(stream_event):
-                yield sse(payload)
+            yield sse(payload)
 
     except asyncio.CancelledError:
         # Client disconnected or request cancelled; re-raise so the task is properly cancelled
@@ -489,6 +529,105 @@ async def stream(
     )
 
 
+async def resume_generator(
+    payload: ApprovalResumeInput,
+    authenticated_user_id: str,
+    agent_id: str,
+) -> AsyncGenerator[str, None]:
+    """Resume one verified LangGraph interrupt and stream the remaining turn."""
+
+    def sse(item: dict[str, Any]) -> str:
+        return json.dumps(item)
+
+    try:
+        agent = await get_agent(agent_id, provider=payload.provider, model=payload.model)
+        run = AgentInputHandler.build_run_context(
+            thread_id=payload.thread_id,
+            user_id=authenticated_user_id,
+            provider=payload.provider,
+            model=payload.model,
+        )
+        command = await build_resume_command(
+            agent=agent,
+            config=run.config,
+            user_id=authenticated_user_id,
+            payload=payload,
+        )
+        kwargs = {
+            "input": command,
+            "config": run.config,
+            "context": run.context,
+        }
+        yield sse(events.thread_event(payload.thread_id))
+        async for item in _stream_agent_payloads(
+            agent=agent,
+            kwargs=kwargs,
+            run_id=run.run_id,
+            authenticated_user_id=authenticated_user_id,
+            effective_user_message="",
+            ignored_interrupt_ids={payload.interrupt_id},
+        ):
+            yield sse(item)
+    except ApprovalError as exc:
+        yield sse(events.error_event(str(exc)))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error resuming sandbox approval")
+        yield sse(events.error_event("Unable to resume sandbox execution"))
+
+
+@router.post(
+    "/{agent_id}/resume",
+    response_class=EventSourceResponse,
+    responses=_sse_response_example(),
+)
+@router.post("/resume", response_class=EventSourceResponse, responses=_sse_response_example())
+async def resume(
+    payload: ApprovalResumeInput,
+    agent_id: str | None = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> EventSourceResponse:
+    """Resume a pending sandbox execution after an authenticated decision."""
+
+    try:
+        await get_owned_chat(session, user.id, payload.thread_id)
+    except ChatNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat not found") from exc
+    return EventSourceResponse(
+        resume_generator(payload, str(user.id), agent_id or get_default_agent())
+    )
+
+
+@router.get("/threads/{thread_id}/pending-approval")
+async def pending_approval(
+    thread_id: str,
+    agent_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Restore a pending command confirmation after a Streamlit reload."""
+    try:
+        await get_owned_chat(session, user.id, thread_id)
+    except ChatNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat not found") from exc
+
+    agent = await get_agent(agent_id or get_default_agent(), provider=provider, model=model)
+    run = AgentInputHandler.build_run_context(
+        thread_id=thread_id,
+        user_id=str(user.id),
+        provider=provider,
+        model=model,
+    )
+    interrupt = await get_first_pending_execute_interrupt(agent, run.config)
+    if interrupt is None or not isinstance(interrupt.value, dict):
+        return {"approval": None}
+    return {"approval": events.approval_required_event(interrupt.id, interrupt.value)}
+
+
 @router.post(
     "/{agent_id}/stream_with_files",
     response_class=EventSourceResponse,
@@ -542,6 +681,11 @@ async def delete_thread(
     try:
         chat = await get_owned_chat(session, user.id, thread_id)
         await get_checkpointer().adelete_thread(thread_id)
+        get_artifact_store().delete_thread(str(user.id), thread_id)
+        try:
+            await delete_runtime_workspace(user_id=str(user.id), thread_id=thread_id)
+        except Exception:
+            logger.warning("Unable to delete sandbox workspace for thread %s", thread_id, exc_info=True)
         await session.delete(chat)
         await session.commit()
         return {
@@ -557,6 +701,30 @@ async def delete_thread(
     except Exception as e:
         logger.error("Failed to delete thread %s: %s", thread_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete thread state") from e
+
+
+@router.get("/artifacts/{artifact_id}")
+async def get_artifact(
+    artifact_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> Response:
+    """Return one validated generated file owned by the authenticated user."""
+
+    record = get_artifact_store().get(str(user.id), artifact_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    metadata, content = record
+    safe_name = metadata.filename.replace('"', "")
+    disposition = "inline" if metadata.kind == "image" else "attachment"
+    return Response(
+        content=content,
+        media_type=metadata.mime_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ------------------------------------------------------------------

@@ -229,3 +229,65 @@ def test_close_closes_reusable_http_client() -> None:
     client.close()
 
     assert client._client.is_closed
+
+
+def test_sse_parser_preserves_approval_choices_and_artifact_bytes() -> None:
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena")
+
+    approval = client._parse_sse_data(
+        '{"type":"approval_required","interrupt_id":"i-1","command":"python x.py",'
+        '"allowed_decisions":["approve","reject"],"limits":{"network":"none"}}'
+    )
+    artifact = client._parse_sse_data(
+        '{"type":"artifact","artifact_id":"a-1","filename":"plot.png",'
+        '"mime_type":"image/png","kind":"image","content_base64":"abc"}'
+    )
+
+    assert approval["allowed_decisions"] == ["approve", "reject"]
+    assert approval["command"] == "python x.py"
+    assert artifact["artifact_id"] == "a-1"
+    assert artifact["content_base64"] == "abc"
+
+
+def test_resume_stream_posts_exact_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_stream(method: str, url: str, **kwargs):
+        captured.update(method=method, url=url, kwargs=kwargs)
+        return _FakeStreamContext(
+            _FakeStreamResponse(
+                [
+                    'data: {"type":"token","content":"done"}',
+                ]
+            )
+        )
+
+    client = client_module.AgentClient(
+        base_url="http://localhost:8080",
+        agent="juena",
+        timeout=5.0,
+        session_token="session",
+    )
+    monkeypatch.setattr(client._client, "stream", fake_stream)
+
+    chunks = list(
+        client.resume_stream(
+            thread_id="thread-1",
+            interrupt_id="interrupt-1",
+            decision="edit",
+            edited_command="python revised.py",
+            provider="openai",
+            model="gpt-4o-mini",
+        )
+    )
+
+    assert chunks == [{"type": "token", "content": "done"}]
+    assert captured["url"] == "http://localhost:8080/juena/resume"
+    assert captured["kwargs"]["json"] == {
+        "thread_id": "thread-1",
+        "interrupt_id": "interrupt-1",
+        "decision": "edit",
+        "edited_command": "python revised.py",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }

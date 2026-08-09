@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
-from langgraph.types import Overwrite
+from langgraph.types import Interrupt, Overwrite
 
 from juena.server.streaming import events
 from juena.server.streaming.handlers import (
@@ -49,6 +49,24 @@ def test_extract_update_messages_tolerates_empty_payloads() -> None:
     assert extract_update_messages({}) == []
     assert extract_update_messages({"agent": None}) == []
     assert extract_update_messages({"agent": {"messages": None}}) == []
+
+
+def test_approval_description_omits_duplicated_tool_arguments() -> None:
+    payload = events.approval_required_event(
+        "interrupt-1",
+        {
+            "action_requests": [
+                {
+                    "name": "execute",
+                    "args": {"command": "python plot.py"},
+                    "description": "Review this command.\n\nTool: execute\nArgs: {...}",
+                }
+            ],
+            "review_configs": [{"allowed_decisions": ["approve"]}],
+        },
+    )
+
+    assert payload["description"] == "Review this command."
 
 
 # --------------------------------------------------------------------------
@@ -112,6 +130,111 @@ async def test_supervisor_tokens_are_streamed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_v2_interrupt_becomes_clickable_approval_event() -> None:
+    interrupt = Interrupt(
+        id="interrupt-1",
+        value={
+            "action_requests": [
+                {
+                    "name": "execute",
+                    "args": {"command": "python plot.py", "timeout": 600},
+                    "description": "Create a plot",
+                }
+            ],
+            "review_configs": [
+                {"allowed_decisions": ["approve", "edit", "reject"]}
+            ],
+        },
+    )
+
+    processor = _processor()
+    event = {
+        "type": "updates",
+        "ns": (),
+        "data": {"__interrupt__": (interrupt,)},
+        "interrupts": (interrupt,),
+    }
+    payloads = [
+        *await _collect(processor, event),
+        *await _collect(processor, event),
+    ]
+
+    assert payloads == [
+        {
+            "type": "approval_required",
+            "interrupt_id": "interrupt-1",
+            "action_name": "execute",
+            "command": "python plot.py",
+            "description": "Create a plot",
+            "limits": {
+                "timeout_seconds": 600,
+                "network": "none",
+                "cpu": "2 vCPU",
+                "memory": "4 GB",
+            },
+            "allowed_decisions": ["approve", "edit", "reject"],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resumed_interrupt_is_not_emitted_as_a_stale_approval() -> None:
+    interrupt = Interrupt(
+        id="interrupt-1",
+        value={
+            "action_requests": [
+                {
+                    "name": "execute",
+                    "args": {"command": "python plot.py"},
+                    "description": "Create a plot",
+                }
+            ],
+            "review_configs": [{"allowed_decisions": ["approve", "reject"]}],
+        },
+    )
+
+    payloads = await _collect(
+        _processor(ignored_interrupt_ids={"interrupt-1"}),
+        {
+            "type": "updates",
+            "ns": (),
+            "data": {"__interrupt__": (interrupt,)},
+        },
+    )
+
+    assert payloads == []
+
+
+@pytest.mark.asyncio
+async def test_v2_custom_stream_accepts_only_sandbox_status() -> None:
+    accepted = await _collect(
+        _processor(),
+        {
+            "type": "custom",
+            "ns": ("tools:abc",),
+            "data": {
+                "type": "sandbox_status",
+                "status": "queued",
+                "label": "Sandbox command queued",
+            },
+        },
+    )
+    ignored = await _collect(
+        _processor(),
+        {"type": "custom", "ns": (), "data": {"secret": "must not leak"}},
+    )
+
+    assert accepted == [
+        {
+            "type": "sandbox_status",
+            "status": "queued",
+            "label": "Sandbox command queued",
+        }
+    ]
+    assert ignored == []
+
+
+@pytest.mark.asyncio
 async def test_tool_results_become_status_not_transcript_payloads() -> None:
     """Tool payloads are large and the model has already read them; rendering
     them in the transcript buries the answer."""
@@ -138,6 +261,23 @@ async def test_tool_payloads_can_be_enabled_for_debugging() -> None:
 
     assert [p["type"] for p in payloads] == ["status", "message"]
     assert payloads[1]["content"]["content"] == "result"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_output_is_never_streamed_or_previewed() -> None:
+    tool_message = ToolMessage(
+        content="data:image/png;base64," + "x" * 5000,
+        tool_call_id="c1",
+        name="execute",
+        id="t-1",
+    )
+
+    payloads = await _collect(
+        _processor(include_tool_payloads=True),
+        (("model",), "updates", {"tools": {"messages": [tool_message]}}),
+    )
+
+    assert payloads == []
 
 
 # --------------------------------------------------------------------------

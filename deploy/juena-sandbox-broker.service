@@ -1,0 +1,26 @@
+[Unit]
+Description=JüNA rootless Podman sandbox broker
+After=network-online.target
+
+[Service]
+Type=simple
+User=juena-sandbox
+Group=juena-sandbox
+EnvironmentFile=/etc/juena/sandbox-broker.env
+Environment=HOME=/var/lib/juena-sandbox
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+WorkingDirectory=/opt/juena
+ExecStart=/opt/juena/.venv/bin/uvicorn juena.sandbox.broker_service:app --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=5
+# Rootless Podman needs delegated cgroups and may invoke newuidmap/newgidmap for
+# subordinate-ID mappings. no-new-privileges is enforced on each untrusted
+# container instead of on this trusted broker process.
+Delegate=yes
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/juena-sandbox
+ProtectHome=true
+
+[Install]
+WantedBy=default.target

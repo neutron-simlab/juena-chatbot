@@ -32,11 +32,15 @@ remove either specialist.
 The retired ids `react_agent` and `code_chat_agent` resolve to `juena` for one
 compatibility release, but they are not shown by the discovery endpoint.
 
-An empty thread shows exactly two immediate-send chips:
+An empty thread normally shows two immediate-send chips:
 
 - **General neutron science**
 - **Neutron software and codes** — asks JüNA to list and explain every indexed
   repository before asking which one the user wants to explore.
+
+The development Compose stack also enables **Plot with Python**. It asks the
+software specialist to generate a script, pauses for your approval, runs it in
+an isolated container, and displays the resulting plot.
 
 ## Quick Start
 
@@ -57,40 +61,57 @@ An empty thread shows exactly two immediate-send chips:
 
 3. Optional: update [`config/repositories.yaml`](config/repositories.yaml) to change the repositories available to JüNA.
 
-4. Start the stack:
+4. Install and initialize rootless Podman once on macOS:
 
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+   brew install podman
+   podman machine init --memory 8192
    ```
 
-5. Watch bootstrap and startup logs:
+5. Start the complete development stack with the normal shortcut:
 
    ```bash
-   docker compose logs -f juena-chatbot
+   ./juena up
    ```
 
-6. Register the metadata URL with the FZJ IdP when deploying a real SP, then open:
+   This starts the Podman VM when needed, builds the scientific image, starts
+   the host broker, and then starts PostgreSQL and JüNA through Docker Compose.
+   The fixed sandbox image currently includes `jscatter==1.9.0.1`; its pinned
+   repository-software manifest is
+   `src/juena/sandbox/repository-requirements.txt`.
+   After running `./juena install` once, use `juena up` from any directory.
+
+6. Watch bootstrap and startup logs:
+
+   ```bash
+   ./juena logs
+   ```
+
+7. Register the metadata URL with the FZJ IdP when deploying a real SP, then open:
    - Streamlit UI: <http://localhost:9501>
    - FastAPI server: <http://localhost:8080>
    - SP metadata: <http://localhost:8080/auth/metadata>
 
-7. Optional verification:
+8. Optional verification:
 
    ```bash
    curl http://localhost:8080/health
    # Authenticated endpoints require the juena_session cookie.
    ```
 
-The development `docker compose ... up --build -d` command is detached, so
-bootstrap progress will not appear inline in the Compose output. Use
-`docker compose logs -f juena-chatbot` to watch indexing progress.
+The development stack is detached, so bootstrap progress will not appear
+inline. Use `./juena logs` to watch JüNA and see the recent host-broker log. Use
+`./juena sandbox-stop` to stop those two services while keeping PostgreSQL and
+its data available.
 
 Development explicitly merges
 [`docker-compose.dev.yml`](docker-compose.dev.yml) after the base file. It
-supplies localhost development URLs and publishes Postgres for host-side
-integration tests. Because the filename is not an automatic override,
-production cannot load these settings accidentally. Production uses only the
-base file:
+supplies localhost development URLs, publishes Postgres for host-side
+integration tests, and points the app at the host rootless-Podman broker.
+Development and production therefore use the same broker process and Podman
+execution path; no application container receives a container-engine socket.
+Because the filename is not an automatic override, production cannot load these
+development settings accidentally. Production uses only the base file:
 
 ```bash
 docker compose -f docker-compose.yml \

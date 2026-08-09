@@ -206,6 +206,12 @@ async def prepare_code_chat_turn_inputs(
         existing_upload_paths=existing_upload_paths,
     )
     files_update.update(uploaded_updates)
+    sandbox_files = dict(existing_files)
+    for path, file_data in files_update.items():
+        if file_data is None:
+            sandbox_files.pop(path, None)
+        else:
+            sandbox_files[path] = file_data
     has_thread_uploads = bool(existing_upload_paths or uploaded)
 
     uploads_manifest = build_uploads_manifest(existing_files, existing_upload_paths, uploaded)
@@ -235,6 +241,7 @@ async def prepare_code_chat_turn_inputs(
             ),
             files_update=files_update,
             attachments=tuple(uploaded),
+            sandbox_files=sandbox_files,
         )
 
     if files_update:
@@ -242,6 +249,7 @@ async def prepare_code_chat_turn_inputs(
             message_override=message,
             files_update=files_update,
             attachments=tuple(uploaded),
+            sandbox_files=sandbox_files,
         )
 
     return None

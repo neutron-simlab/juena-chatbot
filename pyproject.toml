@@ -28,6 +28,7 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.48",
     "pysaml2==7.5.4",
     "pyyaml>=6.0",
+    "pillow>=10.0",
     "chromadb>=0.6.0",
     "langchain-community>=0.3.0",
     "langchain-text-splitters>=0.3.0",

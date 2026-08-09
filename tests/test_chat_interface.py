@@ -73,6 +73,16 @@ class _FakeStatus:
         self.writes.append(text)
 
 
+class _ButtonColumn:
+    def __init__(self, clicked_label: str, calls: list[tuple[str, dict]]) -> None:
+        self.clicked_label = clicked_label
+        self.calls = calls
+
+    def button(self, label: str, **kwargs):
+        self.calls.append((label, kwargs))
+        return label == self.clicked_label
+
+
 def _import_chat_interface(monkeypatch):
     fake_chat_storage = types.ModuleType("app.chat_storage")
     fake_chat_storage.get_chat_storage = Mock()
@@ -222,6 +232,58 @@ def test_status_chunks_are_recognized(monkeypatch) -> None:
     assert chat_interface.is_status_chunk(ChatMessage(type="ai", content="x")) is False
 
 
+def test_approval_and_artifact_chunks_are_recognized(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+
+    assert chat_interface.is_approval_chunk({"type": "approval_required"}) is True
+    assert chat_interface.is_artifact_chunk({"type": "artifact"}) is True
+    assert chat_interface.is_artifact_chunk({"type": "token"}) is False
+
+
+def test_pending_approval_offers_one_click_choices(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    calls: list[tuple[str, dict]] = []
+    approval = {
+        "type": "approval_required",
+        "interrupt_id": "interrupt-1",
+        "command": "python plot.py",
+        "description": "Create a plot",
+        "limits": {"cpu": "2 vCPU", "memory": "4 GB"},
+        "allowed_decisions": ["approve", "edit", "reject"],
+    }
+    session_state = _SessionState(
+        thread_id="thread-1",
+        messages=[ChatMessage(type="human", content="plot")],
+        pending_approvals={"thread-1": approval},
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        container=lambda **_kwargs: _DummyContext(),
+        subheader=Mock(),
+        write=Mock(),
+        code=Mock(),
+        caption=Mock(),
+        columns=lambda _count: [
+            _ButtonColumn("Run", calls),
+            _ButtonColumn("Run", calls),
+            _ButtonColumn("Run", calls),
+        ],
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(return_value=Mock()),
+    )
+    resume_mock = Mock()
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
+
+    assert chat_interface.render_pending_approval() is True
+
+    assert [label for label, _kwargs in calls] == ["Run", "Edit", "Cancel"]
+    resume_mock.assert_called_once()
+    assert resume_mock.call_args.args[:2] == (approval, "approve")
+
+
 def test_tool_activity_is_logged_inside_the_status_container(monkeypatch) -> None:
     """Tool activity belongs in the collapsible status, not the transcript."""
     chat_interface = _import_chat_interface(monkeypatch)
@@ -336,6 +398,31 @@ def test_render_starter_topics_returns_none_without_selection(monkeypatch) -> No
     )
 
     assert chat_interface.render_starter_topics() is None
+
+
+def test_plot_starter_preview_does_not_send_when_sandbox_is_disabled(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    preview = chat_interface_starter(
+        "Plot with Python",
+        "plot prompt",
+        requires_sandbox=True,
+    )
+    info_mock = Mock()
+    monkeypatch.setattr(chat_interface.global_config, "SANDBOX_ENABLED", False)
+    monkeypatch.setattr(chat_interface, "build_starter_prompts", lambda: [preview])
+    monkeypatch.setattr(
+        chat_interface,
+        "st",
+        SimpleNamespace(
+            caption=Mock(),
+            pills=Mock(return_value="Plot with Python"),
+            info=info_mock,
+            session_state=_SessionState(thread_id="thread-1"),
+        ),
+    )
+
+    assert chat_interface.render_starter_topics() is None
+    info_mock.assert_called_once()
 
 
 def test_render_chat_interface_offers_starter_topics_on_empty_chat(monkeypatch) -> None:

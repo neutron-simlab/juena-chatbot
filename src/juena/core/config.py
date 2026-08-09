@@ -115,6 +115,31 @@ class Config:
 
     # Tavily web search (optional external web search tool)
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
+    # Sandboxed scientific execution. Disabled unless the API can reach the
+    # separately deployed rootless-Podman broker with a shared secret.
+    SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "false").lower() == "true"
+    # Development can show the starter for UI review without claiming that a
+    # command can run. The click is intercepted until SANDBOX_ENABLED is true.
+    SANDBOX_STARTER_PREVIEW = os.getenv(
+        "SANDBOX_STARTER_PREVIEW",
+        "true" if os.getenv("ENVIRONMENT", "development").lower() != "production" else "false",
+    ).lower() == "true"
+    SANDBOX_BROKER_URL = os.getenv("SANDBOX_BROKER_URL")
+    SANDBOX_BROKER_TOKEN = os.getenv("SANDBOX_BROKER_TOKEN")
+    SANDBOX_BROKER_TIMEOUT_SECONDS = int(
+        os.getenv("SANDBOX_BROKER_TIMEOUT_SECONDS", "620")
+    )
+    SANDBOX_EXECUTION_TIMEOUT_SECONDS = int(
+        os.getenv("SANDBOX_EXECUTION_TIMEOUT_SECONDS", "600")
+    )
+    SANDBOX_MAX_OUTPUT_BYTES = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "100000"))
+    SANDBOX_ARTIFACT_ROOT = Path(
+        os.getenv("SANDBOX_ARTIFACT_ROOT", str(_repo_data_dir("artifacts")))
+    )
+    SANDBOX_AUDIT_FILE = Path(
+        os.getenv("SANDBOX_AUDIT_FILE", str(_repo_data_dir("audit", "sandbox.jsonl")))
+    )
     
     # =============================================================================
     # SERVER CONFIGURATION
@@ -288,6 +313,23 @@ class Config:
         
         if cls.LANGSMITH_TRACING and not cls.LANGSMITH_API_KEY:
             errors.append("LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled")
+
+        if cls.SANDBOX_ENABLED:
+            if not cls.SANDBOX_BROKER_URL:
+                errors.append("SANDBOX_BROKER_URL is required when SANDBOX_ENABLED is true")
+            if not cls.SANDBOX_BROKER_TOKEN:
+                errors.append("SANDBOX_BROKER_TOKEN is required when SANDBOX_ENABLED is true")
+            elif len(cls.SANDBOX_BROKER_TOKEN) < 32:
+                errors.append("SANDBOX_BROKER_TOKEN must contain at least 32 characters")
+            if cls.SANDBOX_EXECUTION_TIMEOUT_SECONDS <= 0:
+                errors.append("SANDBOX_EXECUTION_TIMEOUT_SECONDS must be positive")
+            if cls.SANDBOX_MAX_OUTPUT_BYTES <= 0:
+                errors.append("SANDBOX_MAX_OUTPUT_BYTES must be positive")
+
+        if not cls._development and cls.SANDBOX_STARTER_PREVIEW and not cls.SANDBOX_ENABLED:
+            errors.append(
+                "SANDBOX_STARTER_PREVIEW cannot be enabled in production without SANDBOX_ENABLED"
+            )
 
         if not cls._development:
             if not cls.JUENA_PUBLIC_URL:

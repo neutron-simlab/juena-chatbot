@@ -1,0 +1,368 @@
+"""Deep Agents backends that delegate execution to the sandbox broker."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+from pathlib import PurePosixPath
+from typing import Any
+
+from deepagents.backends.protocol import (
+    BackendProtocol,
+    EditResult,
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileInfo,
+    FileUploadResponse,
+    GlobResult,
+    GrepMatch,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
+from deepagents.backends.sandbox import BaseSandbox
+from langgraph.config import get_stream_writer
+
+from juena.core.config import global_config
+from juena.sandbox.artifacts import MAX_FILE_ARTIFACTS_PER_EXECUTION, get_artifact_store
+from juena.sandbox.broker_client import SandboxBrokerClient, SandboxBrokerError
+from juena.sandbox.policy import is_redundant_artifact_export
+from juena.sandbox.schemas import ExecuteRequest
+
+
+class PodmanSandboxBackend(BaseSandbox):
+    """Tenant-bound backend whose commands run only through the broker."""
+
+    def __init__(
+        self,
+        *,
+        broker: SandboxBrokerClient,
+        workspace_id: str,
+        user_id: str,
+        thread_id: str,
+        run_id: str | None,
+    ) -> None:
+        self._broker = broker
+        self._workspace_id = workspace_id
+        self._user_id = user_id
+        self._thread_id = thread_id
+        self._run_id = run_id
+
+    @property
+    def id(self) -> str:
+        return self._workspace_id
+
+    @staticmethod
+    def _status(status: str, label: str, **extra: Any) -> None:
+        try:
+            get_stream_writer()(
+                {"type": "sandbox_status", "status": status, "label": label, **extra}
+            )
+        except (KeyError, RuntimeError):
+            # Backend unit tests and non-streaming invocations have no writer.
+            return
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        effective_timeout = min(
+            timeout or global_config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
+            global_config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
+        )
+        store = get_artifact_store()
+        if is_redundant_artifact_export(command):
+            store.audit(
+                {
+                    "event": "sandbox_execution_skipped",
+                    "user_id": self._user_id,
+                    "thread_id": self._thread_id,
+                    "run_id": self._run_id,
+                    "command": command,
+                    "reason": "artifact_already_collected",
+                }
+            )
+            return ExecuteResponse(
+                output=(
+                    "The application already collects files under /workspace/outputs "
+                    "and displays PNG artifacts automatically. Do not encode or print "
+                    "the file; finish the report using the collected artifact metadata."
+                ),
+                exit_code=0,
+            )
+        interrupt_id = store.consume_approved_command(
+            self._user_id,
+            self._thread_id,
+            command,
+        )
+        command_ref = None
+        if interrupt_id is not None:
+            try:
+                command_ref = store.register_artifact(
+                    user_id=self._user_id,
+                    thread_id=self._thread_id,
+                    run_id=self._run_id,
+                    filename="generated-command.sh",
+                    content=(command.rstrip() + "\n").encode("utf-8"),
+                    caption="Generated command",
+                )
+            except (ValueError, OSError):
+                command_ref = None
+        try:
+            if interrupt_id is not None:
+                self._status("queued", "Sandbox command queued")
+            result = self._broker.execute(
+                ExecuteRequest(
+                    workspace_id=self._workspace_id,
+                    command=command,
+                    timeout_seconds=effective_timeout,
+                    max_output_bytes=global_config.SANDBOX_MAX_OUTPUT_BYTES,
+                )
+            )
+            refs = store.register_broker_artifacts(
+                user_id=self._user_id,
+                thread_id=self._thread_id,
+                run_id=self._run_id,
+                artifacts=result.artifacts,
+            )
+            output_ref = None
+            if interrupt_id is not None and result.output:
+                try:
+                    output_ref = store.register_artifact(
+                        user_id=self._user_id,
+                        thread_id=self._thread_id,
+                        run_id=self._run_id,
+                        filename="execution-output.txt",
+                        content=result.output.encode("utf-8"),
+                        caption="Execution output",
+                    )
+                except (ValueError, OSError):
+                    output_ref = None
+            store.audit(
+                {
+                    "event": "sandbox_execution",
+                    "user_id": self._user_id,
+                    "thread_id": self._thread_id,
+                    "run_id": self._run_id,
+                    "interrupt_id": interrupt_id,
+                    "job_id": result.job_id,
+                    "command": command,
+                    "status": result.status,
+                    "exit_code": result.exit_code,
+                    "artifact_ids": [
+                        ref.artifact_id
+                        for ref in (refs + [command_ref, output_ref])
+                        if ref is not None
+                    ],
+                }
+            )
+            if interrupt_id is not None:
+                self._status(
+                    result.status,
+                    {
+                        "completed": "Sandbox command completed",
+                        "timed_out": "Sandbox command timed out",
+                        "failed": "Sandbox command failed",
+                    }[result.status],
+                    job_id=result.job_id,
+                    exit_code=result.exit_code,
+                )
+            model_output = result.output.rstrip()
+            if refs:
+                artifact_lines = [
+                    (
+                        f"- {ref.artifact_id} | {ref.filename} | "
+                        f"{ref.mime_type} | {ref.caption}"
+                    )
+                    for ref in refs
+                ]
+                artifact_note = (
+                    "Artifacts collected automatically by the application:\n"
+                    + "\n".join(artifact_lines)
+                    + "\nDo not run another command to inspect, encode, print, or "
+                    "verify these files. Finish the report now."
+                )
+                model_output = "\n\n".join(
+                    part for part in (model_output, artifact_note) if part
+                )
+            return ExecuteResponse(
+                output=model_output,
+                exit_code=result.exit_code,
+                truncated=result.truncated,
+            )
+        except SandboxBrokerError as exc:
+            store.audit(
+                {
+                    "event": "sandbox_execution",
+                    "user_id": self._user_id,
+                    "thread_id": self._thread_id,
+                    "run_id": self._run_id,
+                    "command": command,
+                    "status": "broker_error",
+                }
+            )
+            if interrupt_id is not None:
+                self._status("failed", "Sandbox broker unavailable")
+            return ExecuteResponse(output=f"Sandbox broker error: {exc}", exit_code=None)
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        if not files:
+            return []
+        try:
+            broker_results = self._broker.upload_files(self._workspace_id, files)
+        except SandboxBrokerError as exc:
+            return [FileUploadResponse(path=path, error=str(exc)) for path, _content in files]
+        responses = [
+            FileUploadResponse(
+                path=path,
+                error=(
+                    broker_results[index].error
+                    if index < len(broker_results)
+                    else "missing broker response"
+                ),
+            )
+            for index, (path, _content) in enumerate(files)
+        ]
+        store = get_artifact_store()
+        registered = 0
+        for (path, content), response in zip(files, responses, strict=False):
+            if response.error or not path.startswith("/workspace/outputs/"):
+                continue
+            try:
+                store.register_artifact(
+                    user_id=self._user_id,
+                    thread_id=self._thread_id,
+                    run_id=self._run_id,
+                    filename=PurePosixPath(path).name,
+                    content=content,
+                )
+            except (ValueError, OSError):
+                continue
+            registered += 1
+            if registered >= MAX_FILE_ARTIFACTS_PER_EXECUTION:
+                break
+        return responses
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        if not paths:
+            return []
+        try:
+            broker_results = self._broker.download_files(self._workspace_id, paths)
+        except SandboxBrokerError as exc:
+            return [FileDownloadResponse(path=path, error=str(exc)) for path in paths]
+        responses: list[FileDownloadResponse] = []
+        for index, path in enumerate(paths):
+            if index >= len(broker_results):
+                responses.append(FileDownloadResponse(path=path, error="missing broker response"))
+                continue
+            item = broker_results[index]
+            try:
+                content = (
+                    base64.b64decode(item.content_base64, validate=True)
+                    if item.content_base64 is not None
+                    else None
+                )
+            except (binascii.Error, ValueError):
+                responses.append(FileDownloadResponse(path=path, error="invalid broker payload"))
+                continue
+            responses.append(FileDownloadResponse(path=path, content=content, error=item.error))
+        return responses
+
+
+class ReadOnlySandboxInputsBackend(BackendProtocol):
+    """Route-local `/inputs` adapter over the sandbox's read-only input mount."""
+
+    def __init__(self, sandbox: PodmanSandboxBackend) -> None:
+        self._sandbox = sandbox
+
+    @staticmethod
+    def _full(path: str | None) -> str:
+        local = path or "/"
+        parts = PurePosixPath(local).parts
+        if not local.startswith("/") or ".." in parts or "~" in parts:
+            raise ValueError("Invalid /inputs path")
+        return "/inputs" if local == "/" else f"/inputs{local}"
+
+    @staticmethod
+    def _local(path: str) -> str:
+        if path == "/inputs":
+            return "/"
+        if path.startswith("/inputs/"):
+            return path[len("/inputs") :]
+        return path
+
+    def ls(self, path: str) -> LsResult:
+        try:
+            result = self._sandbox.ls(self._full(path))
+        except ValueError as exc:
+            return LsResult(error=str(exc))
+        entries = [
+            FileInfo(**{**item, "path": self._local(item["path"])})
+            for item in (result.entries or [])
+        ]
+        return LsResult(error=result.error, entries=entries)
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        try:
+            return self._sandbox.read(self._full(file_path), offset=offset, limit=limit)
+        except ValueError as exc:
+            return ReadResult(error=str(exc))
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        try:
+            result = self._sandbox.grep(pattern, self._full(path), glob)
+        except ValueError as exc:
+            return GrepResult(error=str(exc))
+        matches = [
+            GrepMatch(**{**item, "path": self._local(item["path"])})
+            for item in (result.matches or [])
+        ]
+        return GrepResult(error=result.error, matches=matches)
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        try:
+            result = self._sandbox.glob(pattern, self._full(path))
+        except ValueError as exc:
+            return GlobResult(error=str(exc))
+        matches = [
+            FileInfo(**{**item, "path": self._local(item["path"])})
+            for item in (result.matches or [])
+        ]
+        return GlobResult(error=result.error, matches=matches)
+
+    @staticmethod
+    def write(file_path: str, content: str) -> WriteResult:
+        del content
+        return WriteResult(error=f"Cannot write to read-only staged input path '{file_path}'.")
+
+    @staticmethod
+    def edit(
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        del old_string, new_string, replace_all
+        return EditResult(error=f"Cannot edit read-only staged input path '{file_path}'.")
+
+    @staticmethod
+    def upload_files(files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return [
+            FileUploadResponse(path=path, error="permission_denied") for path, _content in files
+        ]
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        full_paths: list[str] = []
+        for path in paths:
+            try:
+                full_paths.append(self._full(path))
+            except ValueError as exc:
+                return [FileDownloadResponse(path=item, error=str(exc)) for item in paths]
+        results = self._sandbox.download_files(full_paths)
+        return [
+            FileDownloadResponse(path=path, content=result.content, error=result.error)
+            for path, result in zip(paths, results, strict=False)
+        ]

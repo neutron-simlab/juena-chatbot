@@ -36,6 +36,7 @@ from juena.indexing.vector_index import RepoVectorIndex
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent.registry import register_agent_alias, register_agent_factory
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
+from juena.sandbox.middleware import ArtifactMessageMiddleware
 from juena.server.database.checkpointer import get_checkpointer
 from juena.server.database.store import get_store
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
@@ -133,6 +134,7 @@ async def create_juena_agent(
         ),
         create_summarization_middleware(summarizer_model, supervisor_backend),
         PatchToolCallsMiddleware(),
+        ArtifactMessageMiddleware(),
         RuntimeModelMiddleware(),
         *resilience_middleware(
             fallback_models,
