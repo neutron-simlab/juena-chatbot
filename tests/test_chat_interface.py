@@ -294,13 +294,13 @@ def test_tool_activity_is_logged_inside_the_status_container(monkeypatch) -> Non
         {
             "type": "status",
             "phase": "tool",
-            "label": "Ran search_code_hybrid",
-            "tool": "search_code_hybrid",
+            "label": "Ran search_code_semantic",
+            "tool": "search_code_semantic",
             "summary": "12 hits",
         },
     )
 
-    assert status.writes == ["🔧 `search_code_hybrid` — 12 hits"]
+    assert status.writes == ["🔧 `search_code_semantic` — 12 hits"]
     assert status.labels == []
 
 

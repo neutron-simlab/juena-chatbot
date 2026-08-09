@@ -239,7 +239,7 @@ async def test_tool_results_become_status_not_transcript_payloads() -> None:
     """Tool payloads are large and the model has already read them; rendering
     them in the transcript buries the answer."""
     tool_message = ToolMessage(
-        content="x" * 5000, tool_call_id="call-1", name="search_code_hybrid", id="t-1"
+        content="x" * 5000, tool_call_id="call-1", name="search_code_semantic", id="t-1"
     )
     payloads = await _collect(
         _processor(), (("model",), "updates", {"tools": {"messages": [tool_message]}})
@@ -247,7 +247,7 @@ async def test_tool_results_become_status_not_transcript_payloads() -> None:
 
     assert [p["type"] for p in payloads] == ["status"]
     assert payloads[0]["phase"] == events.PHASE_TOOL
-    assert payloads[0]["tool"] == "search_code_hybrid"
+    assert payloads[0]["tool"] == "search_code_semantic"
     assert len(payloads[0]["summary"]) < 200
 
 

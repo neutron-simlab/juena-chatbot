@@ -11,7 +11,6 @@ from typing import Any
 
 from langchain.tools import tool
 
-from juena.indexing.semantic_search import semantic_search
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
 
@@ -152,62 +151,6 @@ def _search_code_semantic(
     return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], separators=(",", ":"))
 
 
-def _search_code_hybrid(
-    repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
-    repo_id: str,
-    query: str,
-    max_results: int = 10,
-) -> str:
-    if _is_all_repos(repo_id):
-        hits = _search_repos_semantic(
-            repo_manager,
-            vector_index,
-            query,
-            n_results=max_results,
-        )
-        return json.dumps(
-            [
-                {
-                    "repo_id": str(h["repo_id"]),
-                    "file_path": h.get("file_path", ""),
-                    "path": _repo_virtual_path(str(h["repo_id"]), str(h.get("file_path", ""))),
-                    "is_doc": h.get("is_doc", False),
-                    "semantic_rank": rank,
-                    "start_index": h.get("start_index", 0),
-                    "end_index": h.get("end_index", 0),
-                    "char_count": len(str(h.get("content", ""))),
-                    "preview": _compact_preview(str(h.get("content", ""))),
-                }
-                for rank, h in enumerate(hits)
-            ],
-            separators=(",", ":"),
-        )
-
-    resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
-    if resolved_repo_id is None:
-        return _unknown_repo_response(repo_manager, repo_id)
-
-    hits = semantic_search(vector_index, resolved_repo_id, query, max_results=max_results)
-    return json.dumps(
-        [
-            {
-                "repo_id": resolved_repo_id,
-                "file_path": h.file_path,
-                "path": _repo_virtual_path(resolved_repo_id, h.file_path),
-                "is_doc": h.is_doc,
-                "semantic_rank": h.semantic_rank,
-                "start_index": h.start_index,
-                "end_index": h.end_index,
-                "char_count": len(h.content),
-                "preview": _compact_preview(h.content),
-            }
-            for h in hits
-        ],
-        separators=(",", ":"),
-    )
-
-
 def _search_docs_local(
     repo_manager: RepoManager,
     vector_index: RepoVectorIndex,
@@ -250,20 +193,28 @@ def build_code_chat_tools(
         query: str,
         n_results: int = 10,
     ) -> str:
-        """Semantic (embedding) search in a repository's indexed code and docs.
+        """Default search tool -- semantic embedding search over the indexed
+        repositories' code and docs.
 
-        Use this for conceptual questions ("how does authentication work?") rather
-        than exact-string lookups. Use repo_id="all" when the relevant
-        repository is unknown or multiple repositories may matter.
+        Use this as the primary search for all repository questions. It matches
+        on meaning, so it is strong for conceptual queries ("how does
+        authentication work?") and approximate symbol lookups, but it is NOT
+        exact-string search -- use grep for literal tokens, config keys, and
+        call sites. Treat results as candidate paths and previews, not final
+        evidence. After a relevant hit, call read_file on the returned
+        /repos/... path for exact line-numbered evidence, and use grep/glob to
+        follow symbols or files. Use repo_id="all" when the relevant repository
+        is unknown or multiple repositories may matter.
 
         Args:
             repo_id: Repository identifier visible under /repos/<repo_id>/, or
                 "all" to search all indexed repositories.
-            query: Natural-language question or concept.
+            query: Search query -- matched semantically, not literally.
             n_results: Maximum number of results.
 
         Returns a JSON array of hits with repo_id, file_path, path, chunk_index,
-        is_doc, distance, char_count, and preview fields.
+        is_doc, distance, char_count, and preview fields. The preview is compact
+        and should not be cited as final evidence.
         """
         return _search_code_semantic(
             repo_manager,
@@ -271,43 +222,6 @@ def build_code_chat_tools(
             repo_id,
             query,
             n_results=n_results,
-        )
-
-    @tool
-    def search_code_hybrid(
-        repo_id: str,
-        query: str,
-        max_results: int = 10,
-    ) -> str:
-        """Default search tool -- semantic embedding search over the indexed
-        repositories.
-
-        Use this as the primary search for all repository questions. It matches
-        on meaning, so it is strong for conceptual queries and approximate
-        symbol lookups, but it is NOT exact-string search -- use grep for
-        literal tokens, config keys, and call sites. Treat
-        results as candidate paths and previews, not final evidence. After a
-        relevant hit, call read_file on the returned /repos/... path for exact
-        line-numbered evidence, and use grep/glob to follow symbols or files.
-        Use repo_id="all" when the relevant repository is unknown or multiple
-        repositories may matter.
-
-        Args:
-            repo_id: Repository identifier visible under /repos/<repo_id>/, or
-                "all" to search all indexed repositories.
-            query: Search query - matched semantically, not literally.
-            max_results: Maximum results to return.
-
-        Returns a JSON array of hits with repo_id, file_path, path, preview,
-        is_doc, semantic_rank, and char_count fields. The preview is compact and
-        should not be cited as final evidence.
-        """
-        return _search_code_hybrid(
-            repo_manager,
-            vector_index,
-            repo_id,
-            query,
-            max_results=max_results,
         )
 
     @tool
@@ -341,6 +255,5 @@ def build_code_chat_tools(
 
     return [
         search_code_semantic,
-        search_code_hybrid,
         search_docs_local,
     ]
