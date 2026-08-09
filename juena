@@ -310,10 +310,12 @@ cmd_prod_up() { ## Start the production stack (base compose file only)
 # Housekeeping
 # ---------------------------------------------------------------------------
 
-cmd_clean() { ## Remove Python caches and test artefacts
-    find . -path ./.venv -prune -o -type d -name __pycache__ -print0 \
-        | xargs -0 rm -rf
-    rm -rf .pytest_cache
+cmd_clean() { ## Remove Python caches, test artefacts, and build output
+    # Prune data/ too: cloned repositories carry their own .git and vendored
+    # __pycache__ that this should not walk into, let alone delete.
+    find . -path ./.venv -prune -o -path ./data -prune -o \
+        -type d -name __pycache__ -print0 | xargs -0 rm -rf
+    rm -rf .pytest_cache dist build ./*.egg-info
 }
 
 cmd_install() { ## Symlink this script into a bin directory on PATH
