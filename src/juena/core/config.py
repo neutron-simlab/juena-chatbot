@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Dict
 from dotenv import load_dotenv
 
+from juena.core.paths import repo_root
+
 
 from juena.schema.llm_models import BlabladorModelName as _BlabladorModelName
 
@@ -10,25 +12,16 @@ from juena.schema.llm_models import BlabladorModelName as _BlabladorModelName
 _BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.GPT_OSS.value
 
 
-def _find_repo_root() -> Path:
-    """Resolve repo root by walking up from this file until we find pyproject.toml."""
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    return path.parent  # fallback to config's parent dir
-
-
 def _repo_data_dir(*parts: str) -> Path:
     """Build a path inside the repository-local data directory."""
-    return _find_repo_root() / "data" / Path(*parts)
+    return repo_root() / "data" / Path(*parts)
 
 # Load environment variables from .env file
 # If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
 # so that "cp env.example .env" in the repo root works without extra configuration.
 path_env = os.getenv("JUENA_ENV_PATH")
 if path_env is None or path_env == "":
-    path_env = str(_find_repo_root() / ".env")
+    path_env = str(repo_root() / ".env")
 # Note: load_dotenv() by default does NOT override existing environment variables
 # Use override=False to respect system env vars (default behavior)
 load_dotenv(path_env, override=False)

@@ -16,17 +16,12 @@ from typing import Any, Dict, List
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
+from juena.core.paths import get_config
 from juena.schema.llm_models import (
     Provider,
     get_models_for_provider,
     get_default_model_for_provider,
 )
-
-
-def _get_config():
-    """Lazy import of Config class to avoid circular import"""
-    from juena.core.config import Config
-    return Config
 
 
 # Providers this build knows how to construct. All are OpenAI-compatible today.
@@ -39,7 +34,7 @@ _PROVIDERS: tuple[str, ...] = (Provider.OPENAI.value, Provider.BLABLADOR.value)
 
 def _is_available(provider: str) -> bool:
     """Whether a provider has the credentials it needs to be constructed."""
-    config = _get_config()
+    config = get_config()
     if provider == Provider.OPENAI.value:
         return bool((config.OPENAI_API_KEY or "").strip())
     if provider == Provider.BLABLADOR.value:
@@ -67,7 +62,7 @@ def get_available_providers() -> Dict[str, bool]:
 
 def _model_kwargs(provider: str, temperature: float, overrides: dict) -> dict:
     """Build the init_chat_model keyword arguments for a provider."""
-    config = _get_config()
+    config = get_config()
     kwargs: dict[str, Any] = {
         # Every supported provider speaks the OpenAI Chat Completions API.
         "model_provider": Provider.OPENAI.value,
@@ -127,7 +122,7 @@ def build_chat_model(
     Raises:
         ValueError: if the provider is unknown
     """
-    config = _get_config()
+    config = get_config()
     provider = (provider or config.DEFAULT_PROVIDER).lower()
     model = model or config.DEFAULT_MODEL
 
@@ -162,7 +157,7 @@ def get_available_models(provider: str) -> List[str]:
     Returns:
         List of available model names for the provider
     """
-    config = _get_config()
+    config = get_config()
     provider = provider.lower()
 
     try:

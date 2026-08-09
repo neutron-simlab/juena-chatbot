@@ -22,7 +22,7 @@ def _stub_embedding_config(monkeypatch: pytest.MonkeyPatch) -> None:
         BLABLADOR_BASE_URL = None
         BLABLADOR_EMBEDDING_MODEL = "alias-qwen3-8b-embeddings"
 
-    monkeypatch.setattr(vector_index_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(vector_index_module, "get_config", lambda: StubConfig)
 
 
 def _make_index(repo_config_path: Path) -> tuple[RepoManager, RepoVectorIndex]:
@@ -222,7 +222,7 @@ def test_build_embedding_function_uses_blablador_when_configured(
         BLABLADOR_BASE_URL = "https://blablador.example/v1"
         BLABLADOR_EMBEDDING_MODEL = "alias-qwen3-8b-embeddings"
 
-    monkeypatch.setattr(vector_index_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(vector_index_module, "get_config", lambda: StubConfig)
 
     embedding_function = vector_index_module._build_embedding_function()
 
@@ -238,7 +238,7 @@ def test_build_embedding_function_falls_back_without_blablador_config(
         BLABLADOR_BASE_URL = None
         BLABLADOR_EMBEDDING_MODEL = "alias-qwen3-8b-embeddings"
 
-    monkeypatch.setattr(vector_index_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(vector_index_module, "get_config", lambda: StubConfig)
 
     embedding_function = vector_index_module._build_embedding_function()
 

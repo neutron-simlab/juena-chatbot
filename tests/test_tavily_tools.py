@@ -15,7 +15,7 @@ def test_load_optional_tavily_tool_returns_none_without_api_key(
     class StubConfig:
         TAVILY_API_KEY = None
 
-    monkeypatch.setattr(tavily_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(tavily_module, "get_config", lambda: StubConfig)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     tool = tavily_module.load_optional_tavily_tool()
@@ -34,7 +34,7 @@ def test_load_optional_tavily_tool_logs_warning_and_returns_none_on_import_error
     def fake_warning(message: str, *args: Any) -> None:
         warnings.append(message % args if args else message)
 
-    monkeypatch.setattr(tavily_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(tavily_module, "get_config", lambda: StubConfig)
     monkeypatch.setattr(
         tavily_module,
         "_get_tavily_search_class",
@@ -64,7 +64,7 @@ def test_load_optional_tavily_tool_logs_warning_and_returns_none_on_init_failure
     def fake_warning(message: str, *args: Any) -> None:
         warnings.append(message % args if args else message)
 
-    monkeypatch.setattr(tavily_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(tavily_module, "get_config", lambda: StubConfig)
     monkeypatch.setattr(tavily_module, "_get_tavily_search_class", lambda: FakeTavilySearch)
     monkeypatch.setattr(tavily_module.logger, "warning", fake_warning)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
@@ -87,7 +87,7 @@ def test_load_optional_tavily_tool_returns_compact_search_tool(
         def __init__(self, **kwargs: Any) -> None:
             created["kwargs"] = kwargs
 
-    monkeypatch.setattr(tavily_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(tavily_module, "get_config", lambda: StubConfig)
     monkeypatch.setattr(tavily_module, "_get_tavily_search_class", lambda: FakeTavilySearch)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 

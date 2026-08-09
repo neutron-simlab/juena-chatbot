@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from juena.core.log import get_logger
+from juena.core.paths import get_config
 
 logger = get_logger(__name__)
 
@@ -18,13 +19,6 @@ TAVILY_INCLUDE_IMAGES = False
 TAVILY_INCLUDE_IMAGE_DESCRIPTIONS = False
 
 
-def _get_config() -> Any:
-    """Lazy-load config to keep imports testable."""
-    from juena.core.config import Config
-
-    return Config
-
-
 def _get_tavily_search_class() -> type[Any]:
     """Import Tavily lazily so the app still works when the package is absent."""
     from langchain_tavily import TavilySearch
@@ -35,7 +29,7 @@ def _get_tavily_search_class() -> type[Any]:
 def load_optional_tavily_tool() -> Any | None:
     """Return a configured Tavily search tool or ``None`` when disabled."""
 
-    config = _get_config()
+    config = get_config()
     api_key = (config.TAVILY_API_KEY or "").strip()
     if not api_key:
         return None

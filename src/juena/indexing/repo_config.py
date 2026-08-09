@@ -13,6 +13,7 @@ from typing import List
 import yaml
 
 from juena.core.log import get_logger
+from juena.core.paths import repo_root
 
 logger = get_logger(__name__)
 
@@ -46,21 +47,12 @@ class RepoConfig:
     docs_paths: List[str] = field(default_factory=lambda: ["README.md", "docs/"])
 
 
-def _find_workspace_root() -> Path:
-    """Walk up from this file until we find pyproject.toml."""
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    return path.parent
-
-
 def _resolve_config_path() -> Path:
     """Return the absolute path to ``config/repositories.yaml``."""
     env_path = os.getenv("REPO_CONFIG_PATH")
     if env_path:
         return Path(env_path)
-    return _find_workspace_root() / "config" / "repositories.yaml"
+    return repo_root() / "config" / "repositories.yaml"
 
 
 def load_repo_configs(config_path: Path | None = None) -> list[RepoConfig]:

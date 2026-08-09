@@ -7,15 +7,9 @@ from datetime import timedelta
 from typing import Any
 
 from juena.core.log import get_logger
+from juena.core.paths import get_config
 
 logger = get_logger(__name__)
-
-
-def _get_config() -> Any:
-    """Lazy-load config to keep imports testable."""
-    from juena.core.config import Config
-
-    return Config
 
 
 def _get_mcp_client_class() -> type[Any]:
@@ -36,7 +30,7 @@ class Context7Runtime:
 async def load_optional_context7_tools() -> Context7Runtime | None:
     """Return loaded Context7 tools or ``None`` when disabled/unavailable."""
 
-    config = _get_config()
+    config = get_config()
     api_key = (config.CONTEXT7_API_KEY or "").strip()
     if not api_key:
         return None

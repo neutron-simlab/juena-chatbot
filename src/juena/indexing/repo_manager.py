@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from juena.core.log import get_logger
 from juena.indexing.repo_config import RepoConfig, load_repo_configs
+from juena.core.paths import repo_root
 
 logger = get_logger(__name__)
 
@@ -23,19 +24,11 @@ _CACHE_DIR_ENV = "REPO_CACHE_DIR"
 _DEFAULT_CACHE_DIR = "data/repos"
 
 
-def _find_workspace_root() -> Path:
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    return path.parent
-
-
 def _cache_dir() -> Path:
     env = os.getenv(_CACHE_DIR_ENV)
     if env:
         return Path(env)
-    return _find_workspace_root() / _DEFAULT_CACHE_DIR
+    return repo_root() / _DEFAULT_CACHE_DIR
 
 
 class RepoManager:

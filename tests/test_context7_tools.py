@@ -19,7 +19,7 @@ async def test_load_optional_context7_tools_returns_none_without_api_key(
         CONTEXT7_MCP_URL = "https://mcp.context7.com/mcp"
         CONTEXT7_TIMEOUT_SECONDS = 30
 
-    monkeypatch.setattr(context7_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
 
     runtime = await context7_module.load_optional_context7_tools()
 
@@ -46,7 +46,7 @@ async def test_load_optional_context7_tools_loads_remote_tools(
         async def get_tools(self) -> list[object]:
             return [tool_a, tool_b]
 
-    monkeypatch.setattr(context7_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
     monkeypatch.setattr(context7_module, "_get_mcp_client_class", lambda: FakeMultiServerMCPClient)
 
     runtime = await context7_module.load_optional_context7_tools()
@@ -85,7 +85,7 @@ async def test_load_optional_context7_tools_logs_warning_and_returns_none_on_fai
     def fake_warning(message: str, *args: Any) -> None:
         warnings.append(message % args if args else message)
 
-    monkeypatch.setattr(context7_module, "_get_config", lambda: StubConfig)
+    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
     monkeypatch.setattr(context7_module, "_get_mcp_client_class", lambda: FakeMultiServerMCPClient)
     monkeypatch.setattr(context7_module.logger, "warning", fake_warning)
 

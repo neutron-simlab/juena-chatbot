@@ -24,6 +24,7 @@ from juena.core.log import get_logger
 from juena.indexing.chunking import CHUNKING_VERSION, chunk_file
 from juena.indexing.repo_config import RepoConfig
 from juena.indexing.repo_manager import RepoManager
+from juena.core.paths import get_config, repo_root
 
 logger = get_logger(__name__)
 
@@ -40,25 +41,11 @@ _MAX_EMBEDDING_BATCH_SIZE = 64
 _EMBEDDING_REQUEST_CHAR_BUDGET = 16_000
 
 
-def _get_config():
-    """Lazy import of Config to reuse the server's .env loading path."""
-    from juena.core.config import Config
-    return Config
-
-
-def _find_workspace_root() -> Path:
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    return path.parent
-
-
 def _index_dir() -> Path:
     env = os.getenv(_INDEX_DIR_ENV)
     if env:
         return Path(env)
-    return _find_workspace_root() / _DEFAULT_INDEX_DIR
+    return repo_root() / _DEFAULT_INDEX_DIR
 
 
 def _should_log_progress(
@@ -85,7 +72,7 @@ def _estimated_embedding_tokens(text: str) -> int:
 
 
 def _build_embedding_function() -> EmbeddingFunction[Documents]:
-    config = _get_config()
+    config = get_config()
     api_key = config.BLABLADOR_API_KEY
     base_url = config.BLABLADOR_BASE_URL
     model_name = config.BLABLADOR_EMBEDDING_MODEL
@@ -137,7 +124,7 @@ class RepoVectorIndex:
         return f"repo_{safe}"
 
     def _build_embedding_descriptor(self) -> str:
-        config = _get_config()
+        config = get_config()
         if config.BLABLADOR_API_KEY and config.BLABLADOR_BASE_URL:
             return f"blablador:{config.BLABLADOR_BASE_URL}:{config.BLABLADOR_EMBEDDING_MODEL}"
         return "chroma-default"

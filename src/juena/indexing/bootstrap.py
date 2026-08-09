@@ -10,6 +10,7 @@ from juena.core.log import get_logger
 from juena.indexing.repo_config import load_repo_configs
 from juena.indexing.repo_manager import ManifestDiff, RepoManager, RevisionDiff, diff_manifests
 from juena.indexing.vector_index import RepoVectorIndex
+from juena.core.paths import repo_root
 
 logger = get_logger(__name__)
 
@@ -18,19 +19,11 @@ _MANIFEST_DIR_ENV = "INDEX_MANIFEST_DIR"
 _DEFAULT_MANIFEST_DIR = "data/manifests"
 
 
-def _find_workspace_root() -> Path:
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    return path.parent
-
-
 def _manifest_dir() -> Path:
     env = os.getenv(_MANIFEST_DIR_ENV)
     if env:
         return Path(env)
-    return _find_workspace_root() / _DEFAULT_MANIFEST_DIR
+    return repo_root() / _DEFAULT_MANIFEST_DIR
 
 
 def _load_manifest(repo_id: str) -> dict[str, str]:
