@@ -29,9 +29,6 @@ attachments through read-only `/inputs` access. Missing repository indexing,
 Context7, or Tavily degrades only the corresponding capability and does not
 remove either specialist.
 
-The retired ids `react_agent` and `code_chat_agent` resolve to `juena` for one
-compatibility release, but they are not shown by the discovery endpoint.
-
 An empty thread normally shows two immediate-send chips:
 
 - **General neutron science**

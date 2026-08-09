@@ -34,7 +34,7 @@ from juena.indexing.bootstrap import describe_bootstrap_problems
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.schema.llm_models import BlabladorModelName, Provider
-from juena.server.agent.registry import register_agent_alias, register_agent_factory
+from juena.server.agent.registry import register_agent_factory
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
 from juena.sandbox.middleware import ArtifactMessageMiddleware
 from juena.server.database.checkpointer import get_checkpointer
@@ -162,5 +162,3 @@ async def create_juena_agent(
 
 
 register_agent_factory(JUENA_AGENT_ID, create_juena_agent, set_as_default=True)
-register_agent_alias("code_chat_agent", JUENA_AGENT_ID)
-register_agent_alias("react_agent", JUENA_AGENT_ID)

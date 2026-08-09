@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langgraph.config import get_config
 
 from juena.core.llms_providers import build_chat_model
 from juena.core.log import get_logger
@@ -44,53 +43,10 @@ def _provider_model_from_context(context: Any) -> tuple[str | None, str | None]:
     return str(provider) if provider else None, str(model) if model else None
 
 
-def _provider_model_from_config() -> tuple[str | None, str | None]:
-    """
-    Extract provider/model from the current runnable config.
-
-    This is kept as a compatibility fallback for call sites that still only set
-    `config.configurable` instead of the newer runtime `context=...` channel.
-    """
-
-    try:
-        config = get_config()
-    except RuntimeError:
-        return None, None
-
-    configurable: Any = (
-        config.get("configurable", None)
-        if hasattr(config, "get")
-        else getattr(config, "configurable", None)
-    )
-    if not isinstance(configurable, dict):
-        return None, None
-    provider = configurable.get("provider")
-    model = configurable.get("model")
-    return str(provider) if provider else None, str(model) if model else None
-
-
 def _get_provider_model_from_request(request: ModelRequest) -> tuple[str | None, str | None]:
     """Resolve provider/model for the current model call."""
 
-    provider, model = _provider_model_from_context(getattr(request.runtime, "context", None))
-    if provider and model:
-        return provider, model
-
-    config_provider, config_model = _provider_model_from_config()
-    provider = provider or config_provider
-    model = model or config_model
-    if provider and model:
-        return provider, model
-
-    state = getattr(request, "state", None)
-    if isinstance(state, dict):
-        provider = provider or state.get("llm_provider")
-        model = model or state.get("llm_model")
-
-    return (
-        str(provider) if provider else None,
-        str(model) if model else None,
-    )
+    return _provider_model_from_context(getattr(request.runtime, "context", None))
 
 
 class RuntimeModelMiddleware(AgentMiddleware):

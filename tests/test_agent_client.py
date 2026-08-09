@@ -99,7 +99,7 @@ def test_delete_thread_uses_thread_cleanup_endpoint(monkeypatch: pytest.MonkeyPa
         captured["timeout"] = timeout
         return _FakeResponse({"status": "success", "thread_id": "thread-1"})
 
-    client = client_module.AgentClient(base_url="http://localhost:8080", agent="react_agent", timeout=5.0)
+    client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena", timeout=5.0)
     monkeypatch.setattr(client._client, "delete", fake_delete)
     payload = client.delete_thread("thread-1")
 
@@ -115,7 +115,7 @@ def test_session_cookie_replaces_shared_auth_secret(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("AUTH_SECRET", "must-not-be-used")
     client = client_module.AgentClient(
         base_url="http://localhost:8080",
-        agent="react_agent",
+        agent="juena",
         session_token="opaque-session",
     )
 

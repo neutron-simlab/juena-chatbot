@@ -180,10 +180,6 @@ prepare_sandbox() {
     start_sandbox_broker
 }
 
-cmd_sandbox() { ## Start the development stack and wait until it is healthy
-    cmd_up --wait
-}
-
 cmd_sandbox_stop() { ## Stop the Compose app and broker but leave PostgreSQL running
     "${COMPOSE_DEV[@]}" stop juena-chatbot
     stop_sandbox_broker

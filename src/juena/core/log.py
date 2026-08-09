@@ -41,9 +41,6 @@ def _get_log_level(level: Union[int, str, None] = None) -> int:
             'CRITICAL': logging.CRITICAL,
         }
         return level_map.get(level_upper, logging.INFO)
-    
-    # Fallback (should never be reached due to type hints, but kept for safety)
-    return logging.INFO
 
 
 def setup_logger(logger: logging.Logger, level: Union[int, str, None] = None) -> None:

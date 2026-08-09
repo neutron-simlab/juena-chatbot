@@ -175,16 +175,6 @@ curl --cookie "juena_session=<opaque-session>" http://localhost:8080/repositorie
 
 You should see your new repo in the JSON response.
 
-Also verify the agent exists:
-
-```bash
-curl --cookie "juena_session=<opaque-session>" http://localhost:8080/agents
-```
-
-You should see `juena` in the `agents` list. The retired `react_agent` and
-`code_chat_agent` ids remain request aliases for one compatibility release but
-are not advertised.
-
 ## Step 5: Trigger Clone and Index Build
 
 Clone and indexing now happen during startup, before Streamlit and FastAPI come

@@ -312,8 +312,6 @@ async def stream(
     If agent_id is not provided, the default agent will be used.
     Use thread_id to persist and continue a multi-turn conversation. 
     run_id kwarg is also attached to all messages for recording feedback.
-    The deprecated request user_id field is ignored; identity comes from the
-    authenticated session.
     """
     user_input.thread_id = await _authorize_thread(session, user, user_input.thread_id)
     return EventSourceResponse(

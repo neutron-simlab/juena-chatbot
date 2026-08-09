@@ -49,8 +49,6 @@ services:
     volumes:
       # Mount logs directory for persistence
       - chatbot-logs:/data/logs
-      # Preserve pre-cutover anonymous SQLite files as a read-only archive.
-      - chatbot-db:/data/legacy-sqlite:ro
       # Persist cloned repos, vector index, and manifests across restarts
       - chatbot-repos:/data/repos
       - chatbot-vector-index:/data/vector_index
@@ -119,7 +117,6 @@ services:
       # like a Postgres outage. Point POSTGRES_HOST at an external database to
       # use one instead of the bundled service.
       - DATABASE_URL=postgresql://${POSTGRES_USER:-juena}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your env file (see env.example)}@${POSTGRES_HOST:-postgres}:5432/${POSTGRES_DB:-juena}
-      - LEGACY_SQLITE_ARCHIVE_DIR=/data/legacy-sqlite
 
       # FZJ SAML2 service provider.
       - SAML_IDP_METADATA_URL=${SAML_IDP_METADATA_URL:-https://ifflogin.fz-juelich.de/saml/idp.xml}
@@ -176,9 +173,6 @@ volumes:
   chatbot-logs:
     driver: local
     name: juena-chatbot-logs
-  chatbot-db:
-    driver: local
-    name: juena-chatbot-db
   chatbot-postgres:
     driver: local
     name: juena-chatbot-postgres

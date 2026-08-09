@@ -25,7 +25,6 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
 
     for key in (
         "DATABASE_URL",
-        "LEGACY_SQLITE_ARCHIVE_DIR",
         "CONTEXT7_API_KEY",
         "CONTEXT7_MCP_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
@@ -50,7 +49,6 @@ from juena.core.config import global_config
 
 print("JSON::" + json.dumps({
     "database_url": global_config.DATABASE_URL,
-    "legacy_sqlite_archive_dir": global_config.LEGACY_SQLITE_ARCHIVE_DIR,
     "context7_api_key": global_config.CONTEXT7_API_KEY,
     "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
     "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
@@ -81,20 +79,14 @@ def test_postgres_is_not_silently_defaulted_outside_compose() -> None:
     snapshot = _load_config_snapshot()
 
     assert snapshot["database_url"] is None
-    assert snapshot["legacy_sqlite_archive_dir"] is None
 
 
-def test_postgres_and_legacy_archive_settings_are_explicit(tmp_path: Path) -> None:
+def test_postgres_url_is_taken_verbatim_from_the_environment() -> None:
     snapshot = _load_config_snapshot(
-        {
-            "DATABASE_URL": "postgresql://juena:test@localhost/juena",
-            "LEGACY_SQLITE_ARCHIVE_DIR": str(tmp_path / "legacy"),
-        }
+        {"DATABASE_URL": "postgresql://juena:test@localhost/juena"}
     )
 
     assert snapshot["database_url"] == "postgresql://juena:test@localhost/juena"
-    assert snapshot["legacy_sqlite_archive_dir"] == str(tmp_path / "legacy")
-    assert not (tmp_path / "legacy").exists()
 
 
 def test_context7_defaults_are_parsed() -> None:

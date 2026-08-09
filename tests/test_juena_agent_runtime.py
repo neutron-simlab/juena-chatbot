@@ -296,10 +296,7 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
     assert calls["neutron"]["tavily_tool"] is None
 
 
-def test_legacy_agent_ids_still_resolve() -> None:
-    assert agent_registry._resolve_agent_id("code_chat_agent") == juena_agent.JUENA_AGENT_ID
-    assert agent_registry._resolve_agent_id("react_agent") == juena_agent.JUENA_AGENT_ID
-    assert agent_registry._resolve_agent_id("juena") == juena_agent.JUENA_AGENT_ID
+def test_only_the_juena_agent_is_registered() -> None:
     assert agent_registry.list_registered_agents() == [juena_agent.JUENA_AGENT_ID]
 
 

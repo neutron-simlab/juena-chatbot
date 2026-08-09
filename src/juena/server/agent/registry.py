@@ -1,4 +1,4 @@
-"""Registry for the cached JüNA graph and its compatibility aliases."""
+"""Registry for the cached JüNA graph."""
 import inspect
 from typing import Any, Callable, Awaitable
 from langgraph.graph.state import CompiledStateGraph
@@ -28,9 +28,6 @@ _agent_registry: dict[str, tuple[AgentInstance, CompiledStateGraph]] = {}
 # Agent factory registry: agent_id -> async factory function
 # Factory function signature: async (provider: str, model: str) -> tuple[AgentInstance, CompiledStateGraph]
 _agent_factories: dict[str, Callable[[str, str], Awaitable[tuple[AgentInstance, CompiledStateGraph]]]] = {}
-
-# Retired agent ids that should still resolve: alias -> canonical agent_id
-_agent_aliases: dict[str, str] = {}
 
 def register_agent_factory(
     agent_id: str,
@@ -62,30 +59,6 @@ def get_default_agent() -> str:
     most modules have already been imported.
     """
     return DEFAULT_AGENT
-
-
-def register_agent_alias(alias: str, agent_id: str) -> None:
-    """
-    Make a retired agent id resolve to a current one.
-
-    Aliases are not listed by ``list_registered_agents``: they exist so that
-    clients holding an old id keep working, not to advertise extra agents.
-
-    Args:
-        alias: The retired identifier (e.g., "react_agent")
-        agent_id: The identifier it should resolve to
-    """
-    _agent_aliases[alias] = agent_id
-    logger.info(f"Registered agent alias: {alias} -> {agent_id}")
-
-
-def _resolve_agent_id(agent_id: str) -> str:
-    """Map a possibly-retired agent id onto the agent that serves it."""
-    resolved = _agent_aliases.get(agent_id)
-    if resolved is None:
-        return agent_id
-    logger.debug(f"Resolved legacy agent id {agent_id} -> {resolved}")
-    return resolved
 
 
 def _normalize_provider_model(provider: str | None, model: str | None) -> tuple[str, str]:
@@ -142,7 +115,6 @@ async def get_agent(
     """
     # Normalize provider/model for initial creation (if needed)
     provider, model = _normalize_provider_model(provider, model)
-    agent_id = _resolve_agent_id(agent_id)
 
     logger.info(f"Getting agent: {agent_id} (provider={provider}, model={model} used only for initial creation)")
 

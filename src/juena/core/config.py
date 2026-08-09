@@ -186,9 +186,6 @@ class Config:
     # Upper bound for the psycopg pool shared by the LangGraph checkpointer
     # and Store. SQLAlchemy manages its own pool for the application tables.
     DATABASE_POOL_MAX_SIZE = int(os.getenv("DATABASE_POOL_MAX_SIZE", "20"))
-    # Optional read-only location where anonymous pre-cutover SQLite files are
-    # archived. Application code never opens or imports these files.
-    LEGACY_SQLITE_ARCHIVE_DIR = os.getenv("LEGACY_SQLITE_ARCHIVE_DIR")
 
     # SAML service-provider settings.
     SAML_IDP_METADATA_URL = os.getenv(

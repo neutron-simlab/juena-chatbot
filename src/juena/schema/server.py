@@ -24,14 +24,6 @@ class UserInput(BaseModel):
         max_length=255,
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
     )
-    user_id: Optional[str] = Field(
-        description=(
-            "Deprecated compatibility field. The authenticated server identity is always used."
-        ),
-        default=None,
-        examples=["user_123"],
-        deprecated=True,
-    )
     provider: Optional[Provider] = Field(
         description="LLM provider to use (openai or blablador).",
         default=None,
