@@ -11,16 +11,19 @@ import base64
 import hmac
 import os
 import shutil
-import subprocess
 import threading
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager, closing, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from time import monotonic, sleep, time
+from time import time
+from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from podman import PodmanClient
+from podman.errors import APIError, NotFound
+from requests.exceptions import RequestException
 
 from juena.sandbox.constants import (
     BROKER_AUTH_HEADER,
@@ -42,11 +45,37 @@ from juena.sandbox.schemas import (
 
 MAX_STAGE_BYTES = 100 * 1024 * 1024
 
+# Podman expresses a CPU allowance as a fraction of a scheduling period rather
+# than as a core count, so `SANDBOX_CPU_LIMIT=2` becomes quota 200000 / period
+# 100000. There is no `cpus` argument in podman-py.
+CPU_PERIOD_MICROSECONDS = 100_000
+
+# podman-py forwards only a fixed set of mount-option keys to the Podman API
+# (`propagation`, `relabel`, `read_only`, `chown`, `consistency`, `mode`,
+# `size` -- see containers/podman-py `CreateMixin._render_payload`). `nosuid`,
+# `nodev`, and `noexec` are not among them. Podman applies `nosuid` and `nodev`
+# to API-created tmpfs mounts by default but *not* `noexec`, so `noexec` is
+# passed through `propagation`, the one key whose value is appended to the
+# mount options verbatim. `test_tmpfs_mount_requests_noexec` fails loudly if a
+# future podman-py stops forwarding it, so the protection cannot be lost
+# silently.
+TMPFS_RAW_OPTION_KEY = "propagation"
+
+# `container.wait(timeout=...)` is an HTTP read timeout. Depending on the
+# transport, exceeding it surfaces either as a raw requests timeout or wrapped
+# in podman-py's APIError.
+WAIT_TIMEOUT_ERRORS = (APIError, RequestException)
+
+
+def default_podman_uri() -> str:
+    """Rootless Podman publishes its socket under the caller's runtime dir."""
+    return f"unix:///run/user/{os.getuid()}/podman/podman.sock"
+
 
 @dataclass(frozen=True, slots=True)
 class BrokerSettings:
     token: str
-    podman_binary: str
+    podman_uri: str
     image: str
     workspace_root: Path
     concurrency: int
@@ -62,7 +91,7 @@ class BrokerSettings:
     def from_env(cls) -> "BrokerSettings":
         return cls(
             token=os.getenv("SANDBOX_BROKER_TOKEN", ""),
-            podman_binary=os.getenv("SANDBOX_PODMAN_BINARY", "/usr/bin/podman"),
+            podman_uri=os.getenv("SANDBOX_PODMAN_URI") or default_podman_uri(),
             image=os.getenv("SANDBOX_IMAGE", "juena-sandbox:latest"),
             workspace_root=Path(
                 os.getenv("SANDBOX_WORKSPACE_ROOT", "/var/lib/juena-sandbox/workspaces")
@@ -86,23 +115,42 @@ class BrokerRuntime:
         self.slots = threading.BoundedSemaphore(settings.concurrency)
         self._locks_guard = threading.Lock()
         self._workspace_locks: dict[str, threading.RLock] = {}
+        self._client: PodmanClient | None = None
+
+    @property
+    def client(self) -> PodmanClient:
+        if self._client is None:
+            raise RuntimeError("Sandbox broker is not connected to Podman")
+        return self._client
+
+    def connect(self) -> None:
+        """Open the single Podman connection shared by every worker thread."""
+        self._client = PodmanClient(
+            base_url=self.settings.podman_uri,
+            max_pool_size=max(self.settings.concurrency, 10),
+        )
+
+    def close(self) -> None:
+        if self._client is not None:
+            with suppress(Exception):
+                self._client.close()
+            self._client = None
 
     def validate_startup(self) -> None:
         if os.geteuid() == 0:
             raise RuntimeError("Sandbox broker refuses to run as root")
         if len(self.settings.token) < 32:
             raise RuntimeError("SANDBOX_BROKER_TOKEN must contain at least 32 characters")
-        binary = Path(self.settings.podman_binary)
-        if not binary.is_file() or not os.access(binary, os.X_OK):
-            raise RuntimeError(f"Container engine binary is unavailable: {binary}")
         self.settings.workspace_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        probe = subprocess.run(
-            [self.settings.podman_binary, "image", "exists", self.settings.image],
-            check=False,
-            capture_output=True,
-            timeout=30,
-        )
-        if probe.returncode != 0:
+        try:
+            reachable = self.client.ping()
+        except (APIError, RequestException) as exc:
+            raise RuntimeError(
+                f"Podman socket is unavailable at {self.settings.podman_uri}: {exc}"
+            ) from exc
+        if not reachable:
+            raise RuntimeError(f"Podman socket is unavailable at {self.settings.podman_uri}")
+        if not self.client.images.exists(self.settings.image):
             raise RuntimeError(f"Sandbox image is unavailable: {self.settings.image}")
 
     def lock_for(self, workspace_id: str) -> threading.RLock:
@@ -253,49 +301,115 @@ class BrokerRuntime:
                     results.append(BrokerFileResult(path=path, error=str(exc)))
         return results
 
-    def _podman_command(self, request: ExecuteRequest, container_name: str) -> list[str]:
+    def _container_kwargs(self, request: ExecuteRequest, container_name: str) -> dict[str, Any]:
         settings = self.settings
         workspace = self.workspace_dir(request.workspace_id).resolve()
         inputs = self.inputs_dir(request.workspace_id).resolve()
-        command = [
-            settings.podman_binary,
-            "run",
-            "--rm",
-            "--name",
-            container_name,
-            "--network=none",
-            "--read-only",
-            "--cap-drop=all",
-            "--security-opt=no-new-privileges",
-            f"--pids-limit={settings.pid_limit}",
-            f"--memory={settings.memory_limit}",
-            f"--cpus={settings.cpu_limit}",
-            f"--ulimit=fsize={settings.workspace_limit_bytes}:{settings.workspace_limit_bytes}",
-            f"--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size={settings.tmpfs_size}",
-            f"--volume={workspace}:/workspace:rw,Z",
-            f"--volume={inputs}:/inputs:ro,Z",
-            "--workdir=/workspace",
-            "--env=HOME=/tmp",
-            "--env=MPLCONFIGDIR=/tmp/matplotlib",
-            "--env=PYTHONDONTWRITEBYTECODE=1",
-        ]
-        # The image runs as the fixed `sandbox` user (10001:10001). Map that
-        # identity to the unprivileged broker account so bind-mounted workspace
-        # files stay writable without probing host or VM UID/GID values.
-        command[6:6] = ["--userns=keep-id:uid=10001,gid=10001"]
+        limit = settings.workspace_limit_bytes
+        kwargs: dict[str, Any] = {
+            "image": settings.image,
+            "command": ["/bin/sh", "-lc", request.command],
+            "name": container_name,
+            "network_mode": "none",
+            "read_only": True,
+            "cap_drop": ["ALL"],
+            # NOT `security_opt`, which podman-py maps to SELinux labels.
+            "no_new_privileges": True,
+            "pids_limit": settings.pid_limit,
+            "mem_limit": settings.memory_limit,
+            "cpu_period": CPU_PERIOD_MICROSECONDS,
+            "cpu_quota": int(float(settings.cpu_limit) * CPU_PERIOD_MICROSECONDS),
+            "ulimits": [{"Name": "fsize", "Soft": limit, "Hard": limit}],
+            # The image runs as the fixed `sandbox` user (10001:10001). Map that
+            # identity to the unprivileged broker account so bind-mounted
+            # workspace files stay writable without probing host or VM UID/GID
+            # values. Podman rejects the CLI spelling "keep-id:uid=...,gid=..."
+            # over the API, so the mode and its value are passed separately.
+            "userns_mode": {"nsmode": "keep-id", "value": "uid=10001,gid=10001"},
+            "working_dir": "/workspace",
+            "environment": {
+                "HOME": "/tmp",
+                "MPLCONFIGDIR": "/tmp/matplotlib",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            # Bind mounts go through `mounts` rather than `volumes`: the
+            # `volumes` renderer emits options in an order ("Z" before
+            # "rw"/"ro") that Podman rejects once both a read-write and a
+            # read-only bind mount are present.
+            "mounts": [
+                {
+                    "type": "tmpfs",
+                    "source": "tmpfs",
+                    "target": "/tmp",
+                    "size": settings.tmpfs_size,
+                    "mode": "1777",
+                    TMPFS_RAW_OPTION_KEY: "noexec",
+                },
+                {
+                    "type": "bind",
+                    "source": str(workspace),
+                    "target": "/workspace",
+                    "relabel": "Z",
+                },
+                {
+                    "type": "bind",
+                    "source": str(inputs),
+                    "target": "/inputs",
+                    "read_only": True,
+                    "relabel": "Z",
+                },
+            ],
+        }
         if settings.runtime:
-            command.append(f"--runtime={settings.runtime}")
-        command.extend([settings.image, "/bin/sh", "-lc", request.command])
-        return command
+            kwargs["runtime"] = settings.runtime
+        return kwargs
+
+    def _create_container(self, request: ExecuteRequest, container_name: str) -> Any:
+        return self.client.containers.create(**self._container_kwargs(request, container_name))
 
     @staticmethod
-    def _drain_output(stream, buffer: bytearray, max_bytes: int, truncated: list[bool]) -> None:
-        while chunk := stream.read(8192):
-            remaining = max_bytes - len(buffer)
-            if remaining > 0:
-                buffer.extend(chunk[:remaining])
-            if len(chunk) > remaining:
-                truncated[0] = True
+    def _wait_for_exit(container: Any, timeout: int) -> tuple[int | None, bool]:
+        """Return (exit_code, timed_out) for a started container.
+
+        `wait` reports an exceeded deadline as a transport error, but the same
+        exception type also covers genuine API failures. A container that has
+        already stopped therefore reports its real exit code instead of being
+        mislabelled as a timeout.
+        """
+        try:
+            return container.wait(timeout=timeout), False
+        except WAIT_TIMEOUT_ERRORS:
+            pass
+        with suppress(APIError, NotFound, RequestException):
+            container.reload()
+            state = container.attrs.get("State", {})
+            if not state.get("Running", False):
+                exit_code = state.get("ExitCode")
+                return (exit_code if isinstance(exit_code, int) else None), False
+        return None, True
+
+    @staticmethod
+    def _read_logs(container: Any, max_bytes: int) -> tuple[bytes, bool]:
+        """Stream the container's output, stopping once the cap is reached.
+
+        `follow` must be given explicitly: podman-py defaults it to the value of
+        `stream`, and following a container that timed out (and is therefore
+        still running) never returns.
+        """
+        buffer = bytearray()
+        truncated = False
+        frames: Iterator[bytes] = container.logs(
+            stdout=True, stderr=True, stream=True, follow=False
+        )
+        with closing(frames):
+            for chunk in frames:
+                remaining = max_bytes - len(buffer)
+                if len(chunk) >= remaining:
+                    buffer.extend(chunk[:remaining])
+                    truncated = len(chunk) > remaining
+                    break
+                buffer.extend(chunk)
+        return bytes(buffer), truncated
 
     def _artifact_snapshot(self, workspace_id: str) -> dict[str, tuple[int, int]]:
         output_dir = self.workspace_dir(workspace_id) / "outputs"
@@ -347,7 +461,6 @@ class BrokerRuntime:
         return artifacts
 
     def execute(self, request: ExecuteRequest) -> ExecuteResult:
-        deadline = monotonic() + request.timeout_seconds
         if not self.slots.acquire(timeout=request.timeout_seconds):
             return ExecuteResult(
                 job_id=str(uuid4()),
@@ -367,63 +480,31 @@ class BrokerRuntime:
                 outputs.mkdir(exist_ok=True, mode=0o700)
                 previous_artifacts = self._artifact_snapshot(request.workspace_id)
 
-                process = subprocess.Popen(
-                    self._podman_command(request, container_name),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                assert process.stdout is not None
-                output = bytearray()
-                truncated = [False]
-                reader = threading.Thread(
-                    target=self._drain_output,
-                    args=(process.stdout, output, request.max_output_bytes, truncated),
-                    daemon=True,
-                )
-                reader.start()
-                timed_out = False
-                workspace_exceeded = False
-                while process.poll() is None:
-                    if monotonic() >= deadline:
-                        timed_out = True
-                        break
-                    if (
-                        self._directory_size(self.workspace_dir(request.workspace_id))
-                        > self.settings.workspace_limit_bytes
-                    ):
-                        workspace_exceeded = True
-                        break
-                    sleep(0.25)
-                if timed_out or workspace_exceeded:
-                    process.kill()
-                    subprocess.run(
-                        [self.settings.podman_binary, "rm", "-f", container_name],
-                        check=False,
-                        capture_output=True,
-                        timeout=30,
+                container = self._create_container(request, container_name)
+                try:
+                    container.start()
+                    exit_code, timed_out = self._wait_for_exit(
+                        container, request.timeout_seconds
                     )
-                    exit_code = None
-                else:
-                    exit_code = process.returncode
-                reader.join(timeout=10)
-                if workspace_exceeded:
-                    message = b"\nSandbox workspace limit exceeded\n"
-                    remaining = request.max_output_bytes - len(output)
-                    if remaining > 0:
-                        output.extend(message[:remaining])
-                    truncated[0] = truncated[0] or len(message) > remaining
-                else:
-                    self.enforce_workspace_limit(request.workspace_id)
+                    output, truncated = self._read_logs(container, request.max_output_bytes)
+                finally:
+                    # One forced removal replaces the old kill-then-`podman rm`
+                    # fallback: it stops a still-running container and deletes
+                    # it in a single call.
+                    with suppress(APIError, NotFound, RequestException):
+                        container.remove(force=True)
+
+                self.enforce_workspace_limit(request.workspace_id)
                 return ExecuteResult(
                     job_id=job_id,
                     output=output.decode("utf-8", errors="replace"),
                     exit_code=exit_code,
-                    truncated=truncated[0],
+                    truncated=truncated,
                     status=(
                         "timed_out"
                         if timed_out
                         else "failed"
-                        if workspace_exceeded or exit_code != 0
+                        if exit_code != 0
                         else "completed"
                     ),
                     artifacts=self._collect_artifacts(request.workspace_id, previous_artifacts),
@@ -470,13 +551,19 @@ async def _cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-    runtime.validate_startup()
+    runtime.connect()
+    try:
+        runtime.validate_startup()
+    except Exception:
+        runtime.close()
+        raise
     cleanup_task = asyncio.create_task(_cleanup_loop())
     try:
         yield
     finally:
         cleanup_task.cancel()
         await asyncio.gather(cleanup_task, return_exceptions=True)
+        runtime.close()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

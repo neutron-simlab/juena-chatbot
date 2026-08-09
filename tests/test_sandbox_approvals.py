@@ -48,7 +48,7 @@ def artifact_store(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_approve_resumes_exact_interrupt_and_marks_command(artifact_store) -> None:
+async def test_approve_resumes_exact_interrupt(artifact_store) -> None:
     command = await build_resume_command(
         agent=_Agent([_interrupt()]),
         config={},
@@ -63,12 +63,6 @@ async def test_approve_resumes_exact_interrupt_and_marks_command(artifact_store)
     assert command.resume == {
         "interrupt-1": {"decisions": [{"type": "approve"}]}
     }
-    assert (
-        artifact_store.consume_approved_command(
-            "user-a", "thread-a", "python plot.py"
-        )
-        == "interrupt-1"
-    )
 
 
 @pytest.mark.asyncio
@@ -93,8 +87,8 @@ async def test_edit_changes_only_command_text(artifact_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reject_does_not_mark_command(artifact_store) -> None:
-    await build_resume_command(
+async def test_reject_sends_a_reject_decision(artifact_store) -> None:
+    command = await build_resume_command(
         agent=_Agent([_interrupt()]),
         config={},
         user_id="user-a",
@@ -105,9 +99,8 @@ async def test_reject_does_not_mark_command(artifact_store) -> None:
         ),
     )
 
-    assert artifact_store.consume_approved_command(
-        "user-a", "thread-a", "python plot.py"
-    ) is None
+    [decision] = command.resume["interrupt-1"]["decisions"]
+    assert decision["type"] == "reject"
 
 
 @pytest.mark.asyncio

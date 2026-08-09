@@ -93,6 +93,22 @@ cmd_ui() { ## Run the Streamlit UI natively on :9501
         --server.address=0.0.0.0 "$@"
 }
 
+sandbox_podman_uri() { ## Resolve the Podman API socket for this host
+    # On macOS Podman runs inside a virtual machine, so its socket is not at the
+    # standard Linux path; ask the machine where it published one. `podman info`
+    # already reports the right path on both platforms when it is available.
+    local socket
+    socket="$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null)"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        socket="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null)"
+    fi
+    [ -n "$socket" ] || return 1
+    case "$socket" in
+        unix://*) printf '%s\n' "$socket" ;;
+        *) printf 'unix://%s\n' "$socket" ;;
+    esac
+}
+
 configure_sandbox() {
     command -v podman >/dev/null 2>&1 || die "Podman is required for sandbox execution."
     if ! podman info >/dev/null 2>&1; then
@@ -105,7 +121,8 @@ configure_sandbox() {
     fi
     podman info >/dev/null 2>&1 || die "Rootless Podman did not become ready."
 
-    export SANDBOX_PODMAN_BINARY="${SANDBOX_PODMAN_BINARY:-$(command -v podman)}"
+    export SANDBOX_PODMAN_URI="${SANDBOX_PODMAN_URI:-$(sandbox_podman_uri)}"
+    [ -n "$SANDBOX_PODMAN_URI" ] || die "Could not determine the Podman socket path."
     export SANDBOX_BROKER_TOKEN="${SANDBOX_BROKER_TOKEN:-juena-local-sandbox-token-2026-development}"
     export SANDBOX_IMAGE="${SANDBOX_IMAGE:-juena-sandbox:latest}"
     export SANDBOX_WORKSPACE_ROOT="${SANDBOX_WORKSPACE_ROOT:-$SANDBOX_RUNTIME_DIR/workspaces}"

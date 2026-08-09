@@ -28,6 +28,7 @@ from juena.agents.backends import ReadOnlyFilesystemBackend, ReadOnlyInputsState
 from juena.core.config import global_config
 from juena.core.llms_providers import build_chat_model, get_available_providers, get_default_model
 from juena.core.log import get_logger
+from juena.sandbox.middleware import SandboxExecutionMiddleware
 from juena.sandbox.policy import requires_execution_approval
 
 logger = get_logger(__name__)
@@ -198,6 +199,9 @@ def build_specialist_middleware(
         ),
     ])
     if enable_execution_approval:
+        # Records what the human approved, reading the command straight from the
+        # tool call. Runs that never needed approval get no approval records.
+        middleware.append(SandboxExecutionMiddleware())
         middleware.append(
             HumanInTheLoopMiddleware(
                 interrupt_on={

@@ -36,7 +36,7 @@ class _Broker:
         )
 
 
-def test_approved_execute_returns_command_output_and_generated_file(tmp_path) -> None:
+def test_execute_returns_command_output_and_collected_file(tmp_path) -> None:
     store = ArtifactStore(tmp_path / "artifacts", tmp_path / "audit.jsonl")
     set_artifact_store_for_tests(store)
     broker = _Broker()
@@ -47,7 +47,6 @@ def test_approved_execute_returns_command_output_and_generated_file(tmp_path) ->
         thread_id="thread-a",
         run_id="run-1",
     )
-    store.mark_approved_command("user-a", "thread-a", "interrupt-1", "python plot.py")
 
     try:
         result = backend.execute("python plot.py", timeout=900)
@@ -59,11 +58,8 @@ def test_approved_execute_returns_command_output_and_generated_file(tmp_path) ->
     assert broker.requests[0].timeout_seconds == global_config.SANDBOX_EXECUTION_TIMEOUT_SECONDS
     assert "Artifacts collected automatically" in result.output
     assert "analysis.py" in result.output
-    assert [item["filename"] for item in refs] == [
-        "generated-command.sh",
-        "analysis.py",
-        "execution-output.txt",
-    ]
+    # The approval record is the middleware's job, not the backend's.
+    assert [item["filename"] for item in refs] == ["analysis.py"]
 
 
 class _InputSandbox:

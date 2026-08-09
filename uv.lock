@@ -1328,6 +1328,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "pillow" },
+    { name = "podman" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "pysaml2" },
@@ -1362,6 +1363,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0.0" },
     { name = "langgraph-checkpoint-postgres", specifier = "==3.1.0" },
     { name = "pillow", specifier = ">=10.0" },
+    { name = "podman", specifier = ">=5.8.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = "==3.3.4" },
     { name = "pydantic", extras = ["all"], specifier = ">=2.11.2,<3.0.0" },
     { name = "pysaml2", specifier = "==7.5.4" },
@@ -2509,6 +2511,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "podman"
+version = "5.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/f1/ea8988ff2085d1a898f7f27b7fa26a5b5e296949c6ef4df26ebc2be1aac0/podman-5.8.0.tar.gz", hash = "sha256:bc39b77f4a6a0598bbe860d199e0d54ef2ec551131ae7eab66f0557c43331fb3", size = 121596, upload-time = "2026-03-25T15:21:22.353Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/0a/648704ca7f70a44a407b556eda86fccd8cafcb060de90c884d66a7389f36/podman-5.8.0-py3-none-any.whl", hash = "sha256:0c0383386fc926e15b58890a727d8bb53b0c42730a5c610db391bfd20310ceeb", size = 94534, upload-time = "2026-03-25T15:21:20.986Z" },
 ]
 
 [[package]]

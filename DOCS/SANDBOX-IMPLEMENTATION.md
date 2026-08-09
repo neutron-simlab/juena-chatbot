@@ -123,6 +123,31 @@ file. A real deployment must additionally enforce a hard 5 GB project quota on
 each workspace directory; periodic size checks are not a substitute for a
 filesystem quota.
 
+The broker drives Podman through the official `podman` (podman-py) library over
+the API socket named by `SANDBOX_PODMAN_URI`, rather than by building a CLI
+command line. Container supervision is `create` / `start` / `wait` / `logs` /
+`remove(force=True)`, so there is no output-reader thread, no polling loop, and
+no kill-then-`podman rm` fallback.
+
+Two settings need care because podman-py does not accept the CLI spelling:
+
+- `no_new_privileges=True` is the correct argument. `security_opt` means SELinux
+  labels in this library and would silently not apply `no-new-privileges`.
+- The user-namespace mode is passed as `{"nsmode": "keep-id", "value":
+  "uid=10001,gid=10001"}`. Podman rejects the CLI form `keep-id:uid=...` here.
+
+One tmpfs option cannot be expressed through podman-py's documented arguments.
+Its mount renderer forwards only a fixed set of option keys, and `noexec` is not
+among them; Podman applies `nosuid` and `nodev` to API-created tmpfs mounts by
+default but not `noexec`. `/tmp` therefore requests `noexec` through the one key
+whose value is appended verbatim to the mount options. This is asserted by
+`test_tmpfs_mount_requests_noexec`, so the protection cannot be dropped silently
+by a future podman-py change.
+
+Because the polling loop is gone, workspace size is checked before and after a
+job but not during it. The hard 5 GB filesystem quota is consequently required
+rather than advisory - see `deploy/SANDBOX.md`.
+
 ### Command confirmation
 
 Every agent `execute` request pauses through LangChain's
@@ -140,6 +165,18 @@ reconstructed from the LangGraph checkpoint after a browser reload.
 Approval improves visibility and controls compute use. It is not the security
 boundary; the container must remain isolated even when an unsafe command is
 approved.
+
+`SandboxExecutionMiddleware` connects the approval to the run. It implements
+LangChain's `wrap_tool_call`/`awrap_tool_call`, which sit between the human's
+decision and the tool call, and it writes the `generated-command.sh` and
+`execution-output.txt` audit records. Because `HumanInTheLoopMiddleware`
+interrupts earlier (in `after_model`), reaching this hook means the command was
+already approved, and the command it carries is the final, post-edit text. No
+approval state is stored, and nothing is matched by comparing command strings.
+
+`execution-output.txt` is saved from the tool's final result text rather than
+the raw program output, so it also contains the short note the backend appends
+about which artifacts were collected.
 
 ### Streaming and status
 

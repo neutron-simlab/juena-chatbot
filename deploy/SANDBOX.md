@@ -63,19 +63,36 @@ commands differ between distributions.
    podman build -t juena-sandbox:latest -f deploy/sandbox/Dockerfile .
    ```
 
-5. Copy `deploy/sandbox-broker.env.example` to
+5. Enable the Podman API socket for that user. The broker talks to Podman over
+   this socket instead of forking the CLI, so the service will not start
+   without it:
+
+   ```bash
+   systemctl --user enable --now podman.socket
+   ```
+
+   The socket appears at `/run/user/<uid>/podman/podman.sock`. Override
+   `SANDBOX_PODMAN_URI` only if it lives somewhere else.
+6. Copy `deploy/sandbox-broker.env.example` to
    `/etc/juena/sandbox-broker.env`, generate a long random token, and make the
    file readable only by the broker administrator and service account.
-6. Put `deploy/juena-sandbox-broker.service` in `/etc/systemd/system/`, then
+7. Put `deploy/juena-sandbox-broker.service` in `/etc/systemd/system/`, then
    enable and start it.
-7. Restrict TCP port `8090` with the host firewall so only the JüNA application
+8. Restrict TCP port `8090` with the host firewall so only the JüNA application
    host/network can reach it. The token is authentication, not a reason to
    expose the broker publicly.
 
-The workspace root must be on a filesystem with per-directory/project quotas.
-Set a hard 5 GB quota for every workspace directory. The broker also checks
-size before and after jobs, but those checks cannot replace a filesystem quota
-while an untrusted process is actively writing.
+### A hard filesystem quota is required
+
+The workspace root **must** be on a filesystem with per-directory/project
+quotas, with a hard 5 GB quota set for every workspace directory. This is a
+required step, not a recommendation.
+
+The broker checks total workspace size before and after each job, but never
+*during* one: a periodic size check cannot replace a filesystem quota while an
+untrusted process is actively writing, because the process can write faster
+than the check can measure. The protections that do hold while a job runs are
+the per-file `fsize` rlimit and the quota enforced by the operating system.
 
 ## JüNA configuration
 

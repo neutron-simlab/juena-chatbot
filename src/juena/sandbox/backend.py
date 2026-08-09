@@ -89,27 +89,8 @@ class PodmanSandboxBackend(BaseSandbox):
                 ),
                 exit_code=0,
             )
-        interrupt_id = store.consume_approved_command(
-            self._user_id,
-            self._thread_id,
-            command,
-        )
-        command_ref = None
-        if interrupt_id is not None:
-            try:
-                command_ref = store.register_artifact(
-                    user_id=self._user_id,
-                    thread_id=self._thread_id,
-                    run_id=self._run_id,
-                    filename="generated-command.sh",
-                    content=(command.rstrip() + "\n").encode("utf-8"),
-                    caption="Generated command",
-                )
-            except (ValueError, OSError):
-                command_ref = None
         try:
-            if interrupt_id is not None:
-                self._status("queued", "Sandbox command queued")
+            self._status("queued", "Sandbox command queued")
             result = self._broker.execute(
                 ExecuteRequest(
                     workspace_id=self._workspace_id,
@@ -124,48 +105,29 @@ class PodmanSandboxBackend(BaseSandbox):
                 run_id=self._run_id,
                 artifacts=result.artifacts,
             )
-            output_ref = None
-            if interrupt_id is not None and result.output:
-                try:
-                    output_ref = store.register_artifact(
-                        user_id=self._user_id,
-                        thread_id=self._thread_id,
-                        run_id=self._run_id,
-                        filename="execution-output.txt",
-                        content=result.output.encode("utf-8"),
-                        caption="Execution output",
-                    )
-                except (ValueError, OSError):
-                    output_ref = None
             store.audit(
                 {
                     "event": "sandbox_execution",
                     "user_id": self._user_id,
                     "thread_id": self._thread_id,
                     "run_id": self._run_id,
-                    "interrupt_id": interrupt_id,
                     "job_id": result.job_id,
                     "command": command,
                     "status": result.status,
                     "exit_code": result.exit_code,
-                    "artifact_ids": [
-                        ref.artifact_id
-                        for ref in (refs + [command_ref, output_ref])
-                        if ref is not None
-                    ],
+                    "artifact_ids": [ref.artifact_id for ref in refs],
                 }
             )
-            if interrupt_id is not None:
-                self._status(
-                    result.status,
-                    {
-                        "completed": "Sandbox command completed",
-                        "timed_out": "Sandbox command timed out",
-                        "failed": "Sandbox command failed",
-                    }[result.status],
-                    job_id=result.job_id,
-                    exit_code=result.exit_code,
-                )
+            self._status(
+                result.status,
+                {
+                    "completed": "Sandbox command completed",
+                    "timed_out": "Sandbox command timed out",
+                    "failed": "Sandbox command failed",
+                }[result.status],
+                job_id=result.job_id,
+                exit_code=result.exit_code,
+            )
             model_output = result.output.rstrip()
             if refs:
                 artifact_lines = [
@@ -200,8 +162,7 @@ class PodmanSandboxBackend(BaseSandbox):
                     "status": "broker_error",
                 }
             )
-            if interrupt_id is not None:
-                self._status("failed", "Sandbox broker unavailable")
+            self._status("failed", "Sandbox broker unavailable")
             return ExecuteResponse(output=f"Sandbox broker error: {exc}", exit_code=None)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:

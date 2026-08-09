@@ -92,18 +92,6 @@ def test_only_inline_plot_event_contains_bytes(tmp_path) -> None:
     assert all("content_base64" not in item for item in persisted)
 
 
-def test_approved_command_marker_is_exact_and_single_use(tmp_path) -> None:
-    store = _store(tmp_path)
-    store.mark_approved_command("user-a", "thread-a", "interrupt-1", "python plot.py")
-
-    assert store.consume_approved_command("user-a", "thread-a", "python other.py") is None
-    assert (
-        store.consume_approved_command("user-a", "thread-a", "python plot.py")
-        == "interrupt-1"
-    )
-    assert store.consume_approved_command("user-a", "thread-a", "python plot.py") is None
-
-
 def test_thread_deletion_removes_files(tmp_path) -> None:
     store = _store(tmp_path)
     ref = store.register_artifact(

@@ -112,13 +112,6 @@ async def build_resume_command(
             "decision": payload.decision,
         }
     )
-    if payload.decision != "reject":
-        store.mark_approved_command(
-            user_id,
-            payload.thread_id,
-            payload.interrupt_id,
-            edited_command or original_args["command"],
-        )
     return Command(
         resume={
             payload.interrupt_id: {

@@ -1,6 +1,9 @@
 [Unit]
 Description=JüNA rootless Podman sandbox broker
 After=network-online.target
+# The broker talks to Podman over its user socket rather than forking the CLI.
+Requires=podman.socket
+After=podman.socket
 
 [Service]
 Type=simple
@@ -9,6 +12,7 @@ Group=juena-sandbox
 EnvironmentFile=/etc/juena/sandbox-broker.env
 Environment=HOME=/var/lib/juena-sandbox
 Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=SANDBOX_PODMAN_URI=unix:///run/user/%U/podman/podman.sock
 WorkingDirectory=/opt/juena
 ExecStart=/opt/juena/.venv/bin/uvicorn juena.sandbox.broker_service:app --host 0.0.0.0 --port 8090
 Restart=on-failure

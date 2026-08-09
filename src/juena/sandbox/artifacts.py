@@ -76,7 +76,6 @@ class ArtifactStore:
         self._lock = threading.RLock()
         self._pending_message: dict[tuple[str, str], list[str]] = {}
         self._pending_events: dict[tuple[str, str], list[str]] = {}
-        self._approved_commands: dict[tuple[str, str], list[tuple[str, str]]] = {}
 
     @staticmethod
     def _user_key(user_id: str) -> str:
@@ -290,39 +289,6 @@ class ArtifactStore:
                 metadata_path.unlink(missing_ok=True)
             self._pending_message.pop((user_id, thread_id), None)
             self._pending_events.pop((user_id, thread_id), None)
-            self._approved_commands.pop((user_id, thread_id), None)
-
-    def mark_approved_command(
-        self,
-        user_id: str,
-        thread_id: str,
-        interrupt_id: str,
-        command: str,
-    ) -> None:
-        """Remember which upcoming backend call came through the approval gate."""
-        with self._lock:
-            self._approved_commands.setdefault((user_id, thread_id), []).append(
-                (interrupt_id, command)
-            )
-
-    def consume_approved_command(
-        self,
-        user_id: str,
-        thread_id: str,
-        command: str,
-    ) -> str | None:
-        """Consume and return the interrupt ID for one exact approved command."""
-        with self._lock:
-            key = (user_id, thread_id)
-            pending = self._approved_commands.get(key, [])
-            for index, (interrupt_id, approved_command) in enumerate(pending):
-                if approved_command != command:
-                    continue
-                pending.pop(index)
-                if not pending:
-                    self._approved_commands.pop(key, None)
-                return interrupt_id
-        return None
 
     def audit(self, record: dict[str, Any]) -> None:
         payload = {
