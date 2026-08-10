@@ -14,11 +14,11 @@ services:
       - ./.env:/app/.env:ro
     environment:
       - ENVIRONMENT=development
-      # Development uses the same host-side rootless-Podman broker topology as
-      # production. The launcher starts it before Compose starts the app.
+      # The launcher starts the host-side rootless-Podman worker after the app
+      # has created the sandbox_jobs table.
       - SANDBOX_ENABLED=true
-      - SANDBOX_BROKER_URL=http://host.docker.internal:8090
-      - SANDBOX_BROKER_TOKEN=${SANDBOX_BROKER_TOKEN:-juena-local-sandbox-token-2026-development}
+      - SANDBOX_IDENTITY_SECRET=${SANDBOX_IDENTITY_SECRET:-juena-local-sandbox-identity-secret-development}
+      - SANDBOX_CONCURRENCY=${SANDBOX_CONCURRENCY:-2}
       # DATABASE_URL is not repeated here: the base file already builds the
       # container DSN from POSTGRES_* against the `postgres` service.
       - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-http://localhost:8080/auth/metadata}

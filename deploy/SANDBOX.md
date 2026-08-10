@@ -1,158 +1,117 @@
-# Sandbox broker deployment
+# Sandbox worker
 
-The sandbox broker is a second service. It runs model-generated commands in
-rootless Podman containers; the main JüNA container must never receive a Podman
-or Docker socket.
+JüNA submits approved commands as durable `sandbox_jobs` rows. A host-side
+worker claims those rows with `FOR UPDATE SKIP LOCKED` and runs each one under
+rootless Podman. That table is the only channel between the two: there is no
+message broker, so there is no second state to reconcile. The application
+container has no Podman socket, and generated containers have no network.
 
-Development and production use the same broker code and rootless-Podman command.
-On macOS, Homebrew Podman runs the containers in its rootless Linux VM. On
-production Linux, systemd runs the broker under the dedicated `juena-sandbox`
-account. The JüNA application reaches the host broker over HTTP and receives no
-container-engine socket.
+This is a single-host design. The Postgres volume survives process and container
+restarts, but loss of the host is loss of the service. It does not claim
+exactly-once execution or high availability.
 
-## Local development
+## Development
 
-Install Podman, initialize its rootless VM once, and start JüNA:
+Install and initialize Podman once, then use the repository launcher:
 
 ```bash
 brew install podman
 podman machine init --memory 8192
-juena up
+./juena env
+./juena up
 ```
 
-`juena up` starts the Podman VM when needed, builds the fixed scientific image,
-starts the broker
-as an unprivileged host process, and then starts the Compose application stack.
-The resulting topology has three pieces:
+The launcher:
 
-1. `postgres` stores users, chats, and checkpoints.
-2. `juena-chatbot` runs the API and Streamlit UI and calls the host broker.
-3. The host broker asks rootless Podman to run the fixed scientific image.
+1. starts the rootless Podman machine if necessary;
+2. builds `deploy/sandbox/Dockerfile`;
+3. starts JüNA and Postgres with Compose;
+4. waits for JüNA to create `sandbox_jobs`;
+5. starts `python -m juena.sandbox.worker` with two slots.
 
-The generated-code container always uses `--network=none`; it is never attached
-to the application or database network. Inputs and outputs cross the boundary
-only through the broker-managed workspace. The local broker log and PID live in
-the ignored `.sandbox/` directory.
+Use `./juena logs`, `./juena ps`, `./juena sandbox-stop`, and `./juena down`.
+The worker PID and log are under `.sandbox/`.
 
-The fixed image includes the general scientific Python stack plus the packages
-listed in `src/juena/sandbox/repository-requirements.txt`. The first
-repository-backed package is `jscatter==1.9.0.1`. Add future repository software
-to that pinned manifest and rebuild the image; commands cannot install packages
-or access package indexes at runtime.
+`SANDBOX_CONCURRENCY` must be the same for JüNA and the worker: JüNA admits that
+many active jobs before reporting `busy`, and the worker runs that many
+containers. The Compose files and the launcher both default it to two in
+development; production uses four in both places.
 
-Homebrew Podman mounts `/Users` into its VM, so the launcher keeps the local
-workspace under the repository's `.sandbox/` directory. The same absolute path
-is visible to the Podman VM and the native broker.
+## Production host
 
-Use `juena logs` to see application logs and the latest broker output. Use
-`juena sandbox-stop` to stop the app and broker while leaving PostgreSQL
-running.
-
-## Host preparation
-
-These commands are examples for a Linux administrator. Package and service
-commands differ between distributions.
-
-1. Install rootless Podman and create a dedicated `juena-sandbox` system user.
-2. Configure subordinate UID/GID ranges and enable lingering for that user so
-   rootless Podman can run as a service.
-3. Put this JüNA checkout and its virtual environment under `/opt/juena`.
-4. Build the fixed scientific image as that user:
+1. Install rootless Podman and create the unprivileged `juena-sandbox` user.
+2. Configure subordinate UID/GID ranges and enable lingering for that user.
+3. Build `juena-sandbox:latest` as that user.
+4. Enable its user Podman socket with `systemctl --user enable --now podman.socket`.
+5. Put the shared workspace on a quota-capable filesystem:
 
    ```bash
-   podman build -t juena-sandbox:latest -f deploy/sandbox/Dockerfile .
+   install -d -o juena-sandbox -g juena-sandbox -m 2770 \
+     /var/lib/juena-sandbox/workspaces
    ```
 
-5. Enable the Podman API socket for that user. The broker talks to Podman over
-   this socket instead of forking the CLI, so the service will not start
-   without it:
+6. Apply a hard 5 GB project/directory quota per workspace. The application
+   size checks and per-file `fsize` limit do not replace a live filesystem quota.
+7. Copy `deploy/sandbox-worker.env.example` to `/etc/juena/sandbox-worker.env`,
+   set the database credentials, and make it readable only by the service
+   account and administrator.
+8. Install `deploy/juena-sandbox-worker.service`, then enable and start it only
+   after the JüNA application has created the database schema.
 
-   ```bash
-   systemctl --user enable --now podman.socket
-   ```
+## Shared workspace ownership
 
-   The socket appears at `/run/user/<uid>/podman/podman.sock`. Override
-   `SANDBOX_PODMAN_URI` only if it lives somewhere else.
-6. Copy `deploy/sandbox-broker.env.example` to
-   `/etc/juena/sandbox-broker.env`, generate a long random token, and make the
-   file readable only by the broker administrator and service account.
-7. Put `deploy/juena-sandbox-broker.service` in `/etc/systemd/system/`, then
-   enable and start it.
-8. Restrict TCP port `8090` with the host firewall so only the JüNA application
-   host/network can reach it. The token is authentication, not a reason to
-   expose the broker publicly.
+Three processes touch the workspace tree, so its ownership has to be deliberate:
 
-### A hard filesystem quota is required
+- the **worker** owns it, running as `juena-sandbox`;
+- the **sandbox container** runs under `userns keep-id` mapped to the worker's
+  own uid, so files it writes are owned by the worker on the host rather than by
+  an unreachable subuid;
+- the **JüNA container** runs as root and reads the same tree through a bind
+  mount at `/sandbox-workspaces`.
 
-The workspace root **must** be on a filesystem with per-directory/project
-quotas, with a hard 5 GB quota set for every workspace directory. This is a
-required step, not a recommendation.
+The setgid mode `2770` is what makes this work: files JüNA creates as root still
+inherit the `juena-sandbox` group, so the worker and the sandbox container can
+read and replace them. The systemd unit sets `UMask=0007` for the same reason.
 
-The broker checks total workspace size before and after each job, but never
-*during* one: a periodic size check cannot replace a filesystem quota while an
-untrusted process is actively writing, because the process can write faster
-than the check can measure. The protections that do hold while a job runs are
-the per-file `fsize` rlimit and the quota enforced by the operating system.
+Set `SANDBOX_WORKSPACE_HOST_ROOT` to the host path,
+`SANDBOX_WORKSPACE_ROOT=/sandbox-workspaces` in JüNA, and the host path as
+`SANDBOX_WORKSPACE_ROOT` in the worker. Never mount the Podman socket into JüNA.
 
-## JüNA configuration
+## Capacity and behavior
 
-Set the same `SANDBOX_BROKER_TOKEN` in JüNA, set `SANDBOX_ENABLED=true`, and set
-`SANDBOX_BROKER_URL` to the broker's private address. For the provided Compose
-deployment on the same Linux host, the default URL is
-`http://host.docker.internal:8090`.
+- One active job per opaque tenant and per workspace, enforced by partial unique
+  indexes.
+- `SANDBOX_CONCURRENCY` jobs run at once. There is no waiting queue: the next
+  submission returns `busy` without inserting a row.
+- A submission returns `unavailable` without inserting a row when no worker
+  holds the worker lock.
+- Only one worker runs. It holds a Postgres session advisory lock for its
+  lifetime; a second instance exits immediately, and Postgres releases the lock
+  as soon as the process dies.
+- Commands have the configured ten-minute ceiling both inside the container and
+  in the worker.
+- A worker restart force-removes every managed container and fails the jobs that
+  were running. Nothing is ever reattached or rerun.
+- Closing a browser can leave its current container running until the timeout,
+  but cannot admit another job for that tenant.
+- Worker failure does not stop chat startup; sandbox calls report
+  `sandbox unavailable`.
 
-After restart, confirm the JüNA health endpoint and broker logs are clean. The
-empty-chat UI will then show the `Plot with Python` starter. Every command still
-requires a user click before execution.
+## Production gate
 
-## Threat model
+Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
 
-The trust question is *not* "is the user malicious." It is: **model-authored code
-runs on shared institutional infrastructure, and the human approving it owns
-none of that infrastructure.**
-
-With a local coding assistant, the operator usually owns the machine, files, and
-consequences. In JüNA the user, the infrastructure owner, and the possible blast
-radius are different parties, so user consent cannot transfer the institution's
-risk or serve as the security boundary. Containment must.
-
-Threats, in priority order:
-
-1. **Prompt injection into executable code.** Indexed repository content and
-   uploaded files are untrusted; either can steer the model toward code it would
-   not otherwise write. Assume this succeeds — the container is what makes it
-   harmless.
-2. **Cross-tenant data access.** One user's uploads, memories, or artifacts
-   reachable from another user's execution.
-3. **Host and infrastructure escape.** Container breakout, socket access,
-   credential or SAML material exposure.
-4. **Resource exhaustion.** One thread starving the other chat sessions.
-5. **Egress.** Exfiltration of uploaded scientific data.
-
-Explicitly accepted: the model may produce *incorrect* scientific results. No
-sandbox or approval gate addresses that — it is a UI and prompting concern, and
-outputs must be presented as agent-generated and unverified.
-
-## Before enabling in production
-
-Keep `SANDBOX_ENABLED=false` in production until every item below passes. A
-working development Podman VM and green unit tests are *not* sufficient evidence
-to enable untrusted code execution on shared infrastructure — a Podman VM proves
-nothing about target-host filesystem quotas, systemd identity, firewalling, Linux
-host mounts, or production load behaviour.
-
-1. Install the broker under a dedicated unprivileged account on the target Linux
-   host, following the host preparation section above.
-2. Build and inspect the image with rootless Podman on that host.
-3. Configure a private/firewalled broker address and the shared random token.
-4. Configure and prove a hard 5 GB filesystem/project quota per workspace. This
-   quota is **required**, not advisory.
-5. Decide whether to enable and test gVisor (`runsc`).
-6. Repeat the complete `Plot with Python` agent/UI flow through the Podman path,
-   including approval, inline plot, downloads, chat reload, and thread deletion.
-7. Prove the job cannot reach the network, host filesystem, application data,
-   database, credentials, SAML material, or container sockets.
-8. Test approve, edit, reject, timeout, broker outage, replay, cross-user access,
-   malformed files, quota exhaustion, and cleanup against the deployed broker.
-9. Run the planned load test with 30 active chat sessions and four simultaneous
-   sandbox jobs.
+1. Four tenants complete concurrent jobs and a second job for one tenant is busy.
+2. A fifth concurrent job returns `busy` immediately and inserts no row.
+3. A second worker process exits without claiming anything.
+4. An endless job times out while other tenants continue.
+5. Killing the worker mid-job leaves no container and fails that job without
+   rerunning it.
+6. Stdout, stderr, PNG, and downloadable files reach the authenticated UI.
+7. Recursive `/` searches are rejected and later workspace writes stay responsive.
+8. JüNA starts and normal chat works with no worker running.
+9. Old terminal job rows and idle workspaces are removed by the hourly pass.
+10. The host has capacity for four configured sandbox CPU/memory limits plus
+    JüNA, Postgres, and the operating system.
+11. Generated code cannot reach networks, credentials, application data,
+    container sockets, another tenant workspace, or arbitrary host paths.

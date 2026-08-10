@@ -1,0 +1,31 @@
+[Unit]
+Description=JüNA rootless Podman sandbox worker
+After=network-online.target podman.socket
+Requires=podman.socket
+
+# Deliberately not ordered against JüNA: the worker only needs Postgres, and
+# JüNA reports the sandbox unavailable whenever this unit is not running.
+
+[Service]
+Type=simple
+User=juena-sandbox
+Group=juena-sandbox
+EnvironmentFile=/etc/juena/sandbox-worker.env
+Environment=HOME=/var/lib/juena-sandbox
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=SANDBOX_PODMAN_URI=unix:///run/user/%U/podman/podman.sock
+WorkingDirectory=/opt/juena
+ExecStart=/opt/juena/.venv/bin/python -m juena.sandbox.worker
+Restart=on-failure
+RestartSec=5
+Delegate=yes
+# Group-writable so JüNA (running as root in its container) and the worker
+# share the workspace tree through the juena-sandbox group.
+UMask=0007
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/juena-sandbox
+ProtectHome=true
+
+[Install]
+WantedBy=default.target

@@ -10,12 +10,17 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from juena.sandbox.constants import ACTIVE_STATUSES
 
 
 def utc_now() -> datetime:
@@ -105,3 +110,48 @@ class Chat(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="chats")
+
+
+# Derived from the one Python definition so a status change cannot leave the
+# partial indexes silently matching nothing.
+_ACTIVE_JOB_PREDICATE = text(
+    "status IN ({})".format(", ".join(f"'{status}'" for status in ACTIVE_STATUSES))
+)
+
+
+class SandboxJob(Base):
+    """Durable metadata for one sandbox execution. The worker's only channel."""
+
+    __tablename__ = "sandbox_jobs"
+    __table_args__ = (
+        Index("ix_sandbox_jobs_status_created", "status", "created_at"),
+        Index(
+            "uq_sandbox_jobs_active_tenant",
+            "tenant_id",
+            unique=True,
+            postgresql_where=_ACTIVE_JOB_PREDICATE,
+        ),
+        Index(
+            "uq_sandbox_jobs_active_workspace",
+            "workspace_id",
+            unique=True,
+            postgresql_where=_ACTIVE_JOB_PREDICATE,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    command: Mapped[str] = mapped_column(Text, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    artifact_names: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

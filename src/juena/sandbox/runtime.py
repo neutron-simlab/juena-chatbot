@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,7 +22,8 @@ from langgraph.runtime import get_runtime
 from juena.agents.backends import ReadOnlyFilesystemBackend
 from juena.core.config import global_config
 from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
-from juena.sandbox.broker_client import get_broker_client, workspace_id_for
+from juena.sandbox.jobs import SandboxJobs, tenant_id_for, workspace_id_for
+from juena.sandbox.workspace import WorkspaceStore
 
 
 def sandbox_enabled() -> bool:
@@ -40,6 +43,7 @@ class _SandboxIdentity:
     user_id: str
     thread_id: str
     run_id: str | None
+    tenant_id: str
     workspace_id: str
 
     @classmethod
@@ -56,15 +60,68 @@ class _SandboxIdentity:
             except (KeyError, RuntimeError):
                 config = {}
         run_id = config.get("run_id") if hasattr(config, "get") else None
-        token = global_config.SANDBOX_BROKER_TOKEN
-        if not token:
-            raise RuntimeError("Sandbox broker token is unavailable")
+        secret = global_config.SANDBOX_IDENTITY_SECRET
+        if not secret:
+            raise RuntimeError("Sandbox identity secret is unavailable")
         return cls(
             user_id=user_id,
             thread_id=thread_id,
             run_id=str(run_id) if run_id else None,
-            workspace_id=workspace_id_for(user_id, thread_id, token),
+            tenant_id=tenant_id_for(user_id, secret),
+            workspace_id=workspace_id_for(user_id, thread_id, secret),
         )
+
+
+_workspace_store: WorkspaceStore | None = None
+
+
+def get_workspace_store() -> WorkspaceStore:
+    global _workspace_store
+    if _workspace_store is None or _workspace_store.root != global_config.SANDBOX_WORKSPACE_ROOT:
+        _workspace_store = WorkspaceStore(global_config.SANDBOX_WORKSPACE_ROOT)
+    return _workspace_store
+
+
+def set_workspace_store_for_tests(store: WorkspaceStore | None) -> None:
+    global _workspace_store
+    _workspace_store = store
+
+
+# The application's shared connection pool. It lives here rather than in
+# `jobs.py` so that the standalone worker, which imports `jobs.py`, never pulls
+# in — or has to satisfy — the application's configuration.
+_jobs: SandboxJobs | None = None
+_jobs_lock = threading.Lock()
+
+
+def get_sandbox_jobs() -> SandboxJobs:
+    global _jobs
+    if not global_config.SANDBOX_ENABLED:
+        raise RuntimeError("Sandbox execution is disabled")
+    if not global_config.DATABASE_URL:
+        raise RuntimeError("Sandbox jobs need DATABASE_URL")
+    if _jobs is None:
+        with _jobs_lock:
+            if _jobs is None:
+                jobs = SandboxJobs(
+                    global_config.DATABASE_URL,
+                    concurrency=global_config.SANDBOX_CONCURRENCY,
+                )
+                jobs.open()
+                _jobs = jobs
+    return _jobs
+
+
+def set_sandbox_jobs_for_tests(jobs: SandboxJobs | None) -> None:
+    global _jobs
+    _jobs = jobs
+
+
+def close_sandbox_jobs() -> None:
+    global _jobs
+    if _jobs is not None:
+        _jobs.close()
+        _jobs = None
 
 
 class RuntimePodmanSandboxBackend(BaseSandbox):
@@ -75,7 +132,9 @@ class RuntimePodmanSandboxBackend(BaseSandbox):
         runtime = get_runtime()
         identity = _SandboxIdentity.from_runtime(runtime)
         return PodmanSandboxBackend(
-            broker=get_broker_client(),
+            jobs=get_sandbox_jobs(),
+            workspaces=get_workspace_store(),
+            tenant_id=identity.tenant_id,
             workspace_id=identity.workspace_id,
             user_id=identity.user_id,
             thread_id=identity.thread_id,
@@ -139,23 +198,40 @@ async def stage_runtime_inputs(
 ) -> None:
     if not sandbox_enabled():
         return
-    token = global_config.SANDBOX_BROKER_TOKEN
-    if not token:
-        raise RuntimeError("Sandbox broker token is unavailable")
+    secret = global_config.SANDBOX_IDENTITY_SECRET
+    if not secret:
+        raise RuntimeError("Sandbox identity secret is unavailable")
+    tenant_id = tenant_id_for(user_id, secret)
+    workspace_id = workspace_id_for(user_id, thread_id, secret)
     staged: list[tuple[str, bytes]] = []
     for path, file_data in sorted(files.items()):
         if not path.startswith("/inputs/") or file_data is None:
             continue
         staged.append((path, file_data_to_string(file_data).encode("utf-8")))
-    await get_broker_client().stage_inputs(
-        workspace_id_for(user_id, thread_id, token), staged
-    )
+    jobs = get_sandbox_jobs()
+
+    def stage() -> None:
+        with jobs.workspace_guard(workspace_id) as available:
+            if not available:
+                raise RuntimeError("Sandbox workspace is busy")
+            get_workspace_store().stage_inputs(workspace_id, tenant_id, staged)
+
+    await asyncio.to_thread(stage)
 
 
 async def delete_runtime_workspace(*, user_id: str, thread_id: str) -> None:
     if not sandbox_enabled():
         return
-    token = global_config.SANDBOX_BROKER_TOKEN
-    if not token:
-        raise RuntimeError("Sandbox broker token is unavailable")
-    await get_broker_client().delete_workspace(workspace_id_for(user_id, thread_id, token))
+    secret = global_config.SANDBOX_IDENTITY_SECRET
+    if not secret:
+        raise RuntimeError("Sandbox identity secret is unavailable")
+    tenant_id = tenant_id_for(user_id, secret)
+    workspace_id = workspace_id_for(user_id, thread_id, secret)
+    jobs = get_sandbox_jobs()
+
+    def delete() -> None:
+        with jobs.workspace_guard(workspace_id) as available:
+            if available:
+                get_workspace_store().delete(workspace_id, tenant_id)
+
+    await asyncio.to_thread(delete)

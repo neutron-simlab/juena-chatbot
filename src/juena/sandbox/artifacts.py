@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import io
 import json
@@ -24,9 +23,8 @@ from juena.sandbox.constants import (
     MAX_ARTIFACT_BYTES,
     MAX_ARTIFACTS_PER_EXECUTION,
     MAX_FILE_ARTIFACT_BYTES,
-    MAX_FILE_ARTIFACTS_PER_EXECUTION,
 )
-from juena.sandbox.schemas import ArtifactRef, BrokerArtifact
+from juena.sandbox.schemas import ArtifactRef
 
 MAX_ARTIFACTS_PER_TURN = 12
 MAX_IMAGE_EDGE = 4096
@@ -204,36 +202,6 @@ class ArtifactStore:
             self._pending_message.setdefault(key, []).append(artifact_id)
             self._pending_events.setdefault(key, []).append(artifact_id)
         return stored.public_ref()
-
-    def register_broker_artifacts(
-        self,
-        *,
-        user_id: str,
-        thread_id: str,
-        run_id: str | None,
-        artifacts: list[BrokerArtifact],
-    ) -> list[ArtifactRef]:
-        refs: list[ArtifactRef] = []
-        image_count = 0
-        for artifact in artifacts[:MAX_FILE_ARTIFACTS_PER_EXECUTION]:
-            try:
-                is_png = Path(artifact.filename).suffix.lower() == ".png"
-                if is_png and image_count >= MAX_ARTIFACTS_PER_EXECUTION:
-                    continue
-                content = base64.b64decode(artifact.content_base64, validate=True)
-                ref = self.register_artifact(
-                    user_id=user_id,
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    filename=artifact.filename,
-                    content=content,
-                )
-                if ref.kind == "image":
-                    image_count += 1
-                refs.append(ref)
-            except (binascii.Error, ValueError, OSError):
-                continue
-        return refs
 
     def _load(self, user_id: str, artifact_id: str) -> _StoredArtifact | None:
         path = self._metadata_path(user_id, artifact_id)

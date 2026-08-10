@@ -1,15 +1,16 @@
-"""Protocol constants shared by the sandbox broker and application client.
+"""Dependency-free sandbox statuses and artifact limits."""
 
-Deliberately dependency-free: ``broker_service`` runs as a standalone process on
-the container host and must not import ``juena.core.config`` (or anything that
-pulls in the application's ``.env`` loading) just to learn these limits.
-"""
+from typing import Literal
 
-BROKER_AUTH_HEADER = "X-Juena-Sandbox-Token"
+JobStatus = Literal["queued", "running", "completed", "failed", "timed_out"]
 
-# Per-execution artifact budget. The broker enforces these while collecting from
-# the workspace; the application enforces them again while registering, because
-# the two run in different trust domains.
+# A job occupies a slot while it is active. The partial unique indexes in the
+# ORM derive their predicate from this tuple, so it is the single definition.
+ACTIVE_STATUSES = ("queued", "running")
+TERMINAL_STATUSES = ("completed", "failed", "timed_out")
+
+# Per-execution artifact budget. The worker selects filenames from its workspace;
+# the application validates every file again before registering it.
 MAX_ARTIFACTS_PER_EXECUTION = 4
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 MAX_FILE_ARTIFACTS_PER_EXECUTION = 8
@@ -31,7 +32,7 @@ DOWNLOAD_TYPES = {
     ".txt": "text/plain",
 }
 
-# What the broker picks up from a finished workspace: every downloadable type
+# What the worker picks up from a finished workspace: every downloadable type
 # plus PNG, which is handled separately as an inline image rather than a
 # download. Derived so that adding a format to DOWNLOAD_TYPES is a single edit.
 COLLECTED_EXTENSIONS = frozenset(DOWNLOAD_TYPES) | {".png"}

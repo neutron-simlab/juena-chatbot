@@ -22,7 +22,7 @@ from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan
 from juena.server.auth.saml import saml_lifespan
 from juena.server.database.store import store_lifespan
-from juena.sandbox.broker_client import close_broker_client, get_broker_client
+from juena.sandbox.runtime import close_sandbox_jobs
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API
@@ -79,8 +79,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Initialize Postgres, the LangGraph checkpointer, and SAML metadata.
     """
-    if global_config.SANDBOX_ENABLED:
-        await asyncio.to_thread(get_broker_client().assert_healthy)
     # Deliberately not awaited: warming takes seconds and the service is
     # perfectly usable while it runs, so it must not delay readiness.
     warm_task = asyncio.create_task(asyncio.to_thread(_warm_vector_index))
@@ -95,7 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         # Agents hold network clients (Context7 MCP) for the
                         # process lifetime; close them before the pools go.
                         await shutdown_agents()
-                        close_broker_client()
+                        close_sandbox_jobs()
 
 
 app = FastAPI(

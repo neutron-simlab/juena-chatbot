@@ -1,9 +1,7 @@
-"""Deep Agents backends that delegate execution to the sandbox broker."""
+"""Deep Agents backends that delegate execution to the sandbox worker."""
 
 from __future__ import annotations
 
-import base64
-import binascii
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -22,29 +20,56 @@ from deepagents.backends.protocol import (
     SandboxBackendProtocol,
     WriteResult,
 )
-from deepagents.backends.sandbox import BaseSandbox
+from deepagents.backends.sandbox import (
+    BaseSandbox,
+    _build_glob_cmd,
+    _build_grep_cmd,
+    _parse_glob_output,
+    _parse_grep_output,
+)
 from langgraph.config import get_stream_writer
 
 from juena.core.config import global_config
-from juena.sandbox.artifacts import MAX_FILE_ARTIFACTS_PER_EXECUTION, get_artifact_store
-from juena.sandbox.broker_client import SandboxBrokerClient, SandboxBrokerError
+from juena.sandbox.artifacts import get_artifact_store
+from juena.sandbox.constants import MAX_FILE_ARTIFACTS_PER_EXECUTION
+from juena.sandbox.jobs import SandboxJobs
 from juena.sandbox.policy import is_redundant_artifact_export
-from juena.sandbox.schemas import ExecuteRequest
+from juena.sandbox.workspace import (
+    WorkspaceFileResult,
+    WorkspaceStore,
+    assert_safe_path,
+)
+
+# Every status the backend can report, including the two the sandbox returns
+# without ever writing a row.
+STATUS_LABELS = {
+    "queued": "Sandbox command queued",
+    "running": "Sandbox command running",
+    "completed": "Sandbox command completed",
+    "timed_out": "Sandbox command timed out",
+    "failed": "Sandbox command failed",
+    "busy": "Sandbox capacity is busy",
+    "unavailable": "Sandbox worker unavailable",
+}
 
 
 class PodmanSandboxBackend(BaseSandbox):
-    """Tenant-bound backend whose commands run only through the broker."""
+    """Tenant-bound backend whose commands run only through the host worker."""
 
     def __init__(
         self,
         *,
-        broker: SandboxBrokerClient,
+        jobs: SandboxJobs,
+        workspaces: WorkspaceStore,
+        tenant_id: str,
         workspace_id: str,
         user_id: str,
         thread_id: str,
         run_id: str | None,
     ) -> None:
-        self._broker = broker
+        self._jobs = jobs
+        self._workspaces = workspaces
+        self._tenant_id = tenant_id
         self._workspace_id = workspace_id
         self._user_id = user_id
         self._thread_id = thread_id
@@ -90,28 +115,41 @@ class PodmanSandboxBackend(BaseSandbox):
                 exit_code=0,
             )
         try:
-            self._status("queued", "Sandbox command queued")
-            result = self._broker.execute(
-                ExecuteRequest(
-                    workspace_id=self._workspace_id,
-                    command=command,
-                    timeout_seconds=effective_timeout,
-                    max_output_bytes=global_config.SANDBOX_MAX_OUTPUT_BYTES,
-                )
+            result = self._jobs.execute(
+                tenant_id=self._tenant_id,
+                workspace_id=self._workspace_id,
+                command=command,
+                timeout_seconds=effective_timeout,
+                max_output_bytes=global_config.SANDBOX_MAX_OUTPUT_BYTES,
+                status_callback=lambda status: self._status(
+                    status,
+                    STATUS_LABELS.get(status, "Sandbox command running"),
+                ),
             )
-            refs = store.register_broker_artifacts(
-                user_id=self._user_id,
-                thread_id=self._thread_id,
-                run_id=self._run_id,
-                artifacts=result.artifacts,
-            )
+            refs = []
+            paths = [f"/workspace/outputs/{name}" for name in result.artifact_names]
+            for artifact in self._collect(paths):
+                if artifact.error or artifact.content is None:
+                    continue
+                try:
+                    refs.append(
+                        store.register_artifact(
+                            user_id=self._user_id,
+                            thread_id=self._thread_id,
+                            run_id=self._run_id,
+                            filename=PurePosixPath(artifact.path).name,
+                            content=artifact.content,
+                        )
+                    )
+                except (OSError, ValueError):
+                    continue
             store.audit(
                 {
                     "event": "sandbox_execution",
                     "user_id": self._user_id,
                     "thread_id": self._thread_id,
                     "run_id": self._run_id,
-                    "job_id": result.job_id,
+                    "job_id": str(result.job_id),
                     "command": command,
                     "status": result.status,
                     "exit_code": result.exit_code,
@@ -120,12 +158,8 @@ class PodmanSandboxBackend(BaseSandbox):
             )
             self._status(
                 result.status,
-                {
-                    "completed": "Sandbox command completed",
-                    "timed_out": "Sandbox command timed out",
-                    "failed": "Sandbox command failed",
-                }[result.status],
-                job_id=result.job_id,
+                STATUS_LABELS.get(result.status, "Sandbox command failed"),
+                job_id=str(result.job_id),
                 exit_code=result.exit_code,
             )
             model_output = result.output.rstrip()
@@ -151,7 +185,7 @@ class PodmanSandboxBackend(BaseSandbox):
                 exit_code=result.exit_code,
                 truncated=result.truncated,
             )
-        except SandboxBrokerError as exc:
+        except Exception as exc:  # noqa: BLE001 - keep chat alive on sandbox outages
             store.audit(
                 {
                     "event": "sandbox_execution",
@@ -159,26 +193,66 @@ class PodmanSandboxBackend(BaseSandbox):
                     "thread_id": self._thread_id,
                     "run_id": self._run_id,
                     "command": command,
-                    "status": "broker_error",
+                    "status": "worker_error",
                 }
             )
-            self._status("failed", "Sandbox broker unavailable")
-            return ExecuteResponse(output=f"Sandbox broker error: {exc}", exit_code=None)
+            self._status("failed", "Sandbox worker unavailable")
+            return ExecuteResponse(output=f"Sandbox unavailable: {exc}", exit_code=None)
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        search_path = path or "/workspace"
+        if PurePosixPath(search_path) == PurePosixPath("/"):
+            return GlobResult(error="Recursive searches from / are not allowed")
+        result = self.execute(_build_glob_cmd(pattern, search_path), timeout=15)
+        if result.exit_code not in (0, None):
+            return GlobResult(error=result.output)
+        return _parse_glob_output(result.output, search_path)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        search_path = path or "/workspace"
+        if PurePosixPath(search_path) == PurePosixPath("/"):
+            return GrepResult(error="Recursive searches from / are not allowed")
+        result = self.execute(_build_grep_cmd(pattern, search_path, glob), timeout=15)
+        if result.exit_code not in (0, 1, None):
+            return GrepResult(error=result.output)
+        return _parse_grep_output(result, search_path)
+
+    def _collect(self, paths: list[str]) -> list[WorkspaceFileResult]:
+        """Read finished outputs under the same guard as explicit file access."""
+
+        if not paths:
+            return []
+        with self._jobs.workspace_guard(self._workspace_id) as available:
+            if not available:
+                return []
+            return self._workspaces.download(self._workspace_id, self._tenant_id, paths)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         if not files:
             return []
-        try:
-            broker_results = self._broker.upload_files(self._workspace_id, files)
-        except SandboxBrokerError as exc:
-            return [FileUploadResponse(path=path, error=str(exc)) for path, _content in files]
+        with self._jobs.workspace_guard(self._workspace_id) as available:
+            if not available:
+                return [
+                    FileUploadResponse(path=path, error="workspace busy")
+                    for path, _content in files
+                ]
+            workspace_results = self._workspaces.upload(
+                self._workspace_id,
+                self._tenant_id,
+                files,
+            )
         responses = [
             FileUploadResponse(
                 path=path,
                 error=(
-                    broker_results[index].error
-                    if index < len(broker_results)
-                    else "missing broker response"
+                    workspace_results[index].error
+                    if index < len(workspace_results)
+                    else "missing workspace response"
                 ),
             )
             for index, (path, _content) in enumerate(files)
@@ -206,26 +280,23 @@ class PodmanSandboxBackend(BaseSandbox):
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         if not paths:
             return []
-        try:
-            broker_results = self._broker.download_files(self._workspace_id, paths)
-        except SandboxBrokerError as exc:
-            return [FileDownloadResponse(path=path, error=str(exc)) for path in paths]
+        with self._jobs.workspace_guard(self._workspace_id) as available:
+            if not available:
+                return [FileDownloadResponse(path=path, error="workspace busy") for path in paths]
+            workspace_results = self._workspaces.download(
+                self._workspace_id,
+                self._tenant_id,
+                paths,
+            )
         responses: list[FileDownloadResponse] = []
         for index, path in enumerate(paths):
-            if index >= len(broker_results):
-                responses.append(FileDownloadResponse(path=path, error="missing broker response"))
+            if index >= len(workspace_results):
+                responses.append(FileDownloadResponse(path=path, error="missing workspace response"))
                 continue
-            item = broker_results[index]
-            try:
-                content = (
-                    base64.b64decode(item.content_base64, validate=True)
-                    if item.content_base64 is not None
-                    else None
-                )
-            except (binascii.Error, ValueError):
-                responses.append(FileDownloadResponse(path=path, error="invalid broker payload"))
-                continue
-            responses.append(FileDownloadResponse(path=path, content=content, error=item.error))
+            item = workspace_results[index]
+            responses.append(
+                FileDownloadResponse(path=path, content=item.content, error=item.error)
+            )
         return responses
 
 
@@ -238,9 +309,7 @@ class ReadOnlySandboxInputsBackend(BackendProtocol):
     @staticmethod
     def _full(path: str | None) -> str:
         local = path or "/"
-        parts = PurePosixPath(local).parts
-        if not local.startswith("/") or ".." in parts or "~" in parts:
-            raise ValueError("Invalid /inputs path")
+        assert_safe_path(local, "Invalid /inputs path")
         return "/inputs" if local == "/" else f"/inputs{local}"
 
     @staticmethod

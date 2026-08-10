@@ -72,7 +72,8 @@ an isolated container, and displays the resulting plot.
    ```
 
    This starts the Podman VM when needed, builds the scientific image, starts
-   the host broker, and then starts PostgreSQL and JüNA through Docker Compose.
+   PostgreSQL and JüNA through Docker Compose, then starts the host sandbox
+   worker once the `sandbox_jobs` table exists.
    The fixed sandbox image currently includes `jscatter==1.9.0.1`; its pinned
    repository-software manifest is
    `src/juena/sandbox/repository-requirements.txt`.
@@ -97,16 +98,16 @@ an isolated container, and displays the resulting plot.
    ```
 
 The development stack is detached, so bootstrap progress will not appear
-inline. Use `./juena logs` to watch JüNA and see the recent host-broker log. Use
+inline. Use `./juena logs` to watch JüNA and see the recent host-worker log. Use
 `./juena sandbox-stop` to stop those two services while keeping PostgreSQL and
 its data available.
 
 Development explicitly merges
 [`docker-compose.dev.yml`](docker-compose.dev.yml) after the base file. It
 supplies localhost development URLs, publishes Postgres for host-side
-integration tests, and points the app at the host rootless-Podman broker.
-Development and production therefore use the same broker process and Podman
-execution path; no application container receives a container-engine socket.
+integration tests, and connects the app to its shared sandbox workspace.
+Development and production use the same host-side worker and Podman execution
+path; no application container receives a container-engine socket.
 Because the filename is not an automatic override, production cannot load these
 development settings accidentally. Production uses only the base file:
 

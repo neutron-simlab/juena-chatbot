@@ -109,8 +109,8 @@ class Config:
     # Tavily web search (optional external web search tool)
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
-    # Sandboxed scientific execution. Disabled unless the API can reach the
-    # separately deployed rootless-Podman broker with a shared secret.
+    # Sandboxed scientific execution. The `sandbox_jobs` table is the only
+    # channel between the API and the host-side rootless-Podman worker.
     SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "false").lower() == "true"
     # Development can show the starter for UI review without claiming that a
     # command can run. The click is intercepted until SANDBOX_ENABLED is true.
@@ -118,11 +118,13 @@ class Config:
         "SANDBOX_STARTER_PREVIEW",
         "true" if os.getenv("ENVIRONMENT", "development").lower() != "production" else "false",
     ).lower() == "true"
-    SANDBOX_BROKER_URL = os.getenv("SANDBOX_BROKER_URL")
-    SANDBOX_BROKER_TOKEN = os.getenv("SANDBOX_BROKER_TOKEN")
-    SANDBOX_BROKER_TIMEOUT_SECONDS = int(
-        os.getenv("SANDBOX_BROKER_TIMEOUT_SECONDS", "620")
+    SANDBOX_IDENTITY_SECRET = os.getenv("SANDBOX_IDENTITY_SECRET")
+    SANDBOX_WORKSPACE_ROOT = Path(
+        os.getenv("SANDBOX_WORKSPACE_ROOT", str(_repo_data_dir("sandbox-workspaces")))
     )
+    # Execution slots. The API admits this many active jobs, so it must match the
+    # worker's own SANDBOX_CONCURRENCY or the API will under- or over-admit.
+    SANDBOX_CONCURRENCY = int(os.getenv("SANDBOX_CONCURRENCY", "4"))
     SANDBOX_EXECUTION_TIMEOUT_SECONDS = int(
         os.getenv("SANDBOX_EXECUTION_TIMEOUT_SECONDS", "600")
     )
@@ -305,12 +307,14 @@ class Config:
             errors.append("LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled")
 
         if cls.SANDBOX_ENABLED:
-            if not cls.SANDBOX_BROKER_URL:
-                errors.append("SANDBOX_BROKER_URL is required when SANDBOX_ENABLED is true")
-            if not cls.SANDBOX_BROKER_TOKEN:
-                errors.append("SANDBOX_BROKER_TOKEN is required when SANDBOX_ENABLED is true")
-            elif len(cls.SANDBOX_BROKER_TOKEN) < 32:
-                errors.append("SANDBOX_BROKER_TOKEN must contain at least 32 characters")
+            if not cls.DATABASE_URL:
+                errors.append("DATABASE_URL is required when SANDBOX_ENABLED is true")
+            if cls.SANDBOX_CONCURRENCY < 1:
+                errors.append("SANDBOX_CONCURRENCY must be at least 1")
+            if not cls.SANDBOX_IDENTITY_SECRET:
+                errors.append("SANDBOX_IDENTITY_SECRET is required when SANDBOX_ENABLED is true")
+            elif len(cls.SANDBOX_IDENTITY_SECRET) < 32:
+                errors.append("SANDBOX_IDENTITY_SECRET must contain at least 32 characters")
             if cls.SANDBOX_EXECUTION_TIMEOUT_SECONDS <= 0:
                 errors.append("SANDBOX_EXECUTION_TIMEOUT_SECONDS must be positive")
             if cls.SANDBOX_MAX_OUTPUT_BYTES <= 0:
