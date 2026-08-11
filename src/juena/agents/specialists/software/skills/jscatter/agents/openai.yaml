@@ -1,0 +1,4 @@
+interface:
+  display_name: "JScatter"
+  short_description: "Analyze scattering experiments with JScatter"
+  default_prompt: "Use $jscatter to analyze this neutron or X-ray scattering problem and produce a validated, reproducible result."

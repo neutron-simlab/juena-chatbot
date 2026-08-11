@@ -6,20 +6,30 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage, merge_content
 
-from juena.sandbox.artifacts import ARTIFACT_MESSAGE_KEY, get_artifact_store
+from juena.sandbox.artifacts import (
+    ARTIFACT_MESSAGE_KEY,
+    get_artifact_store,
+    undelivered_note,
+)
 from juena.sandbox.policy import requires_execution_approval
 from juena.sandbox.runtime import _context_value
+
+
+def _final_ai_message(state: Any) -> AIMessage | None:
+    """Return the completed model response, excluding tool-call requests."""
+    messages = state.get("messages", []) if isinstance(state, dict) else []
+    last_ai = next((item for item in reversed(messages) if isinstance(item, AIMessage)), None)
+    return None if last_ai is None or last_ai.tool_calls else last_ai
 
 
 class ArtifactMessageMiddleware(AgentMiddleware):
     """Attach pending artifact references to the supervisor's final AI message."""
 
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        messages = state.get("messages", []) if isinstance(state, dict) else []
-        last_ai = next((item for item in reversed(messages) if isinstance(item, AIMessage)), None)
-        if last_ai is None or last_ai.tool_calls:
+        last_ai = _final_ai_message(state)
+        if last_ai is None:
             return None
         context = getattr(runtime, "context", None)
         user_id = _context_value(context, "user_id")
@@ -51,16 +61,22 @@ def _identity(runtime: Any) -> tuple[str, str, str | None] | None:
     return user_id, thread_id, str(run_id) if run_id else None
 
 
-def _result_text(result: Any) -> str:
-    """Pull the tool's reply text out of a ToolMessage or Command."""
+def _tool_message(result: Any) -> ToolMessage | None:
+    """Find the ToolMessage inside a raw result or a Command update."""
     if isinstance(result, ToolMessage):
-        return result.text
+        return result
     update = getattr(result, "update", None)
     messages = update.get("messages", []) if isinstance(update, dict) else []
     for message in reversed(messages if isinstance(messages, list) else []):
         if isinstance(message, ToolMessage):
-            return message.text
-    return ""
+            return message
+    return None
+
+
+def _result_text(result: Any) -> str:
+    """Pull the tool's reply text out of a ToolMessage or Command."""
+    message = _tool_message(result)
+    return message.text if message is not None else ""
 
 
 class SandboxExecutionMiddleware(AgentMiddleware):
@@ -71,6 +87,26 @@ class SandboxExecutionMiddleware(AgentMiddleware):
     the human has already approved -- and `request.tool_call` carries the final,
     post-edit command. No approval state has to be stored or matched by text.
     """
+
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        """Put any last undelivered write into the specialist's final report."""
+        last_ai = _final_ai_message(state)
+        identity = _identity(runtime)
+        if last_ai is None or identity is None:
+            return None
+        user_id, thread_id, _run_id = identity
+        pending = get_artifact_store().drain_undelivered(user_id, thread_id)
+        if not pending:
+            return None
+        note = undelivered_note(pending)
+        if last_ai.text.strip():
+            last_ai.content = merge_content(last_ai.content, f"\n\n{note}")
+        else:
+            last_ai.content = note
+        return {"messages": [last_ai]}
+
+    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return self.after_model(state, runtime)
 
     def _before(self, request: Any) -> tuple[str, str, str | None, str] | None:
         """Persist the command about to run; return the identity to reuse."""
@@ -96,14 +132,39 @@ class SandboxExecutionMiddleware(AgentMiddleware):
                 filename="generated-command.sh",
                 content=(command.rstrip() + "\n").encode("utf-8"),
                 caption="Generated command",
+                category="record",
             )
         except (ValueError, OSError):
             pass
         return user_id, thread_id, run_id, command
 
     @staticmethod
-    def _after(record: tuple[str, str, str | None, str], result: Any) -> None:
+    def _report_undelivered(user_id: str, thread_id: str, result: Any) -> None:
+        """Append `write_file` delivery failures to the command the model just ran.
+
+        A write into `/workspace/outputs` registers its artifact outside any
+        command, and `write_file` has no channel for a warning: deepagents
+        renders success as "Updated file <path>" and treats anything in the
+        error field as a failed write. This is the first place afterwards that
+        both carries free text and belongs to the model rather than to an
+        internal `ls`/`read`/`glob` helper, which parse their output.
+        """
+        message = _tool_message(result)
+        if message is None:
+            return
+        store = get_artifact_store()
+        pending = store.drain_undelivered(user_id, thread_id)
+        if not pending:
+            return
+        existing = message.text.rstrip()
+        note = undelivered_note(pending)
+        message.content = f"{existing}\n\n{note}" if existing else note
+
+    @classmethod
+    def _after(cls, record: tuple[str, str, str | None, str], result: Any) -> None:
         user_id, thread_id, run_id, command = record
+        # Before the text is read, so the stored record matches what the model saw.
+        cls._report_undelivered(user_id, thread_id, result)
         text = _result_text(result)
         store = get_artifact_store()
         if text:
@@ -115,6 +176,7 @@ class SandboxExecutionMiddleware(AgentMiddleware):
                     filename="execution-output.txt",
                     content=text.encode("utf-8"),
                     caption="Execution output",
+                    category="record",
                 )
             except (ValueError, OSError):
                 pass
@@ -151,4 +213,3 @@ class SandboxExecutionMiddleware(AgentMiddleware):
         result = await handler(request)
         self._after(record, result)
         return result
-

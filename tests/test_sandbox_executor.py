@@ -202,6 +202,52 @@ def test_finished_container_is_always_removed(tmp_path) -> None:
     assert container.removed is True
 
 
+def test_worker_reports_every_kind_of_filtered_output(tmp_path, monkeypatch) -> None:
+    executor = _executor(tmp_path)
+    job = _job()
+    output_dir = executor.workspaces.workspace_dir(job.workspace_id) / "outputs"
+    monkeypatch.setattr("juena.sandbox.workspace.MAX_FILE_ARTIFACT_BYTES", 4)
+
+    class ArtifactContainer(_Container):
+        def start(self) -> None:
+            super().start()
+            for index in range(1, 6):
+                (output_dir / f"0{index}-plot.png").write_bytes(b"png")
+            (output_dir / "06-blocked.svg").write_text("<svg/>", encoding="utf-8")
+            (output_dir / "07-too-large.txt").write_bytes(b"large")
+            for index in range(8, 13):
+                (output_dir / f"{index:02d}-result.txt").write_bytes(b"x")
+            for index in range(20, 26):
+                (output_dir / f"{index}-blocked.svg").write_text(
+                    "<svg/>", encoding="utf-8"
+                )
+
+    _with_container(executor, ArtifactContainer(output=b"calculation finished\n"))
+
+    outcome = executor.run(job)
+
+    assert outcome.artifact_names == [
+        "01-plot.png",
+        "02-plot.png",
+        "03-plot.png",
+        "04-plot.png",
+        "08-result.txt",
+        "09-result.txt",
+        "10-result.txt",
+        "11-result.txt",
+    ]
+    assert "calculation finished" in outcome.output
+    assert "Files written to /workspace/outputs but NOT delivered" in outcome.output
+    assert "05-plot.png" in outcome.output
+    assert "maximum of 4 plots" in outcome.output
+    assert "06-blocked.svg: Generated file type is not allowed" in outcome.output
+    assert "07-too-large.txt: Generated file exceeds the 10 MB limit" in outcome.output
+    assert "12-result.txt" in outcome.output
+    assert "maximum of 8 generated files" in outcome.output
+    assert "2 additional output files were not delivered" in outcome.output
+    assert "24-blocked.svg" not in outcome.output
+
+
 def test_timeout_exit_code_becomes_timed_out(tmp_path) -> None:
     executor = _executor(tmp_path)
     container = _Container(exit_code=124)

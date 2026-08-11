@@ -120,9 +120,9 @@ The base configuration does not publish PostgreSQL and does not supply
 localhost SAML URLs or an insecure cookie override. It requires explicit
 production secrets and public HTTPS settings.
 
-Sandbox deployment, the threat model, and the checklist that gates production
-enablement live in [`deploy/SANDBOX.md`](deploy/SANDBOX.md). The superseded
-planning documents are archived under `DOCS/` and are not maintained.
+The implemented sandbox architecture, threat model, artifact lifecycle, and
+production gates live in [`DOCS/SANDBOX.md`](DOCS/SANDBOX.md). Host installation
+and operations are documented in [`deploy/SANDBOX.md`](deploy/SANDBOX.md).
 
 ## Startup and Bootstrap
 

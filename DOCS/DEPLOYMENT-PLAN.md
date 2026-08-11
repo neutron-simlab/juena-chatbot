@@ -1,9 +1,9 @@
 # JüNA Production Deployment Plan
 
-Code-execution sandbox design lives in [SANDBOX-PLAN.md](SANDBOX-PLAN.md). This
-document covers only what the sandbox needs from the deployment: a
-`sandbox-broker` service, rootless Podman on the host, and disk for disposable
-workspaces.
+The implemented code-execution architecture and its remaining production gates
+live in [SANDBOX.md](SANDBOX.md). This document covers only what the sandbox
+needs from the deployment: a host-side rootless-Podman worker, shared Postgres,
+and disk for disposable workspaces.
 
 ## Summary
 
@@ -28,7 +28,7 @@ Production target:
   - SSH from the administration network.
   - One HTTP gateway port, recommended `8080`, from the institutional proxy CIDR.
   - Optional monitoring ports from the monitoring network.
-- Do not publish PostgreSQL, FastAPI, Streamlit, Podman, or sandbox-broker ports externally.
+- Do not publish PostgreSQL, FastAPI, Streamlit, or Podman ports externally.
 - Allow outbound access to:
   - Internal DNS, NTP, OS package mirror, and container registry.
   - `ifflogin.fz-juelich.de`.
@@ -54,7 +54,9 @@ Production target:
 - Add:
   - `gateway`: Caddy in HTTP-only mode. Route `/auth/*` to FastAPI and everything else, including `/_stcore/*`, to Streamlit.
   - `postgres`: internal-only persistent database.
-  - `sandbox-broker`: internal API for controlled code execution.
+- Install the sandbox worker on the host as the unprivileged `juena-sandbox`
+  user. It communicates with JüNA only through `sandbox_jobs` in Postgres; it is
+  not a Compose service and exposes no application-facing API.
 - Make API startup depend on healthy PostgreSQL and successful bootstrap; make UI and gateway depend on healthy upstream services.
   - This keeps bootstrap all-or-nothing, which is a deliberate choice, not an
     oversight. `bootstrap_repositories` re-raises on the first repository
@@ -87,12 +89,14 @@ Production target:
 
 ## Python/Shell Sandbox and Plot Streaming
 
-Moved to [SANDBOX-PLAN.md](SANDBOX-PLAN.md), which supersedes the text that was
-here. Deployment obligations that remain in scope for this document:
+The current design is documented in [SANDBOX.md](SANDBOX.md). Deployment
+obligations that remain in scope for this document:
 
 - Install rootless Podman under an unprivileged `juena-sandbox` account.
-- Add the internal-only `sandbox-broker` service to Compose. It alone reaches
-  the Podman socket; `api` and `ui` receive neither Docker nor Podman sockets.
+- Install the host-side worker under that account. Only it reaches the rootless
+  Podman socket; JüNA receives neither Docker nor Podman sockets.
+- Give JüNA and the worker access to the same `sandbox_jobs` table and shared
+  workspace root, with the ownership model from `deploy/SANDBOX.md`.
 - Reserve approximately 140 GB for disposable sandbox workspaces on a host path
   owned only by `juena-sandbox`.
 - Size for a maximum of four concurrent sandbox jobs.
@@ -105,11 +109,14 @@ here. Deployment obligations that remain in scope for this document:
 - Verify Compose exposes only the gateway port and uses service-name DNS, health-gated startup, non-root application processes, persistent volumes, and bounded log rotation.
 - Test the complete institutional-proxy flow: HTTPS origin, forwarded scheme, SAML login/logout, secure cookie, Streamlit WebSocket, and browser refresh.
 - Verify the chatbot contains no server address, connection control, or internal hostname.
-- Verify the `sandbox-broker` is unreachable from outside the Compose network and that no application container holds a Docker or Podman socket.
+- Verify that no application container holds a Docker or Podman socket, the
+  worker exposes no network service, and `sandbox_jobs` is its only application
+  control channel.
 - Load-test 30 active chat sessions with four simultaneous sandbox jobs; confirm bounded memory, stable PostgreSQL pools, and predictable queueing.
 - Perform a documented backup-and-restore rehearsal before production sign-off.
 
-Sandbox-specific acceptance criteria — isolation proofs, approval flow, artifact
-streaming — are in [SANDBOX-PLAN.md](SANDBOX-PLAN.md#acceptance).
+Sandbox-specific acceptance criteria—container isolation, approval flow,
+artifact delivery, recovery, and capacity—are in
+[SANDBOX.md](SANDBOX.md#production-enablement-gates).
 
 Assumptions: the first release stays on one VM despite the weaker shared-kernel boundary; only authenticated FZJ users can request execution; the institutional proxy terminates TLS; SearXNG and Valkey are not deployed because current JüNA code does not consume them.

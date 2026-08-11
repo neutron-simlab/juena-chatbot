@@ -27,6 +27,10 @@ CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM = 5.5
 LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
 HEADER_LOGO_WIDTH_PX = 88
 PLOT_PREVIEW_WIDTH_PX = 720
+# Artifact ids already given a widget key during the current script run. A file
+# can reach the page from both the stored transcript and the live stream, and
+# Streamlit treats a repeated widget key as a fatal error.
+RENDERED_ARTIFACTS_KEY = "rendered_artifact_keys"
 # Emit the bitmap at this multiple of the displayed size. 3 covers every common
 # device pixel ratio; the file stays a few kilobytes at this scale.
 HEADER_LOGO_PIXEL_DENSITY = 3
@@ -36,6 +40,18 @@ _DATA_IMAGE_MARKER_RE = re.compile(
 )
 _BASE64_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+)
+# Every assistant image in this product is rendered from a validated artifact, so
+# a Markdown image pointing anywhere else is a dead link -- most often a sandbox:
+# path the model invented for a file that was never delivered. Stored threads
+# still contain them, so this runs on history as well as new answers.
+_UNRENDERABLE_IMAGE_RE = re.compile(
+    r"!\[[^\]\n]*\]\((?!\s*https?://)\s*[^)\n]*\)",
+    flags=re.IGNORECASE,
+)
+_DEAD_SCHEME_LINK_RE = re.compile(
+    r"\[([^\]\n]*)\]\(\s*(?:sandbox|file):[^)\n]*\)",
+    flags=re.IGNORECASE,
 )
 
 
@@ -107,11 +123,12 @@ def render_chat_input_styles() -> None:
 
 
 def sanitize_assistant_content(content: Any) -> Any:
-    """Remove obsolete inline image data while preserving surrounding text.
+    """Remove image markup Streamlit cannot resolve, preserving surrounding text.
 
-    Generated images are rendered from validated artifacts. Older sandbox
-    turns may still contain a very large Base64 data URI copied into Markdown;
-    sending that string to Streamlit is slow and can produce a broken image.
+    Generated images are rendered from validated artifacts, so any image the
+    model writes inline is dead: an older turn may carry a very large Base64
+    data URI, which is slow to send and renders broken, and a turn whose file
+    was never delivered may carry an invented `sandbox:` path.
     """
     if not isinstance(content, str):
         return content
@@ -134,6 +151,11 @@ def sanitize_assistant_content(content: Any) -> Any:
             end += 1
         cleaned = cleaned[:start] + cleaned[end:]
         search_from = start
+
+    # The scan above stays because it handles unterminated multi-megabyte blobs,
+    # which a regex bounded to one line cannot match.
+    cleaned = _UNRENDERABLE_IMAGE_RE.sub("", cleaned)
+    cleaned = _DEAD_SCHEME_LINK_RE.sub(r"\1", cleaned)
 
     return re.sub(r"\n{3,}", "\n\n", cleaned)
 
@@ -217,6 +239,31 @@ def _render_png(content: bytes, caption: str, *, max_width: str) -> None:
     )
 
 
+def reset_rendered_artifacts() -> None:
+    """Forget which artifacts have been drawn. Call once per script run."""
+    st.session_state[RENDERED_ARTIFACTS_KEY] = set()
+
+
+def _claim_artifact_key(artifact: Dict[str, Any], filename: str) -> Optional[str]:
+    """Reserve the widget key suffix for *artifact* in this script run.
+
+    Returns ``None`` when the same artifact has already been drawn: one file is
+    worth showing once, and re-using its key is an error Streamlit raises rather
+    than absorbs. Artifacts the server sent without an id cannot be recognised
+    across renders, so they get a fresh suffix instead of being dropped.
+    """
+    drawn = st.session_state.get(RENDERED_ARTIFACTS_KEY)
+    if not isinstance(drawn, set):
+        drawn = set()
+        st.session_state[RENDERED_ARTIFACTS_KEY] = drawn
+    artifact_id = str(artifact.get("artifact_id") or "")
+    key = artifact_id or f"{filename}#{len(drawn)}"
+    if key in drawn:
+        return None
+    drawn.add(key)
+    return key
+
+
 def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
     """Render plots and authenticated downloads beneath the assistant response."""
     artifacts = (custom_data or {}).get("artifacts") or []
@@ -235,6 +282,9 @@ def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
         caption = str(artifact.get("caption") or artifact.get("filename") or "Plot")
         filename = str(artifact.get("filename") or "result.txt")
         mime_type = str(artifact.get("mime_type") or "application/octet-stream")
+        key = _claim_artifact_key(artifact, filename)
+        if key is None:
+            continue
         if artifact.get("kind") == "image":
             if not content.startswith(b"\x89PNG\r\n\x1a\n"):
                 st.caption("This generated plot is no longer available.")
@@ -245,7 +295,7 @@ def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
                     "Expand plot",
                     icon=":material/open_in_full:",
                     help="Open a larger plot preview",
-                    key=f"artifact-expand:{artifact.get('artifact_id') or filename}",
+                    key=f"artifact-expand:{key}",
                 ):
                     _render_plot_dialog(content, caption)
                 st.download_button(
@@ -254,7 +304,7 @@ def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
                     file_name=filename,
                     mime=mime_type,
                     icon=":material/download:",
-                    key=f"artifact-download:{artifact.get('artifact_id') or filename}",
+                    key=f"artifact-download:{key}",
                 )
         else:
             st.caption(caption)
@@ -264,7 +314,7 @@ def render_artifacts(custom_data: Optional[Dict[str, Any]]) -> None:
                 file_name=filename,
                 mime=mime_type,
                 icon=":material/download:",
-                key=f"artifact-download:{artifact.get('artifact_id') or filename}",
+                key=f"artifact-download:{key}",
             )
 
 

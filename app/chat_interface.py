@@ -19,11 +19,20 @@ from app.ui_components import (
     render_header_with_logo,
     render_message,
     render_streaming_token,
+    reset_rendered_artifacts,
 )
 from juena.core.config import global_config
 
 
 STARTER_PILLS_KEY = "starter_pills"
+
+# Shown on the confirmation card once its buttons are spent, so a deactivated
+# card still says why it went quiet.
+DECISION_STATUS = {
+    "approve": "Running in the sandbox…",
+    "edit": "Running the edited command…",
+    "reject": "Cancelled.",
+}
 
 
 def render_starter_topics() -> str | None:
@@ -61,6 +70,22 @@ def render_starter_topics() -> str | None:
                 return None
             return starter.prompt
     return None
+
+
+def _replace_message_by_id(messages: list, chunk: ChatMessage) -> bool:
+    """Overwrite an already-held message carrying the same id as *chunk*.
+
+    Returns whether a slot was found. Messages without an id cannot be
+    correlated, so they always count as new.
+    """
+    message_id = getattr(chunk, "id", None)
+    if not message_id:
+        return False
+    for index, existing in enumerate(messages):
+        if isinstance(existing, ChatMessage) and existing.id == message_id:
+            messages[index] = chunk
+            return True
+    return False
 
 
 def process_stream_chunk(
@@ -112,8 +137,14 @@ def process_stream_chunk(
                 for artifact_id in artifact_ids
             ]
             pending_artifacts.clear()
-        # Backend handles deduplication, so we can always append
-        messages.append(chunk)
+        # Resuming an interrupt replays the node that was interrupted, so the
+        # stream can re-send a message this session already holds. Correlate on
+        # the id the server copies from LangChain and overwrite in place, or the
+        # transcript grows a second copy and its artifacts are drawn twice in
+        # one script run -- which Streamlit rejects as a duplicate widget key.
+        replaced = _replace_message_by_id(messages, chunk)
+        if not replaced:
+            messages.append(chunk)
         
         if chunk.type == "ai":
             if chunk.custom_data.get("artifacts"):
@@ -290,7 +321,14 @@ def _stream_and_display_chunks(
                 finalize_streaming_message(message_placeholder, response_text)
             ai_message = ChatMessage(type="ai", content=response_text, custom_data=custom_data)
             st.session_state.messages.append(ai_message)
-        elif not response_text and len(st.session_state.messages) > initial_message_count:
+        elif (
+            not response_text
+            # A complete message has already been drawn into the placeholder by
+            # process_stream_chunk. Drawing it again in the same run re-registers
+            # its artifact download buttons under keys Streamlit still holds.
+            and not received_complete_message
+            and len(st.session_state.messages) > initial_message_count
+        ):
             # If no response text accumulated, check for last message
             last_msg = st.session_state.messages[-1]
             if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
@@ -342,6 +380,7 @@ def stream_and_display_resume(
 ) -> None:
     """Resume the interrupted turn after the user clicks a decision."""
     thread_id = st.session_state.thread_id
+    interrupt_id = str(approval.get("interrupt_id") or "")
     approvals = dict(st.session_state.get("pending_approvals") or {})
     approvals.pop(thread_id, None)
     st.session_state.pending_approvals = approvals
@@ -353,7 +392,7 @@ def stream_and_display_resume(
         try:
             yield from st.session_state.client.resume_stream(
                 thread_id=thread_id,
-                interrupt_id=str(approval.get("interrupt_id") or ""),
+                interrupt_id=interrupt_id,
                 decision=decision,
                 edited_command=edited_command,
                 provider=st.session_state.selected_provider,
@@ -363,9 +402,102 @@ def stream_and_display_resume(
             current = dict(st.session_state.get("pending_approvals") or {})
             current[thread_id] = approval
             st.session_state.pending_approvals = current
+            # The command is pending again, so its card has to accept a click
+            # again on the next run.
+            st.session_state.pop(_decision_key(thread_id, interrupt_id), None)
             raise
 
     _stream_and_display_chunks(resume_chunks(), message_placeholder)
+
+
+def _decision_key(thread_id: str, interrupt_id: str) -> str:
+    """Session-state key holding the decision already taken on a command."""
+    return f"sandbox_decision:{thread_id}:{interrupt_id}"
+
+
+def _render_approval_card(
+    approval: dict[str, Any],
+    command: str,
+    *,
+    allowed: set[str],
+    keys: str,
+    disabled: bool,
+    show_editor: bool,
+    status: str = "",
+) -> tuple[str | None, str | None, bool]:
+    """Draw the confirmation card once.
+
+    Returns ``(decision, edited_command, edit_clicked)``. With ``disabled`` set
+    every control is greyed out, which lets the caller redraw the card as an
+    inert copy of itself the moment a decision is taken.
+    """
+    st.subheader("Allow this command?")
+    description = str(approval.get("description") or "").strip()
+    if description:
+        st.write(description)
+    st.code(command, language="bash")
+    limits = approval.get("limits") or {}
+    st.caption(
+        " · ".join(
+            part
+            for part in (
+                "No network",
+                str(limits.get("cpu") or ""),
+                str(limits.get("memory") or ""),
+            )
+            if part
+        )
+    )
+
+    run_col, edit_col, cancel_col = st.columns(3)
+    run_clicked = run_col.button(
+        "Run",
+        icon=":material/play_arrow:",
+        type="primary",
+        key=f"sandbox_run:{keys}",
+        use_container_width=True,
+        disabled=disabled or "approve" not in allowed,
+    )
+    edit_clicked = edit_col.button(
+        "Edit",
+        icon=":material/edit:",
+        key=f"sandbox_edit_button:{keys}",
+        use_container_width=True,
+        disabled=disabled or "edit" not in allowed,
+    )
+    cancel_clicked = cancel_col.button(
+        "Cancel",
+        icon=":material/close:",
+        key=f"sandbox_cancel:{keys}",
+        use_container_width=True,
+        disabled=disabled or "reject" not in allowed,
+    )
+
+    edited_command: str | None = None
+    edit_confirmed = False
+    if show_editor or edit_clicked:
+        edited_command = st.text_area(
+            "Command",
+            value=command,
+            key=f"sandbox_command:{keys}",
+            height=140,
+            disabled=disabled,
+        )
+        edit_confirmed = st.button(
+            "Run edited command",
+            icon=":material/play_arrow:",
+            type="primary",
+            key=f"sandbox_edit_confirm:{keys}",
+            disabled=disabled,
+        )
+
+    if status:
+        st.caption(status)
+
+    decision = "approve" if run_clicked else "reject" if cancel_clicked else None
+    if edit_confirmed:
+        decision = "edit"
+    return decision, edited_command, edit_clicked
 
 
 def render_pending_approval() -> bool:
@@ -401,74 +533,43 @@ def render_pending_approval() -> bool:
     command = str(approval.get("command") or "")
     allowed = set(approval.get("allowed_decisions") or ("approve", "edit", "reject"))
     edit_key = f"sandbox_edit:{st.session_state.thread_id}:{interrupt_id}"
+    decision_key = _decision_key(st.session_state.thread_id, interrupt_id)
+    decided = str(st.session_state.get(decision_key) or "")
 
-    with st.container(border=True):
-        st.subheader("Allow this command?")
-        description = str(approval.get("description") or "").strip()
-        if description:
-            st.write(description)
-        st.code(command, language="bash")
-        limits = approval.get("limits") or {}
-        st.caption(
-            " · ".join(
-                part
-                for part in (
-                    "No network",
-                    str(limits.get("cpu") or ""),
-                    str(limits.get("memory") or ""),
-                )
-                if part
-            )
+    # The card lives in a placeholder so a decision can redraw it in place as a
+    # dead control: Streamlit keeps the widgets on screen while the resumed turn
+    # streams, and a second click would abort that stream mid-flight.
+    slot = st.empty()
+    with slot.container(border=True):
+        decision, edited_command, edit_clicked = _render_approval_card(
+            approval,
+            command,
+            allowed=allowed,
+            keys=interrupt_id,
+            disabled=bool(decided),
+            show_editor=bool(st.session_state.get(edit_key, False)),
+            status=DECISION_STATUS.get(decided, ""),
         )
 
-        run_col, edit_col, cancel_col = st.columns(3)
-        run_clicked = run_col.button(
-            "Run",
-            icon=":material/play_arrow:",
-            type="primary",
-            key=f"sandbox_run:{interrupt_id}",
-            use_container_width=True,
-            disabled="approve" not in allowed,
-        )
-        edit_clicked = edit_col.button(
-            "Edit",
-            icon=":material/edit:",
-            key=f"sandbox_edit_button:{interrupt_id}",
-            use_container_width=True,
-            disabled="edit" not in allowed,
-        )
-        cancel_clicked = cancel_col.button(
-            "Cancel",
-            icon=":material/close:",
-            key=f"sandbox_cancel:{interrupt_id}",
-            use_container_width=True,
-            disabled="reject" not in allowed,
-        )
-
-        if edit_clicked:
-            st.session_state[edit_key] = True
-
-        edited_command: str | None = None
-        edit_confirmed = False
-        if st.session_state.get(edit_key, False):
-            edited_command = st.text_area(
-                "Command",
-                value=command,
-                key=f"sandbox_command:{interrupt_id}",
-                height=140,
-            )
-            edit_confirmed = st.button(
-                "Run edited command",
-                icon=":material/play_arrow:",
-                type="primary",
-                key=f"sandbox_edit_confirm:{interrupt_id}",
-            )
-
-    decision = "approve" if run_clicked else "reject" if cancel_clicked else None
-    if edit_confirmed:
-        decision = "edit"
+    if edit_clicked:
+        st.session_state[edit_key] = True
     if decision is None:
         return False
+
+    st.session_state[decision_key] = decision
+    decided_command = (
+        edited_command if decision == "edit" and edited_command else command
+    )
+    with slot.container(border=True):
+        _render_approval_card(
+            approval,
+            decided_command,
+            allowed=allowed,
+            keys=f"{interrupt_id}:decided",
+            disabled=True,
+            show_editor=False,
+            status=DECISION_STATUS[decision],
+        )
 
     with st.chat_message("assistant"):
         stream_and_display_resume(
@@ -483,6 +584,7 @@ def render_pending_approval() -> bool:
 def render_chat_interface() -> None:
     """Render the main chat interface including header, message history, and input."""
     # Render header
+    reset_rendered_artifacts()
     render_header_with_logo()
     render_chat_input_styles()
     

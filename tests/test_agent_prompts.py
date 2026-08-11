@@ -66,12 +66,64 @@ def test_specialist_prompts_share_the_report_contract(prompt: str) -> None:
     assert "artifact ID | filename | MIME type | caption" in prompt
 
 
+@pytest.mark.parametrize(
+    ("package", "filename"),
+    [
+        ("juena.agents", "SUPERVISOR.md"),
+        ("juena.agents.specialists.software", "AGENT.md"),
+    ],
+)
+def test_prompts_forbid_linking_to_a_file_instead_of_attaching_it(
+    package: str, filename: str
+) -> None:
+    """Artifacts are rendered by the application, so any link the model writes is dead.
+
+    Left unsaid, a model whose file was refused reaches for the convention it
+    knows from other sandboxes and emits `sandbox:/path/to/plot.png`.
+    """
+    prompt = load_markdown(package, filename)
+
+    assert "sandbox:" in prompt
+    assert "Markdown image" in prompt
+
+
+def test_software_prompt_reports_files_that_were_not_delivered() -> None:
+    prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
+
+    assert "produced but not delivered" in prompt
+    assert "Never claim the user can see a file the tool did not attach." in prompt
+
+
 def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
     prompt = build_software_prompt(has_repo_research=False, has_context7=False)
 
     assert "local repository index is unavailable" in prompt
     assert "Context7 is unavailable" in prompt
     assert "Do not claim to inspect local repositories" in prompt
+
+
+def test_software_prompt_requires_loading_applicable_dynamic_skills() -> None:
+    authored_prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
+
+    skill_gate = authored_prompt.index("## Mandatory skill gate")
+    repository_workflow = authored_prompt.index("For local repository questions")
+
+    assert skill_gate < repository_workflow
+    assert "before any repository search" in authored_prompt
+    assert "This is mandatory, not a suggestion." in authored_prompt
+    assert "dynamically injected **Available Skills** metadata" in authored_prompt
+    assert "read its exact listed `SKILL.md`" in authored_prompt
+    assert "load only the supporting references" in authored_prompt
+    assert (
+        "Repository documentation and remembered API knowledge do not replace"
+        in authored_prompt
+    )
+    assert "Only when **Available Skills** is absent or empty" in authored_prompt
+    assert "when no listed description" in authored_prompt
+    assert "matches the objective" in authored_prompt
+    assert "Do not load an unrelated" in authored_prompt
+    assert "skill merely because one is available" in authored_prompt
+    assert "jscatter" not in authored_prompt.lower()
 
 
 def test_repository_software_manifest_starts_with_only_jscatter() -> None:

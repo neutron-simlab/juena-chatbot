@@ -32,6 +32,15 @@ class WorkspaceFileResult:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceArtifactScan:
+    """Accepted outputs plus a bounded account of files the worker refused."""
+
+    accepted: tuple[str, ...] = ()
+    dropped: tuple[tuple[str, str], ...] = ()
+    omitted_drops: int = 0
+
+
 class WorkspaceOwnershipError(RuntimeError):
     pass
 
@@ -222,36 +231,66 @@ class WorkspaceStore:
                 results.append(WorkspaceFileResult(path, error=str(exc)))
         return results
 
-    def artifacts_since(self, workspace_id: str, started_at: datetime) -> list[str]:
-        """Return valid output filenames changed since the job started."""
+    def artifacts_since(
+        self,
+        workspace_id: str,
+        started_at: datetime,
+    ) -> WorkspaceArtifactScan:
+        """Return accepted outputs and bounded rejection details for one execution."""
         output_dir = self.workspace_dir(workspace_id) / "outputs"
         if output_dir.is_symlink() or not output_dir.is_dir():
-            return []
+            return WorkspaceArtifactScan()
         output_root = output_dir.resolve()
         threshold = int(started_at.timestamp() * 1_000_000_000)
         names: list[str] = []
+        dropped: list[tuple[str, str]] = []
+        omitted_drops = 0
         images = 0
+
+        def reject(name: str, reason: str) -> None:
+            nonlocal omitted_drops
+            if len(dropped) < MAX_FILE_ARTIFACTS_PER_EXECUTION:
+                dropped.append((name, reason))
+            else:
+                omitted_drops += 1
+
         for path in sorted(output_dir.iterdir()):
-            if len(names) >= MAX_FILE_ARTIFACTS_PER_EXECUTION:
-                break
             if path.is_symlink() or not path.is_file():
                 continue
             if path.resolve().parent != output_root:
                 continue
-            extension = path.suffix.lower()
-            if extension not in COLLECTED_EXTENSIONS:
-                continue
             stat = path.stat()
             if stat.st_mtime_ns < threshold:
                 continue
+            extension = path.suffix.lower()
+            if extension not in COLLECTED_EXTENSIONS:
+                reject(path.name, "Generated file type is not allowed")
+                continue
             if extension == ".png":
-                if images >= MAX_ARTIFACTS_PER_EXECUTION or stat.st_size > MAX_ARTIFACT_BYTES:
+                if stat.st_size > MAX_ARTIFACT_BYTES:
+                    reject(path.name, "Generated PNG exceeds the 5 MB limit")
                     continue
-                images += 1
+                if images >= MAX_ARTIFACTS_PER_EXECUTION:
+                    reject(
+                        path.name,
+                        f"This execution already has the maximum of "
+                        f"{MAX_ARTIFACTS_PER_EXECUTION} plots",
+                    )
+                    continue
             elif stat.st_size > MAX_FILE_ARTIFACT_BYTES:
+                reject(path.name, "Generated file exceeds the 10 MB limit")
+                continue
+            if len(names) >= MAX_FILE_ARTIFACTS_PER_EXECUTION:
+                reject(
+                    path.name,
+                    f"This execution already has the maximum of "
+                    f"{MAX_FILE_ARTIFACTS_PER_EXECUTION} generated files",
+                )
                 continue
             names.append(path.name)
-        return names
+            if extension == ".png":
+                images += 1
+        return WorkspaceArtifactScan(tuple(names), tuple(dropped), omitted_drops)
 
     def delete(self, workspace_id: str, tenant_id: str) -> None:
         root = self.workspace_root(workspace_id)

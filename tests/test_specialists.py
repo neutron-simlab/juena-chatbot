@@ -15,6 +15,7 @@ from juena.agents.specialists.neutron_research import agent as neutron_agent
 from juena.agents.specialists.neutron_research import tools as neutron_tools
 from juena.agents.specialists.software import agent as software_agent
 from juena.agents.specialists.software import tools as software_tools
+from juena.schema.llm_models import BlabladorModelName
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 
@@ -116,6 +117,13 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert "Python or shell execution" in spec["description"]
     assert "with user approval" in spec["description"]
     assert spec["runnable"] is runnable
+
+
+def test_software_specialist_defaults_to_qwen() -> None:
+    assert (
+        software_agent.SOFTWARE_SPECIALIST_MODEL
+        == BlabladorModelName.QWEN35_122B.value
+    )
 
 
 def test_neutron_specialist_owns_fixed_model_and_runtime(
@@ -238,3 +246,24 @@ def test_skills_middleware_requires_a_valid_owned_skill(
 
     assert not any(isinstance(item, SkillsMiddleware) for item in no_skills_middleware)
     assert sum(isinstance(item, SkillsMiddleware) for item in owner_middleware) == 1
+
+
+def test_packaged_jscatter_skill_is_lazily_discoverable() -> None:
+    skills_dir = software_agent._SPECIALIST_SKILLS_PATH
+    backend = specialist_runtime.build_specialist_backend(skills_dir=skills_dir)
+    middleware = SkillsMiddleware(
+        backend=backend,
+        sources=[("/skills/", "Software")],
+    )
+
+    update = middleware.before_agent({}, object(), {})
+
+    assert update is not None
+    metadata = update["skills_metadata"]
+    jscatter = next(item for item in metadata if item["name"] == "jscatter")
+    assert "neutron and X-ray scattering" in jscatter["description"]
+    assert jscatter["path"] == "/skills/jscatter/SKILL.md"
+
+    rendered = middleware._format_skills_list(metadata)
+    assert "**jscatter**" in rendered
+    assert "Read `/skills/jscatter/SKILL.md` for full instructions" in rendered

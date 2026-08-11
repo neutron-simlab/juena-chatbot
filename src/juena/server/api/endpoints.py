@@ -269,6 +269,11 @@ async def message_generator(
     thread_id_used = kwargs.get("config", {}).get("configurable", {}).get("thread_id")
     if thread_id_used:
         yield sse(events.thread_event(thread_id_used))
+        # A cancelled or crashed previous turn never reached the drain in
+        # ArtifactMessageMiddleware. Clear it here rather than inside the graph:
+        # an approval interrupt makes "graph invocation" a poor proxy for "turn",
+        # so a resume must keep the window this deliberately discards.
+        get_artifact_store().begin_turn(authenticated_user_id, thread_id_used)
 
     # Messages are not persisted here: the checkpointer commits the full thread
     # history as the graph runs, and `/chats/{thread_id}` reads it back.

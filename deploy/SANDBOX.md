@@ -6,6 +6,10 @@ rootless Podman. That table is the only channel between the two: there is no
 message broker, so there is no second state to reconcile. The application
 container has no Podman socket, and generated containers have no network.
 
+See [`DOCS/SANDBOX.md`](../DOCS/SANDBOX.md) for the implemented architecture,
+threat model, artifact lifecycle, verification layers, and production gates.
+This file is the host installation and operations runbook.
+
 This is a single-host design. The Postgres volume survives process and container
 restarts, but loss of the host is loss of the service. It does not claim
 exactly-once execution or high availability.

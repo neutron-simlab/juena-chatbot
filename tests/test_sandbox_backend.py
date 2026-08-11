@@ -1,5 +1,6 @@
 """Deep Agents backend routing and queued execution tests."""
 
+import io
 import warnings
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -7,6 +8,8 @@ from uuid import uuid4
 
 from deepagents.backends.protocol import BackendProtocol, LsResult
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
+from langchain_core.messages import AIMessage
+from PIL import Image
 
 # Bound at import time, exactly as the sandbox modules under test bind it.
 # tests/test_saml_auth.py reloads juena.core.config and installs a new
@@ -15,7 +18,9 @@ from deepagents.middleware.filesystem import FilesystemMiddleware, supports_exec
 from juena.core.config import global_config
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
 from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
+from juena.sandbox.constants import MAX_IMAGE_ARTIFACTS_PER_TURN
 from juena.sandbox.jobs import SandboxExecutionResult, workspace_id_for
+from juena.sandbox.middleware import SandboxExecutionMiddleware
 from juena.sandbox.runtime import (
     RuntimePodmanSandboxBackend,
     build_sandbox_backend,
@@ -23,6 +28,12 @@ from juena.sandbox.runtime import (
     set_workspace_store_for_tests,
 )
 from juena.sandbox.workspace import WorkspaceStore
+
+
+def _png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (12, 8), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class _Jobs:
@@ -79,6 +90,90 @@ def test_execute_returns_command_output_and_collected_file(tmp_path) -> None:
     assert "analysis.py" in result.output
     # The approval record is the middleware's job, not the backend's.
     assert [item["filename"] for item in refs] == ["analysis.py"]
+
+
+class _PlotJobs(_Jobs):
+    """Writes a PNG to outputs rather than the default script."""
+
+    def execute(self, **request):
+        self.requests.append(request)
+        output_dir = self.workspaces.workspace_dir(request["workspace_id"]) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "plot.png").write_bytes(_png())
+        return SandboxExecutionResult(
+            job_id=uuid4(),
+            output="fit converged\n",
+            exit_code=0,
+            status="completed",
+            artifact_names=("plot.png",),
+        )
+
+
+def _plot_backend(tmp_path, jobs_class=_PlotJobs):
+    workspaces = WorkspaceStore(tmp_path / "workspaces")
+    workspaces.ensure("a" * 64, "1" * 64)
+    jobs = jobs_class(workspaces)
+    return PodmanSandboxBackend(
+        jobs=jobs,  # type: ignore[arg-type]
+        workspaces=workspaces,
+        tenant_id="1" * 64,
+        workspace_id="a" * 64,
+        user_id="user-a",
+        thread_id="thread-a",
+        run_id="run-1",
+    )
+
+
+def test_dropped_plot_is_reported_to_the_model(tmp_path) -> None:
+    """The bug that made the agent claim a figure the user never saw.
+
+    A refused registration used to be swallowed, leaving the model a clean exit
+    code and its own script's success message to reason from.
+    """
+    store = ArtifactStore(tmp_path / "artifacts", tmp_path / "audit.jsonl")
+    set_artifact_store_for_tests(store)
+    for _ in range(MAX_IMAGE_ARTIFACTS_PER_TURN):
+        store.register_artifact(
+            user_id="user-a",
+            thread_id="thread-a",
+            run_id=None,
+            filename="earlier.png",
+            content=_png(),
+        )
+    backend = _plot_backend(tmp_path)
+
+    try:
+        result = backend.execute("python fit.py")
+    finally:
+        set_artifact_store_for_tests(None)
+
+    assert "fit converged" in result.output
+    assert "NOT delivered" in result.output
+    assert "plot.png" in result.output
+    assert f"maximum of {MAX_IMAGE_ARTIFACTS_PER_TURN} plots" in result.output
+    assert "Artifacts collected automatically" not in result.output
+
+
+def test_busy_workspace_reports_the_missing_file(tmp_path) -> None:
+    """_collect returns nothing when the guard is busy, which used to be silent."""
+
+    class _BusyJobs(_PlotJobs):
+        @contextmanager
+        def workspace_guard(self, _workspace_id):
+            # Busy only for the post-run collection; execute() never asks.
+            yield False
+
+    store = ArtifactStore(tmp_path / "artifacts", tmp_path / "audit.jsonl")
+    set_artifact_store_for_tests(store)
+    backend = _plot_backend(tmp_path, _BusyJobs)
+
+    try:
+        result = backend.execute("python fit.py")
+    finally:
+        set_artifact_store_for_tests(None)
+
+    assert "plot.png" in result.output
+    assert "workspace was busy" in result.output
 
 
 class _InputSandbox:
@@ -216,3 +311,48 @@ def test_root_search_is_rejected_and_later_write_remains_available(tmp_path) -> 
     assert backend.glob("**/*", "/./").error == "Recursive searches from / are not allowed"
     assert jobs.requests == []
     assert backend.upload_files([("/workspace/later.txt", b"responsive")])[0].error is None
+
+
+def test_output_upload_reports_when_the_file_was_not_delivered(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts", tmp_path / "audit.jsonl")
+    set_artifact_store_for_tests(store)
+    workspaces = WorkspaceStore(tmp_path / "workspaces")
+    jobs = _Jobs(workspaces)
+    backend = PodmanSandboxBackend(
+        jobs=jobs,  # type: ignore[arg-type]
+        workspaces=workspaces,
+        tenant_id="1" * 64,
+        workspace_id="a" * 64,
+        user_id="user-a",
+        thread_id="thread-a",
+        run_id="run-1",
+    )
+
+    try:
+        write = backend.write("/workspace/outputs/empty.txt", "")
+        final = AIMessage(
+            content=[{"type": "text", "text": "The requested report is ready."}]
+        )
+        update = SandboxExecutionMiddleware().after_model(
+            {"messages": [final]},
+            SimpleNamespace(
+                context=SimpleNamespace(user_id="user-a", thread_id="thread-a"),
+                config={"run_id": "run-1"},
+            ),
+        )
+    finally:
+        set_artifact_store_for_tests(None)
+
+    # The write itself succeeded, so reporting an error here would be false and
+    # would send the model into a rewrite that collides with its own file.
+    assert write.error is None
+    assert write.path == "/workspace/outputs/empty.txt"
+    assert update == {"messages": [final]}
+    assert "The requested report is ready" in final.text
+    assert "NOT delivered to the user" in final.text
+    assert "empty.txt" in final.text
+    assert "Generated file is empty" in final.text
+    assert store.drain_undelivered("user-a", "thread-a") == []
+    attached = store.claim_for_message("user-a", "thread-a")
+    assert "empty.txt" not in {item["filename"] for item in attached}
+    assert '"event": "artifact_dropped"' in (tmp_path / "audit.jsonl").read_text()

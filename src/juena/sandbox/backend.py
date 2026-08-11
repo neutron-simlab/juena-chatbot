@@ -30,10 +30,10 @@ from deepagents.backends.sandbox import (
 from langgraph.config import get_stream_writer
 
 from juena.core.config import global_config
-from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.constants import MAX_FILE_ARTIFACTS_PER_EXECUTION
+from juena.sandbox.artifacts import get_artifact_store, undelivered_note
 from juena.sandbox.jobs import SandboxJobs
 from juena.sandbox.policy import is_redundant_artifact_export
+from juena.sandbox.schemas import ArtifactRef
 from juena.sandbox.workspace import (
     WorkspaceFileResult,
     WorkspaceStore,
@@ -51,6 +51,30 @@ STATUS_LABELS = {
     "busy": "Sandbox capacity is busy",
     "unavailable": "Sandbox worker unavailable",
 }
+
+
+def _artifact_note(attached: list[ArtifactRef], dropped: list[tuple[str, str]]) -> str:
+    """Describe what reached the user and what did not.
+
+    A file the sandbox wrote but the application refused is the one thing the
+    model must never guess about: with no note it sees a clean exit code and
+    reports a figure the user cannot open.
+    """
+    blocks: list[str] = []
+    if attached:
+        lines = "\n".join(
+            f"- {ref.artifact_id} | {ref.filename} | {ref.mime_type} | {ref.caption}"
+            for ref in attached
+        )
+        blocks.append(
+            "Artifacts collected automatically by the application:\n"
+            + lines
+            + "\nDo not run another command to inspect, encode, print, or "
+            "verify these files. Finish the report now."
+        )
+    if dropped:
+        blocks.append(undelivered_note(dropped))
+    return "\n\n".join(blocks)
 
 
 class PodmanSandboxBackend(BaseSandbox):
@@ -126,23 +150,38 @@ class PodmanSandboxBackend(BaseSandbox):
                     STATUS_LABELS.get(status, "Sandbox command running"),
                 ),
             )
-            refs = []
+            attached: list[ArtifactRef] = []
+            dropped: list[tuple[str, str]] = []
             paths = [f"/workspace/outputs/{name}" for name in result.artifact_names]
-            for artifact in self._collect(paths):
+            collected = self._collect(paths)
+            # _collect returns nothing at all when the workspace guard is busy, so
+            # a file the worker really wrote would otherwise vanish without a word.
+            returned = {item.path for item in collected}
+            dropped.extend(
+                (
+                    PurePosixPath(path).name,
+                    "The workspace was busy and the file could not be read",
+                )
+                for path in paths
+                if path not in returned
+            )
+            for artifact in collected:
+                name = PurePosixPath(artifact.path).name
                 if artifact.error or artifact.content is None:
+                    dropped.append((name, artifact.error or "The file could not be read"))
                     continue
                 try:
-                    refs.append(
+                    attached.append(
                         store.register_artifact(
                             user_id=self._user_id,
                             thread_id=self._thread_id,
                             run_id=self._run_id,
-                            filename=PurePosixPath(artifact.path).name,
+                            filename=name,
                             content=artifact.content,
                         )
                     )
-                except (OSError, ValueError):
-                    continue
+                except (OSError, ValueError) as exc:
+                    dropped.append((name, str(exc)))
             store.audit(
                 {
                     "event": "sandbox_execution",
@@ -153,7 +192,8 @@ class PodmanSandboxBackend(BaseSandbox):
                     "command": command,
                     "status": result.status,
                     "exit_code": result.exit_code,
-                    "artifact_ids": [ref.artifact_id for ref in refs],
+                    "artifact_ids": [ref.artifact_id for ref in attached],
+                    "dropped": [name for name, _ in dropped],
                 }
             )
             self._status(
@@ -163,23 +203,9 @@ class PodmanSandboxBackend(BaseSandbox):
                 exit_code=result.exit_code,
             )
             model_output = result.output.rstrip()
-            if refs:
-                artifact_lines = [
-                    (
-                        f"- {ref.artifact_id} | {ref.filename} | "
-                        f"{ref.mime_type} | {ref.caption}"
-                    )
-                    for ref in refs
-                ]
-                artifact_note = (
-                    "Artifacts collected automatically by the application:\n"
-                    + "\n".join(artifact_lines)
-                    + "\nDo not run another command to inspect, encode, print, or "
-                    "verify these files. Finish the report now."
-                )
-                model_output = "\n\n".join(
-                    part for part in (model_output, artifact_note) if part
-                )
+            note = _artifact_note(attached, dropped)
+            if note:
+                model_output = "\n\n".join(part for part in (model_output, note) if part)
             return ExecuteResponse(
                 output=model_output,
                 exit_code=result.exit_code,
@@ -258,7 +284,6 @@ class PodmanSandboxBackend(BaseSandbox):
             for index, (path, _content) in enumerate(files)
         ]
         store = get_artifact_store()
-        registered = 0
         for (path, content), response in zip(files, responses, strict=False):
             if response.error or not path.startswith("/workspace/outputs/"):
                 continue
@@ -270,11 +295,25 @@ class PodmanSandboxBackend(BaseSandbox):
                     filename=PurePosixPath(path).name,
                     content=content,
                 )
-            except (ValueError, OSError):
-                continue
-            registered += 1
-            if registered >= MAX_FILE_ARTIFACTS_PER_EXECUTION:
-                break
+            except (ValueError, OSError) as exc:
+                # Not reported through FileUploadResponse.error: the write itself
+                # succeeded and the bytes are on disk, so `write_file` would say
+                # "Failed to write file" about a file that exists -- and a retry
+                # then collides with it, because write() refuses an existing
+                # path. The notice waits for a channel that can carry it.
+                reason = str(exc)
+                filename = PurePosixPath(path).name
+                store.audit(
+                    {
+                        "event": "artifact_dropped",
+                        "user_id": self._user_id,
+                        "thread_id": self._thread_id,
+                        "run_id": self._run_id,
+                        "filename": filename,
+                        "reason": reason,
+                    }
+                )
+                store.note_undelivered(self._user_id, self._thread_id, filename, reason)
         return responses
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:

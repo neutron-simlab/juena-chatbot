@@ -70,3 +70,6 @@ benchmarks/
 
 # Docs
 DOCS/
+!DOCS/
+DOCS/*
+!DOCS/SANDBOX.md

@@ -34,7 +34,7 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "when the sandbox is enabled, this specialist can execute them with user approval."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.MINIMAX_M27.value
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN35_122B.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 

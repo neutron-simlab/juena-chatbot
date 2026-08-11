@@ -20,6 +20,19 @@ class _DummyContext:
         return False
 
 
+class _SessionState(dict):
+    """st.session_state, which is both a mapping and an attribute bag."""
+
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError as exc:
+            raise AttributeError(item) from exc
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
 def _png() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (4, 3), "white").save(buffer, format="PNG")
@@ -123,6 +136,31 @@ def test_sanitize_assistant_content_removes_truncated_inline_data_image() -> Non
     assert ui_components.sanitize_assistant_content(content) == "Plot:\n\nDone."
 
 
+def test_sanitize_assistant_content_removes_invented_sandbox_image() -> None:
+    """The link a model writes when its file was produced but never delivered."""
+    content = "Here is the fit:\n\n![Fit](sandbox:/workspace/outputs/fit.png)\n\nDone."
+
+    assert ui_components.sanitize_assistant_content(content) == "Here is the fit:\n\nDone."
+
+
+def test_sanitize_assistant_content_keeps_the_label_of_a_dead_link() -> None:
+    content = "See [the report](sandbox:/workspace/outputs/report.md) for detail."
+
+    assert (
+        ui_components.sanitize_assistant_content(content) == "See the report for detail."
+    )
+
+
+def test_sanitize_assistant_content_preserves_a_real_image() -> None:
+    contents = (
+        "![Logo](https://example.org/a.png)",
+        "![Logo]( HTTPS://example.org/a.png)",
+    )
+
+    for content in contents:
+        assert ui_components.sanitize_assistant_content(content) == content
+
+
 def test_render_streaming_token_hides_inline_data_image() -> None:
     placeholder = Mock()
 
@@ -139,7 +177,7 @@ def test_render_artifacts_displays_plot_and_downloads(monkeypatch) -> None:
     download_mock = Mock()
     expand_mock = Mock(return_value=False)
     fake_st = SimpleNamespace(
-        session_state=SimpleNamespace(client=Mock()),
+        session_state=_SessionState(client=Mock()),
         html=html_mock,
         button=expand_mock,
         container=lambda **_kwargs: _DummyContext(),
@@ -191,7 +229,7 @@ def test_render_artifact_expand_opens_plot_dialog(monkeypatch) -> None:
         ui_components,
         "st",
         SimpleNamespace(
-            session_state=SimpleNamespace(client=Mock()),
+            session_state=_SessionState(client=Mock()),
             html=Mock(),
             button=Mock(return_value=True),
             container=lambda **_kwargs: _DummyContext(),
@@ -237,7 +275,7 @@ def test_render_artifact_history_fetches_through_authenticated_client(monkeypatc
         ui_components,
         "st",
         SimpleNamespace(
-            session_state=SimpleNamespace(client=client),
+            session_state=_SessionState(client=client),
             image=Mock(),
             download_button=download_mock,
             caption=Mock(),
@@ -259,3 +297,67 @@ def test_render_artifact_history_fetches_through_authenticated_client(monkeypatc
 
     client.get_artifact.assert_called_once_with("file-1")
     assert download_mock.call_args.kwargs["data"] == b"result\n"
+
+
+def test_render_artifacts_draws_a_repeated_artifact_once_per_run(monkeypatch) -> None:
+    """The same file can arrive from history and the live stream in one run."""
+    download_mock = Mock()
+    monkeypatch.setattr(
+        ui_components,
+        "st",
+        SimpleNamespace(
+            session_state=_SessionState(client=Mock()),
+            download_button=download_mock,
+            caption=Mock(),
+        ),
+    )
+    custom_data = {
+        "artifacts": [
+            {
+                "artifact_id": "file-1",
+                "filename": "result.txt",
+                "kind": "file",
+                "mime_type": "text/plain",
+                "content_base64": base64.b64encode(b"result\n").decode("ascii"),
+            }
+        ]
+    }
+
+    ui_components.render_artifacts(custom_data)
+    ui_components.render_artifacts(custom_data)
+
+    assert [call.kwargs["key"] for call in download_mock.call_args_list] == [
+        "artifact-download:file-1"
+    ]
+
+    # A fresh script run draws it again.
+    ui_components.reset_rendered_artifacts()
+    ui_components.render_artifacts(custom_data)
+
+    assert len(download_mock.call_args_list) == 2
+
+
+def test_render_artifacts_keeps_unidentified_files_apart(monkeypatch) -> None:
+    """Without an id there is nothing to correlate on, so nothing is dropped."""
+    download_mock = Mock()
+    monkeypatch.setattr(
+        ui_components,
+        "st",
+        SimpleNamespace(
+            session_state=_SessionState(client=Mock()),
+            download_button=download_mock,
+            caption=Mock(),
+        ),
+    )
+    artifact = {
+        "filename": "result.txt",
+        "kind": "file",
+        "mime_type": "text/plain",
+        "content_base64": base64.b64encode(b"result\n").decode("ascii"),
+    }
+
+    ui_components.render_artifacts({"artifacts": [artifact, dict(artifact)]})
+
+    keys = [call.kwargs["key"] for call in download_mock.call_args_list]
+    assert len(keys) == 2
+    assert len(set(keys)) == 2

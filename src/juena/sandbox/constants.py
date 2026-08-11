@@ -16,6 +16,18 @@ MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 MAX_FILE_ARTIFACTS_PER_EXECUTION = 8
 MAX_FILE_ARTIFACT_BYTES = 10 * 1024 * 1024
 
+# Per-turn budget for files delivered to the user, counted by cost rather than by
+# file count. Inline images are re-encoded into the SSE stream and painted in the
+# browser, so they are capped; a downloadable file costs one button and is not.
+# Total bytes is the real backstop for both.
+MAX_IMAGE_ARTIFACTS_PER_TURN = 8
+MAX_ARTIFACT_BYTES_PER_TURN = 64 * 1024 * 1024
+
+# Execution records are the application's own bookkeeping, not the agent's output.
+# They are budgeted apart so a long debugging session cannot crowd out the file
+# the user actually asked for.
+MAX_RECORD_ARTIFACTS_PER_TURN = 40
+
 # Downloadable (non-image) artifact types, mapped to the MIME type served back.
 DOWNLOAD_TYPES = {
     ".csv": "text/csv",

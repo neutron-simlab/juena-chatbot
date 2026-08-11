@@ -80,7 +80,21 @@ class _ButtonColumn:
 
     def button(self, label: str, **kwargs):
         self.calls.append((label, kwargs))
+        # Streamlit never reports a click for a greyed-out button.
+        if kwargs.get("disabled"):
+            return False
         return label == self.clicked_label
+
+
+class _FakePlaceholder:
+    """Stand-in for st.empty(), which can be redrawn into more than once."""
+
+    def __init__(self) -> None:
+        self.container_calls = 0
+
+    def container(self, **_kwargs):
+        self.container_calls += 1
+        return _DummyContext()
 
 
 def _import_chat_interface(monkeypatch):
@@ -115,6 +129,56 @@ def test_process_stream_chunk_ai_message_uses_finalize_renderer(monkeypatch) -> 
     assert messages == [chunk]
     finalize_mock.assert_called_once_with(message_placeholder, "final response")
     message_placeholder.markdown.assert_not_called()
+
+
+def test_process_stream_chunk_replaces_a_replayed_message(monkeypatch) -> None:
+    """Resuming an interrupt replays messages the transcript already holds."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    monkeypatch.setattr(chat_interface, "finalize_streaming_message", Mock())
+    artifacts = [{"artifact_id": "plot-1", "filename": "plot.png"}]
+    first = ChatMessage(
+        type="ai",
+        id="msg-1",
+        content="here is the plot",
+        custom_data={"artifacts": artifacts},
+    )
+    messages: list[ChatMessage] = [ChatMessage(type="human", content="plot"), first]
+    replay = ChatMessage(
+        type="ai",
+        id="msg-1",
+        content="here is the plot",
+        custom_data={"artifacts": artifacts},
+    )
+
+    chat_interface.process_stream_chunk(
+        chunk=replay,
+        client=Mock(),
+        response_text="",
+        received_complete_message=False,
+        message_placeholder=Mock(),
+        messages=messages,
+    )
+
+    assert len(messages) == 2
+    assert messages[1] is replay
+
+
+def test_process_stream_chunk_appends_messages_without_an_id(monkeypatch) -> None:
+    """Nothing to correlate on means the message has to count as new."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    monkeypatch.setattr(chat_interface, "finalize_streaming_message", Mock())
+    messages: list[ChatMessage] = [ChatMessage(type="ai", content="first")]
+
+    chat_interface.process_stream_chunk(
+        chunk=ChatMessage(type="ai", content="second"),
+        client=Mock(),
+        response_text="",
+        received_complete_message=False,
+        message_placeholder=Mock(),
+        messages=messages,
+    )
+
+    assert [message.content for message in messages] == ["first", "second"]
 
 
 def test_process_stream_chunk_ai_message_preserves_raw_math_for_finalize_renderer(monkeypatch) -> None:
@@ -258,6 +322,7 @@ def test_pending_approval_offers_one_click_choices(monkeypatch) -> None:
         selected_provider="openai",
         selected_model="gpt-4o-mini",
     )
+    slot = _FakePlaceholder()
     fake_st = SimpleNamespace(
         session_state=session_state,
         container=lambda **_kwargs: _DummyContext(),
@@ -271,7 +336,7 @@ def test_pending_approval_offers_one_click_choices(monkeypatch) -> None:
             _ButtonColumn("Run", calls),
         ],
         chat_message=lambda _role: _DummyContext(),
-        empty=Mock(return_value=Mock()),
+        empty=Mock(side_effect=[slot, Mock()]),
     )
     resume_mock = Mock()
     monkeypatch.setattr(chat_interface, "st", fake_st)
@@ -279,9 +344,105 @@ def test_pending_approval_offers_one_click_choices(monkeypatch) -> None:
 
     assert chat_interface.render_pending_approval() is True
 
-    assert [label for label, _kwargs in calls] == ["Run", "Edit", "Cancel"]
+    # The card is drawn twice into the same placeholder: live, then spent.
+    assert slot.container_calls == 2
+    assert [label for label, _kwargs in calls] == [
+        "Run",
+        "Edit",
+        "Cancel",
+        "Run",
+        "Edit",
+        "Cancel",
+    ]
+    assert [kwargs["disabled"] for _label, kwargs in calls[3:]] == [True, True, True]
+    assert session_state["sandbox_decision:thread-1:interrupt-1"] == "approve"
     resume_mock.assert_called_once()
     assert resume_mock.call_args.args[:2] == (approval, "approve")
+
+
+def test_pending_approval_ignores_clicks_once_a_decision_is_taken(monkeypatch) -> None:
+    """A card whose decision is already in flight offers no live controls."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    calls: list[tuple[str, dict]] = []
+    approval = {
+        "type": "approval_required",
+        "interrupt_id": "interrupt-1",
+        "command": "python plot.py",
+        "allowed_decisions": ["approve", "edit", "reject"],
+    }
+    session_state = _SessionState(
+        thread_id="thread-1",
+        messages=[ChatMessage(type="human", content="plot")],
+        pending_approvals={"thread-1": approval},
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+    )
+    session_state["sandbox_decision:thread-1:interrupt-1"] = "approve"
+    slot = _FakePlaceholder()
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        container=lambda **_kwargs: _DummyContext(),
+        subheader=Mock(),
+        write=Mock(),
+        code=Mock(),
+        caption=Mock(),
+        columns=lambda _count: [
+            _ButtonColumn("Run", calls),
+            _ButtonColumn("Run", calls),
+            _ButtonColumn("Run", calls),
+        ],
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(return_value=slot),
+    )
+    resume_mock = Mock()
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
+
+    assert chat_interface.render_pending_approval() is False
+
+    assert all(kwargs["disabled"] for _label, kwargs in calls)
+    resume_mock.assert_not_called()
+
+
+def test_failed_resume_reopens_the_command_for_another_click(monkeypatch) -> None:
+    """A resume that never starts must leave a clickable card behind."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    approval = {
+        "type": "approval_required",
+        "interrupt_id": "interrupt-1",
+        "command": "python plot.py",
+    }
+    client = Mock()
+    client.resume_stream.side_effect = AgentClientError("boom")
+    session_state = _SessionState(
+        thread_id="thread-1",
+        messages=[],
+        pending_approvals={"thread-1": approval},
+        approval_checked_threads=set(),
+        client=client,
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+    )
+    session_state["sandbox_decision:thread-1:interrupt-1"] = "approve"
+    monkeypatch.setattr(
+        chat_interface,
+        "st",
+        SimpleNamespace(session_state=session_state),
+    )
+
+    def drain(chunks, *_args, **_kwargs):
+        """Stand in for the display loop, which swallows client errors."""
+        try:
+            list(chunks)
+        except AgentClientError:
+            pass
+
+    monkeypatch.setattr(chat_interface, "_stream_and_display_chunks", drain)
+
+    chat_interface.stream_and_display_resume(approval, "approve", Mock())
+
+    assert session_state["pending_approvals"] == {"thread-1": approval}
+    assert "sandbox_decision:thread-1:interrupt-1" not in session_state
 
 
 def test_tool_activity_is_logged_inside_the_status_container(monkeypatch) -> None:

@@ -15,7 +15,7 @@ from podman.errors import APIError, NotFound
 from requests.exceptions import RequestException
 
 from juena.sandbox.jobs import SandboxJobRecord
-from juena.sandbox.workspace import WorkspaceStore
+from juena.sandbox.workspace import WorkspaceArtifactScan, WorkspaceStore
 
 CPU_PERIOD_MICROSECONDS = 100_000
 TMPFS_RAW_OPTION_KEY = "propagation"
@@ -86,6 +86,27 @@ class ExecutionOutcome:
     exit_code: int | None
     truncated: bool
     artifact_names: list[str]
+
+
+def _artifact_rejection_note(scan: WorkspaceArtifactScan) -> str:
+    """Tell the model about outputs the worker refused before collection."""
+    if not scan.dropped and not scan.omitted_drops:
+        return ""
+    lines = [f"- {name}: {reason}" for name, reason in scan.dropped]
+    if scan.omitted_drops:
+        noun = "file" if scan.omitted_drops == 1 else "files"
+        verb = "was" if scan.omitted_drops == 1 else "were"
+        lines.append(
+            f"- {scan.omitted_drops} additional output {noun} {verb} not delivered "
+            "because this report is bounded"
+        )
+    return (
+        "Files written to /workspace/outputs but NOT delivered to the user:\n"
+        + "\n".join(lines)
+        + "\nThe user cannot see these files. Do not retry them, claim they were "
+        "attached, or provide a file path, URL, sandbox: link, or Markdown image. "
+        "Report the limitation and its reason."
+    )
 
 
 class PodmanExecutor:
@@ -259,12 +280,19 @@ class PodmanExecutor:
 
         self.workspaces.enforce_limit(job.workspace_id)
         timed_out = host_timed_out or exit_code in TIMEOUT_EXIT_CODES
+        scan = self.workspaces.artifacts_since(job.workspace_id, started_at)
+        model_output = output.decode("utf-8", errors="replace")
+        rejection_note = _artifact_rejection_note(scan)
+        if rejection_note:
+            model_output = "\n\n".join(
+                part for part in (model_output.rstrip(), rejection_note) if part
+            )
         return ExecutionOutcome(
             "timed_out" if timed_out else "failed" if exit_code != 0 else "completed",
-            output.decode("utf-8", errors="replace"),
+            model_output,
             exit_code,
             truncated,
-            self.workspaces.artifacts_since(job.workspace_id, started_at),
+            list(scan.accepted),
         )
 
     @staticmethod

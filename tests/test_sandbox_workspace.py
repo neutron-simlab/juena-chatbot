@@ -60,7 +60,11 @@ def test_collects_only_new_whitelisted_regular_files(tmp_path) -> None:
     (output_dir / "blocked.html").write_text("<script>x</script>", encoding="utf-8")
     (output_dir / "escape.txt").symlink_to(Path("/etc/hosts"))
 
-    assert store.artifacts_since("a" * 64, started_at) == ["new.py"]
+    scan = store.artifacts_since("a" * 64, started_at)
+
+    assert scan.accepted == ("new.py",)
+    assert scan.dropped == (("blocked.html", "Generated file type is not allowed"),)
+    assert scan.omitted_drops == 0
 
 
 def test_shared_directories_are_setgid_so_root_writes_stay_group_owned(tmp_path) -> None:

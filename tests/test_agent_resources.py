@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
+JSCATTER_SKILL = (
+    ROOT / "src/juena/agents/specialists/software/skills/jscatter"
+)
 
 
 def test_wheel_packages_the_complete_juena_source_tree() -> None:
@@ -30,6 +36,32 @@ def test_container_context_keeps_prompts_and_future_specialist_skills() -> None:
     assert "!src/**/skills/**/*.md" in dockerignore
 
 
+def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
+    skill_text = (JSCATTER_SKILL / "SKILL.md").read_text(encoding="utf-8")
+    reference_paths = set(re.findall(r"\]\((references/[^)]+)\)", skill_text))
+
+    assert reference_paths == {
+        "references/data-and-fitting.md",
+        "references/dynamics-bio-and-dls.md",
+        "references/execution-recipes.md",
+        "references/sas-and-static-models.md",
+    }
+    assert all((JSCATTER_SKILL / path).is_file() for path in reference_paths)
+    assert "[TODO" not in skill_text
+
+    interface = yaml.safe_load(
+        (JSCATTER_SKILL / "agents/openai.yaml").read_text(encoding="utf-8")
+    )["interface"]
+    assert interface == {
+        "display_name": "JScatter",
+        "short_description": "Analyze scattering experiments with JScatter",
+        "default_prompt": (
+            "Use $jscatter to analyze this neutron or X-ray scattering problem "
+            "and produce a validated, reproducible result."
+        ),
+    }
+
+
 def test_container_entrypoint_forwards_shutdown_to_both_servers() -> None:
     entrypoint = (ROOT / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
@@ -49,3 +81,7 @@ def test_sandbox_image_installs_repository_software_from_shared_manifest() -> No
     ) in dockerfile
     assert "--requirement /tmp/repository-requirements.txt" in dockerfile
     assert "import jscatter" in dockerfile
+    assert re.search(r"apt-get install.*\bgrace\b", dockerfile, re.DOTALL)
+    assert "shutil.which('gracebat')" in dockerfile
+    assert "jscatter.GracePlot(headless=True)" in dockerfile
+    assert "grace-smoke.png" in dockerfile

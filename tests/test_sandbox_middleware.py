@@ -1,12 +1,20 @@
 """Approval records written around sandbox tool execution."""
 
+import io
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import ToolMessage
+from PIL import Image
 
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
 from juena.sandbox.middleware import SandboxExecutionMiddleware
+
+
+def _png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (12, 8), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @pytest.fixture
@@ -45,6 +53,66 @@ def test_approved_command_and_output_are_recorded(store) -> None:
 
     assert result.text == "plot written\n"
     assert _filenames(store) == ["generated-command.sh", "execution-output.txt"]
+
+
+def test_many_approved_commands_leave_room_for_results(store) -> None:
+    """Records are the application's bookkeeping and must not spend the user's budget.
+
+    Six approved commands used to write twelve records into a twelve-file
+    allowance, so the figure the turn was about had nowhere to go.
+    """
+    middleware = SandboxExecutionMiddleware()
+    for index in range(6):
+        middleware.wrap_tool_call(_request(f"python step_{index}.py"), _handler())
+
+    plot = store.register_artifact(
+        user_id="user-a",
+        thread_id="thread-a",
+        run_id="run-1",
+        filename="fit.png",
+        content=_png(),
+    )
+
+    assert plot.kind == "image"
+
+
+def test_undelivered_write_is_reported_on_the_next_approved_execution(store) -> None:
+    """`write_file` has no warning channel, so a later execution carries it early.
+
+    Reporting it as a failed write would be false -- the bytes are on disk --
+    and would send the model into a rewrite that collides with its own file.
+    """
+    store.note_undelivered("user-a", "thread-a", "report.html", "type is not allowed")
+    middleware = SandboxExecutionMiddleware()
+
+    result = middleware.wrap_tool_call(_request("python plot.py"), _handler())
+
+    assert "plot written" in result.text
+    assert "NOT delivered to the user" in result.text
+    assert "report.html: type is not allowed" in result.text
+    # Drained, so a second command does not repeat it.
+    second = middleware.wrap_tool_call(_request("python again.py"), _handler())
+    assert "NOT delivered" not in second.text
+
+
+def test_execution_record_matches_what_the_model_was_shown(store) -> None:
+    store.note_undelivered("user-a", "thread-a", "report.html", "type is not allowed")
+    middleware = SandboxExecutionMiddleware()
+
+    middleware.wrap_tool_call(_request("python plot.py"), _handler())
+
+    saved = store.claim_for_message("user-a", "thread-a")
+    output_ref = next(item for item in saved if item["filename"] == "execution-output.txt")
+    _ref, content = store.get("user-a", output_ref["artifact_id"])
+    assert b"NOT delivered to the user" in content
+
+
+def test_a_command_with_nothing_queued_is_left_alone(store) -> None:
+    middleware = SandboxExecutionMiddleware()
+
+    result = middleware.wrap_tool_call(_request("python plot.py"), _handler())
+
+    assert result.text == "plot written\n"
 
 
 def test_edited_command_is_what_gets_recorded(store) -> None:

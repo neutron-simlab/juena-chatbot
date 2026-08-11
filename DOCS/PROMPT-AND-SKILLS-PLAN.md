@@ -49,7 +49,7 @@ but supervisor filesystem calls cannot read them.
 
 The software specialist owns:
 
-- MiniMax M2.7;
+- Blablador Qwen3.5-122B;
 - indexed repository search and read-only `/repos` access when healthy;
 - read-only staged `/inputs`;
 - Context7 tools when configured;
@@ -109,15 +109,15 @@ UI skill chips.
 
 ## Artifacts and execution
 
-This refactor preserves read-only repository and staged-input behavior. It does
-not add code execution. The future sandbox design remains in
-[`SANDBOX-PLAN.md`](SANDBOX-PLAN.md).
+This prompt-and-skills refactor originally preserved read-only repository and
+staged-input behavior without adding execution itself. Sandboxed execution has
+since been implemented and is documented in [`SANDBOX.md`](SANDBOX.md).
 
-When execution is added, the executing specialist creates plots and persists
-validated artifacts itself. Artifact events travel directly from that specialist
+The software specialist now creates plots and result files in its authenticated
+sandbox workspace. Validated artifact events travel directly from that
 execution path and are queued for the turn. The supervisor receives artifact
-references in the report, never image bytes and never plotting code to rerun.
-The UI renders queued artifacts beneath the completed supervisor answer.
+references and delivery limitations, never image bytes or plotting code to
+rerun. The UI renders queued artifacts beneath the completed supervisor answer.
 
 ## Compatibility
 
