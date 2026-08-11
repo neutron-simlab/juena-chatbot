@@ -16,7 +16,7 @@ from PIL import Image
 # global_config; resolving it freshly here would patch an object the code
 # under test is not reading.
 from juena.core.config import global_config
-from juena.agents.specialist_contracts import SpecialistReport
+from juena.schema.agents import SpecialistReport
 from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
 from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend

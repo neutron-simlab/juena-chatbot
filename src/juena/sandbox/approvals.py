@@ -14,7 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt
 
 from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.schemas import (
+from juena.schema.sandbox import (
     CLARIFICATION_KIND,
     EXECUTE_APPROVAL_KIND,
     ApprovalResumeInput,

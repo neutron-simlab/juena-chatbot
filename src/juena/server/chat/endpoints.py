@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from juena.schema.server import CreateChatInput, UpdateChatInput
 from juena.server.auth import AuthenticatedUser, get_current_user
 from juena.server.chat.repository import (
     ChatNotFoundError,
@@ -24,16 +24,6 @@ from juena.server.chat.repository import (
 from juena.server.database import get_db_session
 
 router = APIRouter(prefix="/chats", tags=["chats"])
-
-
-class CreateChatInput(BaseModel):
-    thread_id: str | None = Field(default=None, max_length=255)
-    title: str = Field(default="New Chat", max_length=500)
-
-
-class UpdateChatInput(BaseModel):
-    title: str | None = Field(default=None, max_length=500)
-    summary: str | None = Field(default=None, max_length=10_000)
 
 
 @router.get("")

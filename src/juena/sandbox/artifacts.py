@@ -26,7 +26,7 @@ from juena.sandbox.constants import (
     MAX_IMAGE_ARTIFACTS_PER_TURN,
     MAX_RECORD_ARTIFACTS_PER_TURN,
 )
-from juena.sandbox.schemas import ArtifactRef
+from juena.schema.sandbox import ArtifactRef
 
 MAX_IMAGE_EDGE = 4096
 MAX_IMAGE_PIXELS = 16_000_000

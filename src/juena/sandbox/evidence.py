@@ -1,50 +1,18 @@
-"""Request-scoped typed evidence for direct sandbox tool calls."""
+"""Request-scoped capture of typed evidence for direct sandbox tool calls.
+
+The evidence itself is `juena.schema.sandbox.SandboxExecutionEvidence`; this
+module owns only the context-local buffer that carries it from the backend,
+where the exit code is still a number, up to the middleware that records it.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class SandboxExecutionEvidence(BaseModel):
-    """Facts captured before Deep Agents flattens an ExecuteResponse to text."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    command: str
-    status: Literal[
-        "completed",
-        "failed",
-        "timed_out",
-        "busy",
-        "unavailable",
-        "worker_error",
-        "skipped",
-        "tool_error",
-    ]
-    exit_code: int | None = None
-    truncated: bool = False
-    artifact_ids: list[str] = Field(default_factory=list)
-    artifact_filenames: list[str] = Field(default_factory=list)
-    dropped: list[tuple[str, str]] = Field(default_factory=list)
-
-    @property
-    def attempted(self) -> bool:
-        """Whether a command actually reached the worker.
-
-        A `skipped` export was refused before running, so counting it as a
-        failure would report a run as broken when nothing was even tried.
-        """
-        return self.status != "skipped"
-
-    @property
-    def succeeded(self) -> bool:
-        return self.status == "completed" and self.exit_code == 0
-
+from juena.schema.sandbox import SandboxExecutionEvidence
 
 _capture: ContextVar[list[SandboxExecutionEvidence] | None] = ContextVar(
     "juena_sandbox_execution_capture",

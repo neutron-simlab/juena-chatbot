@@ -1,4 +1,4 @@
-"""The typed result a specialist returns to the supervisor."""
+"""Schemas for what agents return and what they ask for."""
 
 from __future__ import annotations
 
@@ -42,3 +42,26 @@ class ResultArtifactEvidence(BaseModel):
     kind: Literal["image", "file"]
     mime_type: str
     caption: str
+
+
+class AskUserSchema(BaseModel):
+    """Input schema for the `ask_user` tool, shown to the model."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    question: str = Field(
+        min_length=1,
+        description="One specific question, self-contained enough to answer without scrollback.",
+    )
+    options: list[str] = Field(
+        default_factory=list,
+        description="Up to 4 concrete suggested answers. Omit when the answer is open-ended.",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("question must not be blank")
+        return cleaned

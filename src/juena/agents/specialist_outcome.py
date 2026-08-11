@@ -8,9 +8,9 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import AIMessage
 
-from juena.agents.specialist_contracts import ResultArtifactEvidence, SpecialistReport
+from juena.schema.agents import ResultArtifactEvidence, SpecialistReport
 from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.evidence import SandboxExecutionEvidence
+from juena.schema.sandbox import SandboxExecutionEvidence
 from juena.sandbox.runtime import _context_value
 
 REPORT_OPEN = "<specialist_report>"

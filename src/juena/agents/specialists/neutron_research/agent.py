@@ -15,12 +15,12 @@ from juena.agents.specialist_runtime import (
     build_specialist_middleware,
     load_markdown,
 )
-from juena.agents.specialist_contracts import SpecialistReport
 from juena.agents.specialists.neutron_research.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
 )
 from juena.core.llms_providers import build_chat_model
+from juena.schema.agents import SpecialistReport
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 

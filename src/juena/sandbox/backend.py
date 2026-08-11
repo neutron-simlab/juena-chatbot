@@ -34,7 +34,7 @@ from juena.sandbox.artifacts import get_artifact_store, undelivered_note
 from juena.sandbox.evidence import record_sandbox_execution
 from juena.sandbox.jobs import SandboxJobs
 from juena.sandbox.policy import is_redundant_artifact_export
-from juena.sandbox.schemas import ArtifactRef
+from juena.schema.sandbox import ArtifactRef
 from juena.sandbox.workspace import (
     WorkspaceFileResult,
     WorkspaceStore,

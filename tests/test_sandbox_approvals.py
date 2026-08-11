@@ -7,7 +7,7 @@ from langgraph.types import Interrupt
 
 from juena.sandbox.approvals import ApprovalError, build_resume_command
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.sandbox.schemas import ApprovalResumeInput, ClarificationResumeInput
+from juena.schema.sandbox import ApprovalResumeInput, ClarificationResumeInput
 from juena.sandbox.policy import requires_execution_approval
 
 

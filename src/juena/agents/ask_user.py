@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import interrupt
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from juena.sandbox.schemas import CLARIFICATION_KIND
+from juena.schema.agents import AskUserSchema
+from juena.schema.sandbox import CLARIFICATION_KIND
 
 MAX_OPTIONS = 4
 
@@ -23,29 +23,6 @@ tool, and do not ask the same question twice. Give 2-4 concrete `options` when
 you can name the likely choices; the user can always answer freely instead.
 
 Returns the user's answer as a string."""
-
-
-class AskUserSchema(BaseModel):
-    """Public input schema shown to the model."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    question: str = Field(
-        min_length=1,
-        description="One specific question, self-contained enough to answer without scrollback.",
-    )
-    options: list[str] = Field(
-        default_factory=list,
-        description="Up to 4 concrete suggested answers. Omit when the answer is open-ended.",
-    )
-
-    @field_validator("question")
-    @classmethod
-    def strip_question(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("question must not be blank")
-        return cleaned
 
 
 def _payload(asked_by: str, question: str, options: list[str] | None) -> dict[str, object]:

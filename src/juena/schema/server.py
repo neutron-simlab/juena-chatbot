@@ -134,3 +134,17 @@ class HealthStatus(BaseModel):
         description="Additional health check details.",
         default={},
     )
+
+
+class CreateChatInput(BaseModel):
+    """Request body for creating a conversation."""
+
+    thread_id: str | None = Field(default=None, max_length=255)
+    title: str = Field(default="New Chat", max_length=500)
+
+
+class UpdateChatInput(BaseModel):
+    """Request body for renaming or re-summarising a conversation."""
+
+    title: str | None = Field(default=None, max_length=500)
+    summary: str | None = Field(default=None, max_length=10_000)

@@ -10,7 +10,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from PIL import Image
 
-from juena.agents.specialist_contracts import SpecialistReport
+from juena.schema.agents import SpecialistReport
 from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
 

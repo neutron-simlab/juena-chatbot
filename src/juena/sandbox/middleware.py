@@ -16,10 +16,8 @@ from juena.sandbox.artifacts import (
     ARTIFACT_MESSAGE_KEY,
     get_artifact_store,
 )
-from juena.sandbox.evidence import (
-    SandboxExecutionEvidence,
-    capture_sandbox_execution,
-)
+from juena.sandbox.evidence import capture_sandbox_execution
+from juena.schema.sandbox import SandboxExecutionEvidence
 from juena.sandbox.policy import requires_execution_approval
 from juena.sandbox.runtime import _context_value
 

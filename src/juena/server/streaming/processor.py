@@ -17,7 +17,7 @@ from langgraph.types import Interrupt
 
 from juena.core.log import get_logger
 from juena.sandbox.approvals import interrupt_kind
-from juena.sandbox.schemas import EXECUTE_APPROVAL_KIND
+from juena.schema.sandbox import EXECUTE_APPROVAL_KIND
 from juena.server.errors import MessageProcessingError, StreamingError
 from juena.server.streaming import events
 from juena.server.streaming.handlers import (
