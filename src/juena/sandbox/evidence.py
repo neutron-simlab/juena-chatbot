@@ -33,6 +33,15 @@ class SandboxExecutionEvidence(BaseModel):
     dropped: list[tuple[str, str]] = Field(default_factory=list)
 
     @property
+    def attempted(self) -> bool:
+        """Whether a command actually reached the worker.
+
+        A `skipped` export was refused before running, so counting it as a
+        failure would report a run as broken when nothing was even tried.
+        """
+        return self.status != "skipped"
+
+    @property
     def succeeded(self) -> bool:
         return self.status == "completed" and self.exit_code == 0
 

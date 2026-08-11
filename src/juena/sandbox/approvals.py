@@ -13,15 +13,14 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt
 
-from juena.agents.ask_user import CLARIFICATION_KIND
 from juena.sandbox.artifacts import get_artifact_store
 from juena.sandbox.schemas import (
+    CLARIFICATION_KIND,
+    EXECUTE_APPROVAL_KIND,
     ApprovalResumeInput,
     ClarificationResumeInput,
     ResumeInput,
 )
-
-EXECUTE_APPROVAL_KIND = "execute_approval"
 
 
 class ApprovalError(ValueError):

@@ -109,6 +109,22 @@ def test_a_run_where_every_command_failed_is_unverified(store) -> None:
     assert "failed (exit 1), completed (exit 0)" in recovered
 
 
+def test_a_refused_export_alone_does_not_condemn_the_run(store) -> None:
+    """`skipped` never reached the worker, so it is not a failed command."""
+
+    middleware = SpecialistOutcomeMiddleware(specialist_name="software-specialist")
+    state = _state(
+        sandbox_execution_events=[
+            {"command": "base64 /workspace/outputs/p.png", "status": "skipped", "exit_code": 0}
+        ],
+    )
+
+    package = _package(middleware, state)
+
+    assert "STATUS: VERIFIED" in package
+    assert "Every sandbox command in this run failed" not in package
+
+
 def test_only_artifacts_from_this_run_are_reported(store) -> None:
     middleware = SpecialistOutcomeMiddleware(specialist_name="software-specialist")
     store.register_artifact(

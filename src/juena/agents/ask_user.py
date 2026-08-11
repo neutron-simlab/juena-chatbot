@@ -6,7 +6,8 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CLARIFICATION_KIND = "clarification"
+from juena.sandbox.schemas import CLARIFICATION_KIND
+
 MAX_OPTIONS = 4
 
 ASK_USER_DESCRIPTION = """Ask the user one question and wait for their answer.

@@ -1,6 +1,6 @@
 ---
 name: jscatter
-description: Analyze, model, fit, and plot neutron and X-ray scattering data with JScatter. Use for JScatter code or data involving dataArray/dataList, simultaneous and constrained fits, SANS/SAXS reduction and resolution smearing, form and structure factors, NSE/QENS or other dynamics, biomolecular scattering, DLS/CONTIN, headless plots, result validation, or debugging JScatter APIs and workflows.
+description: Analyze, model, fit, and plot neutron and X-ray scattering data with JScatter. Use for JScatter code or data involving dataArray/dataList, simultaneous and constrained fits, SANS/SAXS reduction and resolution smearing, form and structure factors, NSE/QENS or other dynamics, biomolecular scattering, DLS/CONTIN, headless plots, result validation, bundled example datasets for demonstrations, or debugging JScatter APIs and workflows.
 ---
 
 # JScatter
@@ -11,7 +11,12 @@ signatures.
 
 ## Establish the evidence baseline
 
-1. Inspect the staged inputs that the task depends on. Never alter `/inputs`.
+1. Inspect the staged inputs that the task depends on. Never alter `/inputs`. When
+   the task needs data and none was supplied, JScatter ships its own example
+   datasets under `js.examples.datapath` — see
+   [example-data.md](references/example-data.md). Use the user's data whenever it
+   exists, and state plainly whenever a result came from bundled example data
+   instead.
 2. If executing, import `jscatter as js` and record `js.__version__` before analysis.
 3. Treat version `1.9.0.1` as this skill's documented baseline. If the installed
    version differs, disclose the mismatch and verify every used signature against
@@ -38,6 +43,11 @@ signatures.
   diffusion, normal modes, and DLS/CONTIN.
 - Read [execution-recipes.md](references/execution-recipes.md) only when writing or
   running JScatter code, producing plots, or saving fit results.
+- Read [example-data.md](references/example-data.md) when the task needs data that
+  the user did not supply — a demonstration, a reproduction of a documented
+  workflow, or a check that a model behaves before applying it to real data. It
+  lists each bundled file with its verified shape, columns, and loader, including
+  the several files that need a non-obvious reader.
 
 Read more than one reference only when the task genuinely crosses those boundaries.
 

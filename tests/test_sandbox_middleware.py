@@ -63,6 +63,11 @@ def _message(result) -> ToolMessage:
     )
 
 
+def _events(result) -> list[dict]:
+    assert isinstance(result, Command)
+    return result.update["sandbox_execution_events"]
+
+
 def _filenames(store) -> list[str]:
     return [item["filename"] for item in store.claim_for_message("user-a", "thread-a")]
 
@@ -197,6 +202,42 @@ def test_unauthenticated_run_is_not_recorded(store) -> None:
 
     assert _message(result).text == "plot written\n"
     assert _filenames(store) == []
+
+
+def test_a_failed_run_is_still_evidence_without_an_identity(store) -> None:
+    """Audit records need a user id; proving what ran must not.
+
+    Gating both on the identity let a missing user id erase the record of a
+    failed command, which downstream reads as "nothing ran" -- fail-open on
+    exactly the path that has to fail closed.
+    """
+    middleware = SandboxExecutionMiddleware()
+    request = _request("python fails.py")
+    request.runtime.context = SimpleNamespace(user_id=None, thread_id=None)
+
+    result = middleware.wrap_tool_call(
+        request, _handler("boom", status="failed", exit_code=1)
+    )
+
+    events = _events(result)
+    assert [(item["status"], item["exit_code"]) for item in events] == [("failed", 1)]
+    assert _message(result).status == "error"
+    assert _filenames(store) == []
+
+
+def test_a_refused_export_is_recorded_but_is_not_a_failed_run(store) -> None:
+    """The backend skips these before they run, so they must not read as failures."""
+    middleware = SandboxExecutionMiddleware()
+    command = "base64 /workspace/outputs/plot.png"
+
+    result = middleware.wrap_tool_call(
+        _request(command), _handler("already collected", status="skipped", exit_code=0)
+    )
+
+    events = _events(result)
+    assert [item["status"] for item in events] == ["skipped"]
+    # Guidance the model should act on, not a tool error to retry around.
+    assert _message(result).status == "success"
 
 
 def test_nonzero_execution_is_error_and_preserves_typed_evidence(store) -> None:

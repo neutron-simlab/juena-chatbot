@@ -42,13 +42,12 @@ from juena.server.database import get_db_session
 from juena.server.database.models import utc_now
 from juena.sandbox.runtime import delete_runtime_workspace, stage_runtime_inputs
 from juena.sandbox.approvals import (
-    EXECUTE_APPROVAL_KIND,
     ApprovalError,
     build_resume_command,
     get_first_pending_interrupt,
 )
 from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.schemas import ResumeInput
+from juena.sandbox.schemas import EXECUTE_APPROVAL_KIND, ResumeInput
 
 logger = get_logger(__name__)
 

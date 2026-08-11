@@ -20,6 +20,13 @@ class ArtifactRef(BaseModel):
     created_at: datetime
 
 
+# The two interrupt kinds that pause a turn. Defined here, next to the resume
+# bodies that answer them, so the streaming layer can classify an interrupt
+# without importing the agent package that raises it.
+EXECUTE_APPROVAL_KIND = "execute_approval"
+CLARIFICATION_KIND = "clarification"
+
+
 class _ResumeBase(BaseModel):
     thread_id: str = Field(min_length=1, max_length=255)
     interrupt_id: str = Field(min_length=1, max_length=255)

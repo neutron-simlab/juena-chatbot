@@ -95,27 +95,38 @@ class SandboxExecutionState(AgentState):
 
 
 class SandboxExecutionMiddleware(AgentMiddleware[SandboxExecutionState]):
-    """Record the approved sandbox command and its output as artifacts.
+    """Capture typed execution evidence, and record approved commands as artifacts.
 
     `HumanInTheLoopMiddleware` raises its approval interrupt in `after_model`,
     which runs before tools execute. Reaching `wrap_tool_call` therefore means
     the human has already approved -- and `request.tool_call` carries the final,
     post-edit command. No approval state has to be stored or matched by text.
+
+    The two jobs are deliberately kept apart. Evidence is what later proves a
+    command ran and what it exited with, so it is captured for every `execute`
+    call; only the audit bookkeeping needs an authenticated identity. Gating
+    both on the identity would turn a missing user id into a silently
+    fail-open run.
     """
 
-    def _before(self, request: Any) -> tuple[str, str, str | None, str] | None:
-        """Persist the command about to run; return the identity to reuse."""
+    @staticmethod
+    def _command(request: Any) -> str | None:
+        """The command this call will run, or None when it is not an execute."""
         tool_call = request.tool_call
         if not isinstance(tool_call, dict) or tool_call.get("name") != "execute":
-            return None
-        if not requires_execution_approval(request):
-            return None
-        identity = _identity(getattr(request, "runtime", None))
-        if identity is None:
             return None
         args = tool_call.get("args")
         command = args.get("command") if isinstance(args, dict) else None
         if not isinstance(command, str) or not command.strip():
+            return None
+        return command
+
+    def _before(self, request: Any, command: str) -> tuple[str, str, str | None, str] | None:
+        """Persist the command about to run; return the identity to reuse."""
+        if not requires_execution_approval(request):
+            return None
+        identity = _identity(getattr(request, "runtime", None))
+        if identity is None:
             return None
         user_id, thread_id, run_id = identity
         store = get_artifact_store()
@@ -176,8 +187,10 @@ class SandboxExecutionMiddleware(AgentMiddleware[SandboxExecutionState]):
                     exit_code=None,
                 )
             ]
-        if message is not None:
-            message.status = "success" if events[-1].succeeded else "error"
+        last = events[-1]
+        # A refused export never ran, so its guidance is not a tool failure.
+        if message is not None and last.attempted:
+            message.status = "success" if last.succeeded else "error"
         update = getattr(result, "update", None)
         merged = dict(update) if isinstance(update, dict) else {}
         if isinstance(result, ToolMessage):
@@ -194,23 +207,27 @@ class SandboxExecutionMiddleware(AgentMiddleware[SandboxExecutionState]):
         request: Any,
         handler: Callable[[Any], Any],
     ) -> Any:
-        record = self._before(request)
-        if record is None:
+        command = self._command(request)
+        if command is None:
             return handler(request)
+        record = self._before(request, command)
         with capture_sandbox_execution() as events:
             result = handler(request)
-        self._after(record, result)
-        return self._with_evidence(result, record[3], events)
+        if record is not None:
+            self._after(record, result)
+        return self._with_evidence(result, command, events)
 
     async def awrap_tool_call(
         self,
         request: Any,
         handler: Callable[[Any], Awaitable[Any]],
     ) -> Any:
-        record = self._before(request)
-        if record is None:
+        command = self._command(request)
+        if command is None:
             return await handler(request)
+        record = self._before(request, command)
         with capture_sandbox_execution() as events:
             result = await handler(request)
-        self._after(record, result)
-        return self._with_evidence(result, record[3], events)
+        if record is not None:
+            self._after(record, result)
+        return self._with_evidence(result, command, events)

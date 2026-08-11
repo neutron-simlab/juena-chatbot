@@ -60,10 +60,6 @@ def _executions(state: dict[str, Any]) -> list[SandboxExecutionEvidence]:
     return events
 
 
-def _bullets(label: str, items: list[str]) -> list[str]:
-    return [f"{label}:", *[f"- {item}" for item in items]] if items else []
-
-
 def _report_block(report: SpecialistReport | None) -> str:
     if report is None:
         return f"{REPORT_OPEN}\nNone returned.\n{REPORT_CLOSE}"
@@ -74,7 +70,7 @@ def _report_block(report: SpecialistReport | None) -> str:
         ("Limitations", report.limitations),
     ):
         if items:
-            lines.extend(["", *_bullets(label, items)])
+            lines.extend(["", f"{label}:", *[f"- {item}" for item in items]])
     body = "\n".join(lines)
     return f"{REPORT_OPEN}\n{body}\n{REPORT_CLOSE}"
 
@@ -188,7 +184,8 @@ class SpecialistOutcomeMiddleware(AgentMiddleware[SpecialistOutcomeState]):
         failures: list[str] = []
         if report is None:
             failures.append(NO_REPORT)
-        if executions and not any(event.succeeded for event in executions):
+        attempted = [event for event in executions if event.attempted]
+        if attempted and not any(event.succeeded for event in attempted):
             failures.append(NO_SUCCESSFUL_RUN)
 
         if report is not None and undelivered:

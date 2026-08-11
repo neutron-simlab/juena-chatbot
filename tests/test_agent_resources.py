@@ -43,6 +43,7 @@ def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
     assert reference_paths == {
         "references/data-and-fitting.md",
         "references/dynamics-bio-and-dls.md",
+        "references/example-data.md",
         "references/execution-recipes.md",
         "references/sas-and-static-models.md",
     }
@@ -58,6 +59,16 @@ def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
     assert "is not mounted inside the" in recipes
     assert "before every fitting or plotting" in recipes
     assert "`write_file` will not overwrite" in recipes
+
+    # Bundled example data is a real fallback, so the reference has to keep the
+    # loader details that a plain js.dL gets wrong, and the honesty rule.
+    example_data = (
+        JSCATTER_SKILL / "references/example-data.md"
+    ).read_text(encoding="utf-8")
+    assert "js.examples.datapath" in example_data
+    assert "Never present example data as the user's data." in example_data
+    assert "There is no\n`js.readinx`" in example_data
+    assert "unsupported locale setting" in example_data
 
     interface = yaml.safe_load(
         (JSCATTER_SKILL / "agents/openai.yaml").read_text(encoding="utf-8")

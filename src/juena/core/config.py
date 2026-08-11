@@ -53,8 +53,8 @@ class Config:
     # =============================================================================
     
     # Provider selection
-    DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "openai")
-    FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "openai")
+    DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "blablador")
+    FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "blablador")
     
     # Provider-specific default models
     # OpenAI (OpenAI API)

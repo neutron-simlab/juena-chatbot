@@ -134,6 +134,17 @@ not from the original file indices.
 
 Use `js.dL(path_or_glob)` instead when every block or multiple files must be retained.
 
+When the task needs data the user did not supply, JScatter ships its own datasets
+inside the installed package:
+
+```python
+data = js.dL(js.examples.datapath + "/exampledata.dat")
+```
+
+See [example-data.md](example-data.md) for each bundled file with its verified
+shape, columns, and loader — several need a non-obvious reader. Always prefer the
+user's own data, and state when a result came from example data instead.
+
 ## Inspect before assigning meaning
 
 Run this inspection before a fit or unit conversion:

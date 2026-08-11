@@ -288,7 +288,7 @@ def _stream_and_display_chunks(
     response_text = ""
     received_complete_message = False
     pending_artifacts: list[dict[str, Any]] = []
-    waiting_for_approval = False
+    waiting_for_user = False
 
     try:
         with st.status("Thinking…", expanded=False) as status:
@@ -303,7 +303,7 @@ def _stream_and_display_chunks(
                     approvals = dict(st.session_state.get("pending_approvals") or {})
                     approvals[st.session_state.thread_id] = chunk
                     st.session_state.pending_approvals = approvals
-                    waiting_for_approval = True
+                    waiting_for_user = True
                     status.update(
                         label=(
                             "Waiting for confirmation"
@@ -324,7 +324,7 @@ def _stream_and_display_chunks(
                     pending_artifacts,
                 )
 
-            if not waiting_for_approval:
+            if not waiting_for_user:
                 status.update(label="Done", state="complete", expanded=False)
 
         # Finalize message display
@@ -542,14 +542,14 @@ def _render_question_card(
     ]
     chosen: str | None = None
     if options:
-        for index, option in enumerate(st.columns(len(options))):
-            if option.button(
-                options[index],
+        for index, (column, option) in enumerate(zip(st.columns(len(options)), options)):
+            if column.button(
+                option,
                 key=f"clarify_option:{keys}:{index}",
                 use_container_width=True,
                 disabled=disabled,
             ):
-                chosen = options[index]
+                chosen = option
 
     typed = st.text_area(
         "Other…" if options else "Your answer",
