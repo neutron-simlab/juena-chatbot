@@ -386,22 +386,34 @@ class AgentClient:
         *,
         thread_id: str,
         interrupt_id: str,
-        decision: str,
+        decision: str | None = None,
         edited_command: str | None = None,
+        answer: str | None = None,
         model: str | None = None,
         provider: str | Provider | None = None,
     ) -> Generator[ChatMessage | dict, None, None]:
-        """Resume a pending sandbox command after a user decision."""
+        """Resume a pending sandbox command, or answer a pending question.
+
+        Pass ``decision`` for a sandbox approval, or ``answer`` to reply to an
+        ``ask_user`` question. The server discriminates on ``kind``.
+        """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        if (decision is None) == (answer is None):
+            raise AgentClientError("Pass exactly one of decision or answer")
 
         payload: dict[str, Any] = {
             "thread_id": thread_id,
             "interrupt_id": interrupt_id,
-            "decision": decision,
         }
-        if edited_command is not None:
-            payload["edited_command"] = edited_command
+        if answer is not None:
+            payload["kind"] = "clarification"
+            payload["answer"] = answer
+        else:
+            payload["kind"] = "execute_approval"
+            payload["decision"] = decision
+            if edited_command is not None:
+                payload["edited_command"] = edited_command
         if model:
             payload["model"] = model
         if provider_value := _provider_value(provider):
@@ -445,14 +457,19 @@ class AgentClient:
             raise AgentClientError("Error: Server returned an empty generated file")
         return response.content
 
-    def get_pending_approval(
+    def get_pending_interrupt(
         self,
         thread_id: str,
         *,
         model: str | None = None,
         provider: str | Provider | None = None,
     ) -> dict[str, Any] | None:
-        """Return a thread's pending sandbox confirmation, if one exists."""
+        """Return a thread's pending sandbox confirmation or question, if any.
+
+        The payload keeps its own ``type`` (``approval_required`` or
+        ``clarification_required``), so callers dispatch on that rather than on
+        which key it arrived under.
+        """
         params = {
             key: value
             for key, value in {
@@ -463,7 +480,7 @@ class AgentClient:
         }
         try:
             response = self._client.get(
-                f"{self.base_url}/threads/{thread_id}/pending-approval",
+                f"{self.base_url}/threads/{thread_id}/pending-interrupt",
                 params=params,
                 headers=self._headers,
                 timeout=self.timeout,
@@ -473,9 +490,11 @@ class AgentClient:
         except (httpx.HTTPError, ValueError) as e:
             if isinstance(e, httpx.HTTPError):
                 raise AgentClientError(_http_error_message(e))
-            raise AgentClientError("Error: Server returned an invalid approval response") from e
-        approval = payload.get("approval") if isinstance(payload, dict) else None
-        return approval if isinstance(approval, dict) else None
+            raise AgentClientError("Error: Server returned an invalid interrupt response") from e
+        if not isinstance(payload, dict):
+            return None
+        pending = payload.get("approval") or payload.get("clarification")
+        return pending if isinstance(pending, dict) else None
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """

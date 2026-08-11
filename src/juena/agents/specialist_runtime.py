@@ -19,12 +19,13 @@ from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     ModelFallbackMiddleware,
     ModelRetryMiddleware,
-    TodoListMiddleware,
     ToolCallLimitMiddleware,
     ToolRetryMiddleware,
 )
 
 from juena.agents.backends import ReadOnlyFilesystemBackend, ReadOnlyInputsStateBackend
+from juena.agents.loop_guard import RepeatedToolCallMiddleware
+from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.core.config import global_config
 from juena.core.llms_providers import build_chat_model, get_available_providers, get_default_model
 from juena.core.log import get_logger
@@ -37,6 +38,7 @@ SUPERVISOR_MODEL_CALL_LIMIT = 50
 SUPERVISOR_TOOL_CALL_LIMIT = 100
 SPECIALIST_MODEL_CALL_LIMIT = 60
 SPECIALIST_TOOL_CALL_LIMIT = 150
+ASK_USER_CALL_LIMIT = 3
 MODEL_MAX_RETRIES = 3
 TOOL_MAX_RETRIES = 2
 
@@ -139,6 +141,13 @@ def resilience_middleware(
         ToolRetryMiddleware(max_retries=TOOL_MAX_RETRIES),
         ModelCallLimitMiddleware(run_limit=model_call_limit, exit_behavior="end"),
         ToolCallLimitMiddleware(run_limit=tool_call_limit, exit_behavior="continue"),
+        # Asking is cheap for the model and expensive for the user. Cap it so a
+        # stuck agent cannot turn one turn into an interrogation.
+        ToolCallLimitMiddleware(
+            tool_name="ask_user",
+            run_limit=ASK_USER_CALL_LIMIT,
+            exit_behavior="continue",
+        ),
     ])
     return middleware
 
@@ -170,11 +179,18 @@ def build_specialist_middleware(
     filesystem_tool_descriptions: dict[str, str],
     skills_dir: Path | None,
     skills_label: str,
+    specialist_name: str,
     enable_execution_approval: bool = False,
 ) -> list[Any]:
     """Build the common middleware stack while keeping agent choices local."""
 
-    middleware: list[Any] = [TodoListMiddleware()]
+    # A specialist receives one already-scoped objective from the supervisor.
+    # Do not expose write_todos here: it adds planning churn without contributing
+    # execution or report evidence, and models can loop on identical todo updates.
+    middleware: list[Any] = [
+        SpecialistOutcomeMiddleware(specialist_name=specialist_name),
+        RepeatedToolCallMiddleware(),
+    ]
     if has_authored_skills(skills_dir):
         middleware.append(
             SkillsMiddleware(

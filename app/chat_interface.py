@@ -183,6 +183,14 @@ def is_approval_chunk(chunk: Any) -> bool:
     return isinstance(chunk, dict) and chunk.get("type") == "approval_required"
 
 
+def is_interrupt_chunk(chunk: Any) -> bool:
+    """Whether a stream chunk pauses the turn to wait on the user."""
+    return isinstance(chunk, dict) and chunk.get("type") in {
+        "approval_required",
+        "clarification_required",
+    }
+
+
 def is_artifact_chunk(chunk: Any) -> bool:
     """Whether a stream chunk contains one generated plot."""
     return isinstance(chunk, dict) and chunk.get("type") == "artifact"
@@ -291,12 +299,19 @@ def _stream_and_display_chunks(
                 if is_artifact_chunk(chunk):
                     pending_artifacts.append(chunk)
                     continue
-                if is_approval_chunk(chunk):
+                if is_interrupt_chunk(chunk):
                     approvals = dict(st.session_state.get("pending_approvals") or {})
                     approvals[st.session_state.thread_id] = chunk
                     st.session_state.pending_approvals = approvals
                     waiting_for_approval = True
-                    status.update(label="Waiting for confirmation", expanded=False)
+                    status.update(
+                        label=(
+                            "Waiting for confirmation"
+                            if is_approval_chunk(chunk)
+                            else "Waiting for your answer"
+                        ),
+                        expanded=False,
+                    )
                     continue
 
                 response_text, received_complete_message = process_stream_chunk(
@@ -373,12 +388,13 @@ def stream_and_display_response(
 
 def stream_and_display_resume(
     approval: dict[str, Any],
-    decision: str,
+    decision: str | None,
     message_placeholder,
     *,
     edited_command: str | None = None,
+    answer: str | None = None,
 ) -> None:
-    """Resume the interrupted turn after the user clicks a decision."""
+    """Resume the interrupted turn after a decision or an answer."""
     thread_id = st.session_state.thread_id
     interrupt_id = str(approval.get("interrupt_id") or "")
     approvals = dict(st.session_state.get("pending_approvals") or {})
@@ -395,6 +411,7 @@ def stream_and_display_resume(
                 interrupt_id=interrupt_id,
                 decision=decision,
                 edited_command=edited_command,
+                answer=answer,
                 provider=st.session_state.selected_provider,
                 model=st.session_state.selected_model,
             )
@@ -500,8 +517,97 @@ def _render_approval_card(
     return decision, edited_command, edit_clicked
 
 
-def render_pending_approval() -> bool:
-    """Render click-first controls for the current thread's pending command."""
+def _render_question_card(
+    clarification: dict[str, Any],
+    *,
+    keys: str,
+    disabled: bool,
+    status: str = "",
+) -> str | None:
+    """Draw the question card once, returning the user's answer when given.
+
+    Mirrors `_render_approval_card`: with ``disabled`` set every control is
+    greyed out so the caller can redraw an inert copy while the turn resumes.
+    """
+    asked_by = str(clarification.get("asked_by") or "").strip()
+    st.subheader("A question for you")
+    if asked_by:
+        st.caption(f"asked by `{asked_by}`")
+    st.write(str(clarification.get("question") or ""))
+
+    options = [
+        str(option)
+        for option in (clarification.get("options") or [])
+        if str(option).strip()
+    ]
+    chosen: str | None = None
+    if options:
+        for index, option in enumerate(st.columns(len(options))):
+            if option.button(
+                options[index],
+                key=f"clarify_option:{keys}:{index}",
+                use_container_width=True,
+                disabled=disabled,
+            ):
+                chosen = options[index]
+
+    typed = st.text_area(
+        "Other…" if options else "Your answer",
+        key=f"clarify_text:{keys}",
+        height=90,
+        disabled=disabled,
+        placeholder="Answer in your own words",
+    )
+    sent = st.button(
+        "Send",
+        icon=":material/send:",
+        type="primary",
+        key=f"clarify_send:{keys}",
+        disabled=disabled,
+    )
+    if status:
+        st.caption(status)
+
+    if chosen:
+        return chosen
+    return typed.strip() if sent and typed and typed.strip() else None
+
+
+def _render_pending_clarification(clarification: dict[str, Any]) -> bool:
+    """Render the question card and resume the turn once it is answered."""
+    interrupt_id = str(clarification.get("interrupt_id") or "")
+    if not interrupt_id:
+        return False
+    answer_key = f"clarify_answer:{st.session_state.thread_id}:{interrupt_id}"
+    answered = str(st.session_state.get(answer_key) or "")
+
+    slot = st.empty()
+    with slot.container(border=True):
+        answer = _render_question_card(
+            clarification,
+            keys=interrupt_id,
+            disabled=bool(answered),
+            status="Answered. Continuing…" if answered else "",
+        )
+    if not answer:
+        return False
+
+    st.session_state[answer_key] = answer
+    with slot.container(border=True):
+        _render_question_card(
+            clarification,
+            keys=f"{interrupt_id}:answered",
+            disabled=True,
+            status=f"Answered: {answer}",
+        )
+
+    with st.chat_message("assistant"):
+        stream_and_display_resume(clarification, None, st.empty(), answer=answer)
+    return True
+
+
+def render_pending_interrupt() -> bool:
+    """Render controls for the current thread's pending command or question."""
     approvals = st.session_state.get("pending_approvals") or {}
     approval = approvals.get(st.session_state.thread_id)
     checked_threads = set(st.session_state.get("approval_checked_threads") or ())
@@ -511,20 +617,24 @@ def render_pending_approval() -> bool:
         and st.session_state.thread_id not in checked_threads
     ):
         try:
-            approval = st.session_state.client.get_pending_approval(
+            approval = st.session_state.client.get_pending_interrupt(
                 st.session_state.thread_id,
                 provider=st.session_state.selected_provider,
                 model=st.session_state.selected_model,
             )
         except AgentClientError as exc:
-            st.warning(f"Unable to restore a pending command confirmation: {exc}")
+            st.warning(f"Unable to restore what this chat was waiting for: {exc}")
         checked_threads.add(st.session_state.thread_id)
         st.session_state.approval_checked_threads = checked_threads
         if isinstance(approval, dict):
             approvals = dict(approvals)
             approvals[st.session_state.thread_id] = approval
             st.session_state.pending_approvals = approvals
-    if not isinstance(approval, dict) or approval.get("type") != "approval_required":
+    if not isinstance(approval, dict):
+        return False
+    if approval.get("type") == "clarification_required":
+        return _render_pending_clarification(approval)
+    if approval.get("type") != "approval_required":
         return False
 
     interrupt_id = str(approval.get("interrupt_id") or "")
@@ -592,7 +702,7 @@ def render_chat_interface() -> None:
     for message in st.session_state.messages:
         render_message(message, show_system=st.session_state.show_system_messages)
 
-    if render_pending_approval():
+    if render_pending_interrupt():
         return
 
     # On an empty thread the composer sits directly under the title, with the

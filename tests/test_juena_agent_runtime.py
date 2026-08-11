@@ -11,13 +11,14 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware
-from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware import ModelRequest, ModelResponse, TodoListMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.store.memory import InMemoryStore
 
 from juena.agents import juena_agent
 from juena.agents import specialist_runtime
+from juena.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialists.neutron_research.agent import (
     NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION,
     NEUTRON_RESEARCH_SPECIALIST_NAME,
@@ -212,7 +213,7 @@ async def test_supervisor_assembly_registers_both_specialists(
 
     agent_kwargs = created["agent_kwargs"]
     assert agent_kwargs["model"] is supervisor_model
-    assert agent_kwargs["tools"] == []
+    assert [tool.name for tool in agent_kwargs["tools"]] == ["ask_user"]
     assert agent_kwargs["context_schema"] is RuntimeModelContext
     assert agent_kwargs["store"] is store
     assert created["graph_config"] == {"recursion_limit": 1000}
@@ -222,6 +223,9 @@ async def test_supervisor_assembly_registers_both_specialists(
     assert any(isinstance(item, FilesystemMiddleware) for item in middleware)
     assert any(isinstance(item, RuntimeModelMiddleware) for item in middleware)
     assert not any(isinstance(item, SkillsMiddleware) for item in middleware)
+
+    assert any(isinstance(item, RepeatedToolCallMiddleware) for item in middleware)
+    assert not any(isinstance(item, TodoListMiddleware) for item in middleware)
 
     subagents = next(item for item in middleware if isinstance(item, SubAgentMiddleware))
     assert subagents.subagent_names == {
@@ -233,7 +237,7 @@ async def test_supervisor_assembly_registers_both_specialists(
     assert SOFTWARE_SPECIALIST_DESCRIPTION in task_instructions
     assert NEUTRON_RESEARCH_SPECIALIST_NAME in task_instructions
     assert NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION in task_instructions
-    assert "Use one specialist by default" in task_instructions
+    assert "<verified_by_server>" in task_instructions
     assert "Launch multiple agents concurrently whenever possible" not in task_instructions
 
 

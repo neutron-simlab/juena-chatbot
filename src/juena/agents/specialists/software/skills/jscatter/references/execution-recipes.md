@@ -3,6 +3,12 @@
 Adapt these skeletons only after reading the relevant data and physics reference. Verify
 all signatures against the installed JScatter version.
 
+`/repos/...` is visible only to repository read tools and is not mounted inside the
+execution container. Copy no repository path into `execute`, `cd`, an import, a
+subprocess, or a script filename. Executed scripts belong under `/workspace`; staged
+user inputs are under `/inputs`. If a scratch script already exists, revise it with
+`edit_file` or write a new versioned filename because `write_file` will not overwrite.
+
 ## Contents
 
 - Start a headless analysis
@@ -29,6 +35,10 @@ OUTPUT = Path("/workspace/outputs")
 OUTPUT.mkdir(parents=True, exist_ok=True)
 print("JScatter", js.__version__)
 ```
+
+Keep `js.headless(True)` immediately after import and before every fitting or plotting
+operation. A fit may start xmgrace progress rendering even if no `GracePlot` is created
+explicitly.
 
 If the printed version is not `1.9.0.1`, inspect `help(...)` or matching source before
 using the remaining snippets.

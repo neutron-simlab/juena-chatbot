@@ -1,704 +1,414 @@
-# JüNA sandbox: implemented architecture and production gates
-
-This document is the maintained description of JüNA's scientific code-execution
-sandbox. It replaces the former `SANDBOX-PLAN.md` and
-`SANDBOX-IMPLEMENTATION.md`: the architecture is implemented, while the
-remaining work is deployment validation on the target Linux host.
-
-The operational installation procedure is kept separately in
-[`deploy/SANDBOX.md`](../deploy/SANDBOX.md). This document explains the design,
-security boundary, runtime lifecycle, artifact handling, tests, and the gates
-that must pass before production enables the feature.
-
-## Status
-
-- The application, Postgres job channel, host worker, rootless-Podman executor,
-  approval/resume flow, workspaces, artifact pipeline, audit records, and UI
-  rendering are implemented.
-- Development enables the sandbox through `docker-compose.dev.yml` and starts
-  the host worker through `./juena up`.
-- The base production configuration defaults to `SANDBOX_ENABLED=false`.
-- Production must remain disabled until the target-host checklist in
-  [Production enablement gates](#production-enablement-gates) passes.
-- The design is single-host and intentionally does not claim high availability
-  or exactly-once execution.
-
-## Purpose and scope
-
-The sandbox lets an authenticated user ask the software specialist to run
-scientific Python or shell commands and receive validated plots and result files
-in the chat. Model-authored commands must not gain access to JüNA credentials,
-Postgres, container-engine sockets, application data, another user's files, or
-the network.
-
-Implemented use cases include:
-
-- calculations with the fixed scientific Python environment;
-- PNG plot generation;
-- text, tabular, notebook, PDF, and NumPy result downloads;
-- persistent scratch work across commands in the same chat workspace;
-- read-only access to staged user inputs;
-- user approval, editing, or rejection before an `execute` call;
-- live status, artifact rendering, authenticated download, and chat reload.
-
-The following are deliberately out of scope:
-
-- runtime package installation or network access;
-- arbitrary HTML, SVG, executables, or archives as delivered artifacts;
-- GPU workloads;
-- long-lived containers or notebook kernels;
-- user-controlled images or container configuration;
-- scientific correctness guarantees;
-- multi-host scheduling or automatic worker failover.
-
-## Security model
-
-Human approval is not the security boundary. Repository text, uploaded data,
-and prompts are untrusted, and the generated command may be wrong or hostile.
-The container must remain contained even when the user approves such a command.
-
-The main threats are:
-
-1. prompt injection causing unintended execution;
-2. cross-user or cross-thread file access;
-3. access to host paths, application volumes, credentials, Postgres, or a
-   container-engine socket;
-4. network exfiltration;
-5. CPU, memory, process, disk, output, or job-slot exhaustion;
-6. stale or crashed work being executed again;
-7. generated files being presented as delivered when the application rejected
-   them.
-
-The implemented controls are layered:
-
-- authenticated runtime identity is converted into opaque tenant and workspace
-  identifiers;
-- Postgres admission and partial unique indexes isolate active tenants and
-  workspaces;
-- only the host worker receives the rootless Podman socket;
-- generated containers have no network, a read-only root filesystem, dropped
-  capabilities, `no-new-privileges`, and resource limits;
-- `/inputs` is read-only and `/workspace` is the only writable bind mount;
-- paths, owner markers, symlinks, file types, file contents, sizes, and image
-  dimensions are validated;
-- every output is either registered as an artifact or explicitly reported as
-  not delivered.
-
-The residual boundary is still a shared Linux kernel. Rootless Podman reduces
-host privilege but is not a virtual machine. `SANDBOX_OCI_RUNTIME=runsc` can add
-gVisor when it is installed and validated, but it is not assumed by the current
-implementation.
-
-## End-to-end architecture
-
-```text
-Authenticated user
-    |
-    v
-Supervisor delegates calculations/files to software-specialist
-    |
-    v
-FilesystemMiddleware exposes execute because the specialist's default backend
-is RuntimePodmanSandboxBackend
-    |
-    v
-HumanInTheLoopMiddleware pauses for approve / edit / reject
-    |
-    v
-Approved command becomes a queued sandbox_jobs row in Postgres
-    |
-    v
-Host worker claims the row with FOR UPDATE SKIP LOCKED
-    |
-    v
-One ephemeral rootless-Podman container mounts:
-  /workspace  read-write, persistent per user/thread
-  /inputs     read-only, replaced atomically when uploads change
-    |
-    v
-Worker removes the container, scans changed /workspace/outputs files,
-stores bounded command output and accepted filenames in sandbox_jobs
-    |
-    v
-Application polls the row, reads accepted files through the workspace guard,
-validates them again, and copies them into the authenticated artifact store
-    |
-    v
-SSE carries status and artifact metadata; PNGs may include bounded base64
-    |
-    v
-Streamlit renders the final answer, plots, and authenticated downloads
-```
-
-Postgres `sandbox_jobs` is the only application-to-worker control channel.
-There is no HTTP sandbox broker, RabbitMQ, AMQP, or engine socket in the JüNA
-container.
-
-## Agent and backend ownership
-
-Execution belongs only to `software-specialist`. The supervisor keeps its
-non-executing backend and cannot call `execute`; this limits the execution
-surface to delegated software work.
-
-The repository pins `deepagents==0.6.12`. Its `CompositeBackend.execute()`
-delegates to the default backend, so the execution-capable sandbox must be the
-software specialist's default rather than a path route. The implemented
-composition is:
-
-```text
-CompositeBackend
-  default: RuntimePodmanSandboxBackend
-  routes:
-    /inputs/ -> ReadOnlySandboxInputsBackend
-    /repos/  -> read-only repository cache, when configured
-    /skills/ -> read-only software-specialist skills, when authored
-  artifacts_root: /workspace
-```
-
-`RuntimePodmanSandboxBackend` is a concrete `BaseSandbox`. It resolves trusted
-`user_id`, `thread_id`, and `run_id` from the active LangGraph runtime for each
-operation, then creates a tenant-bound `PodmanSandboxBackend`. A process-global
-compiled graph therefore never captures one user's identity.
-
-Unmatched filesystem paths reach the sandbox default, but that does not expose
-host paths: the backend accepts only absolute virtual paths under `/workspace`
-and read-only `/inputs`. Traversal, `~`, symlink escape, relative paths, and
-recursive searches rooted at `/` are rejected.
-
-## Identity and workspace isolation
-
-The server derives two HMAC-SHA256 identifiers using
-`SANDBOX_IDENTITY_SECRET`:
-
-- `tenant_id = HMAC(user_id)` controls one active job per authenticated user;
-- `workspace_id = HMAC(user_id + NUL + thread_id)` selects one chat workspace.
-
-The raw user and thread identifiers are not used as directory names or worker
-admission keys. The secret is required to contain at least 32 characters when
-the sandbox is enabled.
-
-Each workspace root contains:
-
-```text
-<workspace-id>/
-  .owner             opaque tenant id
-  workspace/         persistent read-write files
-    outputs/         files intended for delivery
-  inputs/            atomically replaced staged uploads
-```
-
-`WorkspaceStore` verifies the owner marker on every operation and rejects
-symlinked workspace roots or owner files. Directories use mode `2770` and files
-use `0660`. The setgid bit and the production worker's `UMask=0007` allow the
-worker, its keep-id container, and the JüNA bind mount to share files without
-making them world-readable.
-
-Staged uploads are limited to 100 MB per replacement and mounted read-only in
-the container. Replacing the input set uses temporary and old directories plus
-atomic renames, so a command does not observe a partially staged set.
-
-The writable workspace persists across commands and turns for the same
-user/thread, but every command runs in a fresh container. Idle workspaces expire
-after 24 hours by default. Active workspaces are excluded from cleanup, and
-deleting a chat deletes its checkpoint, authenticated artifacts, and sandbox
-workspace when the workspace guard is available.
-
-## Approval and resume lifecycle
-
-`HumanInTheLoopMiddleware` interrupts only the software specialist's `execute`
-tool. The user can:
-
-- **approve** the exact command;
-- **edit** the command text and approve the edited command;
-- **reject** it without creating a job.
-
-The authenticated resume endpoint loads the pending LangGraph interrupt from
-the owned thread. It rejects stale IDs, replayed decisions, malformed
-interrupts, cross-user threads, non-`execute` actions, and empty edited
-commands. The server constructs the edited action itself, keeping the tool name
-and all policy-controlled execution settings unchanged.
-
-The approval card can be restored after a browser reload from the checkpoint.
-The resumed stream suppresses the interrupt ID just handled so it is not shown
-again. A resume continues the existing turn and keeps its artifact budget;
-starting a genuinely new message clears any abandoned in-memory artifact
-window left by a cancelled stream.
-
-Approval provides command visibility and compute consent. It does not protect
-the host: inherited filesystem operations are not all approval-gated, and users
-can approve unsafe code. Container and workspace controls remain authoritative.
-
-`SandboxExecutionMiddleware` records the final, post-edit approved command as
-`generated-command.sh` before execution and the model-visible tool output as
-`execution-output.txt` afterwards. These are record artifacts, budgeted
-separately from requested results.
-
-## Postgres job control plane
-
-The `sandbox_jobs` table stores transient execution metadata:
-
-- UUID job ID;
-- opaque tenant and workspace IDs;
-- command, timeout, and maximum output bytes;
-- status, output, exit code, and truncation flag;
-- accepted artifact filenames;
-- created, started, and finished timestamps.
-
-The state machine is:
-
-```text
-queued -> running -> completed | failed | timed_out
-```
-
-`busy` and `unavailable` are immediate API results, not stored statuses:
-
-- `unavailable` means no worker holds the worker-presence lock;
-- `busy` means global capacity, the tenant, or the workspace cannot admit a new
-  job.
-
-There is deliberately no waiting queue. Admission obtains a transaction-scoped
-global advisory lock, tries the workspace advisory lock, counts active rows,
-and inserts only when capacity exists. Partial unique indexes over
-`queued|running` rows enforce one active job per tenant and one per workspace as
-the database backstop. Busy or unavailable requests insert no row and consume
-no slot.
-
-The worker claims the oldest fresh queued row using `FOR UPDATE SKIP LOCKED`.
-Queued rows have a 15-second claim deadline; stale rows are never claimed and
-are failed by the application or worker cleanup pass. The application polls at
-250 ms until the row becomes terminal.
-
-## Worker ownership, recovery, and cleanup
-
-Only one worker process may operate. It holds a two-key Postgres session
-advisory lock on a dedicated, non-pooled connection for its lifetime. The
-application detects the worker by reading `pg_locks`; it never briefly acquires
-the lock as a health probe. A second worker exits immediately.
-
-At startup the worker:
-
-1. refuses to run as root;
-2. validates its concurrency, Podman socket, and fixed image;
-3. force-removes every container labelled `io.juena.sandbox.managed`;
-4. fails all queued or running rows left by the previous worker;
-5. starts the configured execution-slot threads and one cleanup thread.
-
-The worker never reattaches to a container and never reruns an interrupted job.
-Every container is force-removed in `finally`. Failure to remove a managed
-container is fatal to the slot and stops the worker rather than silently
-releasing capacity.
-
-Container creation and start are serialized because concurrent rootless-Podman
-starts were unreliable on the development host. Execution remains concurrent
-after start, so the lock does not reduce the configured number of running jobs.
-
-Every 15 seconds the cleanup thread fails stale queued jobs. Hourly it removes
-terminal rows older than 24 hours and idle workspaces older than the configured
-TTL, excluding active workspaces.
-
-## Container execution boundary
-
-The worker creates one container per command with the following defaults:
-
-| Control | Production default | Development launcher default |
-| --- | ---: | ---: |
-| Concurrent jobs | 4 | 2 |
-| CPU quota per job | 2 vCPU | 1 vCPU |
-| Memory per job | 4 GB | 2 GB |
-| Process limit | 256 PIDs | 256 PIDs |
-| `/tmp` tmpfs | 1 GB, `noexec` | 1 GB, `noexec` |
-| Command timeout | 600 seconds | 600 seconds |
-| Captured stdout/stderr | 100,000 bytes | 100,000 bytes |
-| Workspace logical limit | 5 GB | 5 GB |
-| Workspace idle TTL | 24 hours | 24 hours |
-
-The generated container additionally has:
-
-- rootless Podman and `userns=keep-id`;
-- the worker UID rather than container root;
-- `network=none`;
-- a read-only root filesystem;
-- all Linux capabilities dropped;
-- `no-new-privileges`;
-- a file-size ulimit equal to the workspace limit;
-- only the read-write workspace and read-only input mounts;
-- `HOME` and Matplotlib configuration under the disposable `/tmp` tmpfs;
-- no application environment, repository mounts, credentials, or engine
-  socket.
-
-Both `/usr/bin/timeout` inside the container and the host worker enforce the
-deadline. The worker allows a ten-second host grace period, then stops the
-container and still removes it.
-
-The fixed Python 3.11 image contains NumPy, SciPy, pandas, Matplotlib, seaborn,
-SymPy, scikit-learn, Pillow, Grace, shell utilities, and the repository-backed
-packages pinned in `src/juena/sandbox/repository-requirements.txt` (currently
-`jscatter==1.9.0.1`). The image build smoke-tests JScatter and its headless
-Grace plotting backend. `pip`, setuptools, wheel, and compilers are absent from
-the final runtime image.
-
-## Files and artifact delivery
-
-### Producer contract
-
-Commands may keep scratch files anywhere under `/workspace`. Only files the
-user should receive belong under `/workspace/outputs`. `/tmp` is not persistent:
-it is a fresh, `noexec` tmpfs for every command.
-
-The software-specialist prompt forbids raw base64, data-image URIs, file paths,
-`sandbox:` links, and Markdown images in its report. The application renders
-validated artifacts itself.
-
-### Worker scan
-
-After a command finishes and its container has been removed, the worker scans
-regular, non-symlinked files in `/workspace/outputs` whose modification time is
-at or after the job start. It preserves older outputs without recollecting them,
-so scripts and scratch work can be reused across commands.
-
-The worker records only accepted filenames in `sandbox_jobs.artifact_names`.
-Rejected names and reasons are appended to the existing job output, with at
-most eight detailed rejections plus an additional-count summary. This covers
-unsupported types, oversized files, the fifth PNG in one execution, and files
-beyond the eight-file execution limit.
-
-### Application validation and budgets
-
-The application reads accepted filenames through the workspace guard and
-validates their bytes again before copying them to the authenticated artifact
-store.
-
-| Boundary | Implemented limit |
-| --- | ---: |
-| PNGs accepted from one execution | 4 |
-| Total files accepted from one execution | 8 |
-| PNG size | 5 MB each |
-| Downloadable file size | 10 MB each |
-| PNG dimensions | 4096 px per edge and 16,000,000 pixels |
-| Transfer to or from a workspace operation | 100 MB |
-| Result images delivered in one turn | 8 |
-| Result bytes delivered in one turn | 64 MB |
-| Downloadable result count per turn | no count cap; byte cap applies |
-| Execution-record artifacts per turn | 40 |
-| Detailed queued undelivered notices | 8 plus omitted count |
-
-The downloadable whitelist is:
-
-```text
-.csv .ipynb .json .log .md .npy .npz .pdf .py .sh .tsv .txt
-```
-
-PNG is the only inline image type. HTML, SVG, executables, and unapproved
-archives are rejected. Text must be valid UTF-8 without NUL bytes; PDF, NPY, and
-NPZ files must have the expected headers; PNGs are decoded and verified with
-Pillow.
-
-Turn accounting separates requested results from application bookkeeping. The
-two execution records generated for every approved command do not consume the
-eight-image or 64 MB result budget. If the 40-record budget is exhausted, the
-command still runs; record persistence never blocks execution.
-
-### No silent delivery failures
-
-The delivery rule is: a relevant output is attached or explicitly reported as
-not delivered.
-
-There are several failure points, and each has a visible path:
-
-1. **Worker scan rejection.** The worker appends the bounded filename/reason
-   list to `sandbox_jobs.output` before saving the terminal row.
-2. **Post-run collection failure.** Missing reads, a busy workspace, invalid
-   content, or an application artifact-budget refusal is appended to the
-   `execute` tool result seen by the specialist.
-3. **Direct `write_file` registration failure.** The workspace write remains a
-   success because the bytes exist. The backend audits the failed registration
-   and queues an undelivered notice. A later approved execution reports it
-   early; if there is no later execution, `SandboxExecutionMiddleware` appends
-   it to the specialist's final report before the supervisor receives it.
-4. **Abandoned turn.** A new user message clears a stale pending window from a
-   cancelled or crashed stream; approval resume intentionally does not.
-
-Shared `undelivered_note()` wording tells the model that the user cannot see the
-file and forbids retry claims, paths, URLs, `sandbox:` links, or Markdown image
-markup. Notice details are bounded to prevent a batch failure from flooding the
-model context.
-
-### Persistence, SSE, and UI
-
-Accepted artifacts are copied eagerly out of the workspace into
-`SANDBOX_ARTIFACT_ROOT`. Content and JSON metadata are stored under a directory
-derived from the authenticated user ID. Retrieval requires that same user;
-guessing an artifact ID does not cross the ownership check.
-
-Artifact references are attached once to the supervisor's final `AIMessage`, so
-the LangGraph checkpoint and chat history retain the metadata. The live event
-queue sends an `artifact` SSE event for each file. Only validated PNGs include
-base64 for immediate inline rendering; other files are fetched through the
-authenticated artifact endpoint.
-
-Streamlit merges live and stored artifact metadata by artifact ID, renders PNGs
-beneath the final answer, provides download buttons, and avoids drawing the
-same artifact twice during one rerun. Historical assistant text is sanitized:
-dead local Markdown images are removed, `sandbox:` and `file:` links degrade to
-their label, and valid HTTP(S) images remain untouched.
-
-The artifact store is filesystem-backed rather than a database subsystem.
-Artifact metadata and bytes remain until chat deletion; the workspace may
-expire independently after its idle TTL because delivery uses the copied
-artifact, not a live workspace path.
-
-## Status and event streaming
-
-The backend emits sandbox statuses through LangGraph's custom stream writer.
-The server converts the graph stream into stable SSE payloads:
-
-| Event | Purpose |
-| --- | --- |
-| `thread` | establishes the thread ID before other content |
-| `approval_required` | command, limits, interrupt ID, and allowed decisions |
-| `sandbox_status` | queued, running, completed, failed, timed out, busy, or unavailable |
-| `artifact` | validated artifact metadata and optional inline PNG bytes |
-| `token` / `message` | assistant output |
-| `error` | user-visible stream failure |
-
-The stream processor accepts current v2 dictionary events and legacy tuple
-events. Specialist tokens and internal tool payloads are not shown as the user
-answer; specialist work is represented as activity until its final report is
-returned to the supervisor.
-
-## Audit trail
-
-`SANDBOX_AUDIT_FILE` is append-only JSONL. Implemented events include:
-
-- `sandbox_approval`: user, thread, interrupt, original command, edited command,
-  and decision;
-- `sandbox_execution_approved`: authenticated identity, run, and the command
-  that actually reached the execution middleware;
-- `sandbox_execution`: job ID, command, terminal status, exit code, attached
-  artifact IDs, and dropped filenames;
-- `sandbox_execution_skipped`: a redundant base64/data-URI export that the
-  application refused to run because output collection is automatic;
-- `artifact_dropped`: a direct workspace output that was written but could not
-  be registered, with its reason.
-
-The command and execution output are also retained as bounded record artifacts
-for the turn. Large scientific inputs and artifact contents are not duplicated
-into the JSONL audit file.
-
-Audit-file retention and rotation are deployment responsibilities; the
-application does not currently rotate this file.
-
-## Configuration and operations
-
-### Application settings
-
-| Variable | Meaning | Default |
+# JüNA sandbox and specialist execution audit
+
+This document is the authoritative audit and remediation record for JüNA's
+specialist execution path. It covers the supervisor, specialist agents,
+Deep Agents middleware, approval flow, Postgres job channel, rootless-Podman
+worker, artifact store, server streaming, and final user-visible response.
+
+Operational installation remains in
+[`deploy/SANDBOX.md`](../deploy/SANDBOX.md). This document records what is
+implemented, what the August 2026 incident proved, what it did not prove, and
+which controls must pass before production enablement.
+
+## Executive verdict
+
+The audited false JScatter fit and PNG claim was not caused by the sandbox
+executing successfully or by the artifact store losing a registered file. The
+sandbox retained a failed command, returned a nonzero result, and registered no
+result artifact. The false claim was created above that boundary:
+
+1. The software specialist ended with an incomplete progress sentence:
+   `Now let me check the jscatter skill documentation:`.
+2. The pinned Deep Agents subagent middleware accepted the last non-empty
+   assistant message as the delegated task result.
+3. The supervisor treated that text as a successful handoff and invented
+   JScatter APIs, numerical fit values, a PNG filename, and a visual
+   description without execution or artifact evidence.
+4. The server streamed the supervisor's answer because it had no typed
+   specialist-completion or evidence contract to reject it.
+
+This is a critical result-integrity defect at the agent/server contract. It
+does not, by itself, demonstrate a Podman isolation, Postgres lifecycle, or
+artifact-copying defect.
+
+The remediation policy is serial and fail closed. At most one specialist task
+may run for one user turn. A specialist result is user-visible only after the
+server verifies its structured completion state, required execution status,
+and required result artifacts. Skill usage is left to the model's lazy
+relevance decision. A single verified report is returned directly without
+supervisor rewriting.
+
+## Audit boundary and evidence
+
+The audit inspected the checked-out source, pinned `deepagents==0.6.12`
+implementation, specialist and supervisor prompts, middleware order, server
+stream filtering, sandbox job records, authenticated artifact state, persistent
+workspace contents, and representative saved chat threads.
+
+### Latest JScatter incident
+
+Thread `1a240294-6c00-41b2-b12b-4223d74b8d60` asked for a JScatter SAS fit and
+plot.
+
+| Layer | Observed evidence | Verdict |
 | --- | --- | --- |
-| `SANDBOX_ENABLED` | expose execution and initialize the application job pool | `false` |
-| `SANDBOX_STARTER_PREVIEW` | show the plot starter without claiming execution works | development only |
-| `SANDBOX_IDENTITY_SECRET` | HMAC tenant/workspace identity secret | required when enabled |
-| `SANDBOX_WORKSPACE_ROOT` | workspace bind mount as seen by JüNA | repository data path |
-| `SANDBOX_CONCURRENCY` | number of jobs the API admits | `4` |
-| `SANDBOX_EXECUTION_TIMEOUT_SECONDS` | maximum requested command duration | `600` |
-| `SANDBOX_MAX_OUTPUT_BYTES` | captured combined stdout/stderr | `100000` |
-| `SANDBOX_ARTIFACT_ROOT` | copied artifact content and metadata | repository data path |
-| `SANDBOX_AUDIT_FILE` | append-only JSONL audit file | repository data path |
+| Specialist | First delegation returned only the progress sentence quoted above | Incomplete handoff accepted |
+| Supervisor | Answer used nonexistent `js.models.Sphere`, `js.Data`, and `js.Fit` APIs and supplied invented fit values | Ungrounded synthesis |
+| Initial execution | No sandbox execution preceded the first claimed result | Claim had no execution evidence |
+| Follow-up jobs | Fourteen job records existed and none registered a result artifact | Job control retained the absence |
+| Failed command | `AttributeError: module 'jscatter' has no attribute 'models'` | Nonzero execution was visible |
+| Artifact store | No `sas_fit.png` artifact existed | Claimed image was not delivered |
+| Workspace | `/workspace/sas_fit_script.py` existed; `sas_fit.png` did not | Persistent workspace agreed with the artifact store |
+| Skill behavior | Skill metadata was available, but some branches inspected repositories or executed without first reading it | Prompt-only gate was bypassed |
 
-### Worker settings
+The specialist later correctly observed that the PNG was absent, but
+incorrectly said the workspace did not persist between executions. Workspaces
+are persistent per authenticated user and thread; containers are ephemeral per
+command.
 
-The worker reads `DATABASE_URL`, `SANDBOX_PODMAN_URI`, `SANDBOX_IMAGE`,
-`SANDBOX_WORKSPACE_ROOT`, `SANDBOX_CONCURRENCY`, CPU, memory, PID, tmpfs,
-workspace-limit, idle-TTL, and optional OCI-runtime settings. The application
-and worker `SANDBOX_CONCURRENCY` values must match: one controls admission and
-the other controls execution slots.
+### Later three-helper follow-up
 
-See [`deploy/sandbox-worker.env.example`](../deploy/sandbox-worker.env.example)
-for the complete production environment and
-[`deploy/juena-sandbox-worker.service`](../deploy/juena-sandbox-worker.service)
-for the hardened systemd unit.
+A user-supplied Claude Code audit records a later attempt that exposed four
+additional failure modes in the same workflow:
 
-### Development
+1. The supervisor split one JScatter objective among three helpers: one read
+   examples and wrote a script without running it, one searched for the output,
+   and one received only the script and was told to execute it. The executing
+   helper did not receive the evidence used by the writing helper.
+2. The first script used SasView-style `js.models.Sphere`, `js.Data.from_file`,
+   and `js.Fit` calls rather than JScatter's `js.ff.sphere` and `data.fit` API.
+   It failed immediately with `AttributeError`.
+3. The executing helper probed the installed package, derived a corrected API,
+   and attempted to replace `/workspace/sas_fit_script.py`. Deep Agents'
+   `write_file` create-only behavior rejected the existing path, so the
+   corrected script was not saved before the run ended.
+4. Repository paths under `/repos/...` are virtual routes exposed by read
+   tools, not paths mounted inside execution containers. Skill wording did not
+   make that boundary explicit, so `cd /repos/...` and executing repository
+   examples failed. Separately, JScatter fits can start xmgrace progress
+   rendering; `js.headless(True)` must be called before fitting, not merely
+   before an explicit plotting call.
 
-Install Podman once, then use:
+The key conclusion is narrower than "the model could not fix the API": the
+executing helper did correct it, but fragmented delegation withheld its source
+context and the scratch-file lifecycle prevented the correction from replacing
+the failed script. These are orchestration and tool-contract defects, not
+evidence that the corrected JScatter calculation itself failed.
 
-```bash
-brew install podman
-podman machine init --memory 8192
-./juena env
-./juena up
+### Skill-decision loop after the first remediation
+
+The first remediation added a blocking runtime gate and a synthetic
+`skill_decision` tool. A later live trace emitted the same no-match result
+eleven times: `Skill gate recorded: no available skill applies to this
+objective.` This showed that the gate had converted progressive disclosure
+into a compulsory protocol. The model repeatedly satisfied the protocol even
+though no skill was relevant.
+
+[Deep Agents' skill contract](https://docs.langchain.com/oss/python/deepagents/skills)
+leaves relevance to the model: metadata is always available, while `SKILL.md`
+and references are read only when the model judges them useful. Therefore skill
+selection is not an execution-truth boundary and must not block repository,
+documentation, filesystem, or sandbox tools. The correct control is passive
+observation of successful exact `SKILL.md` reads, with no no-match tool and no
+outcome failure when the model uses no skill.
+
+### Specialist todo loop after script creation
+
+A later software-specialist trace completed `write_file` for a requested plot
+script, then called `write_todos` repeatedly without reaching `execute`. This
+was possible because every specialist was explicitly given LangChain's
+`TodoListMiddleware`. That middleware injects both the planning tool and strong
+instructions to update it after each step, but its guard only rejects multiple
+parallel todo calls in one model response; it does not stop the same update
+from recurring across model turns.
+
+The specialists already receive one serial, scoped objective and must finish
+with a typed report. Todo state is neither execution evidence nor report
+evidence. The correct control is therefore to omit `TodoListMiddleware` from
+specialists, making `write_todos` unavailable there. The supervisor retains its
+planning middleware for pre-delegation conversation and routing.
+
+### Surviving successful JScatter thread
+
+Thread `738e6d06-3bb9-4828-8f69-642ba32d436b` demonstrates that the underlying
+pipeline can work: later exit-zero jobs registered `initial_plot.png` and
+`multicontrastfit.png`. Earlier jobs in that thread failed on invalid Grace
+usage and a missing `gracebat`. This is evidence for pipeline capability, not
+evidence that every agent answer is grounded or that the target production host
+is ready.
+
+### Historical evidence
+
+The previously reported thread `e39cc824-c29f-4c2d-8699-3405d659475a` is no
+longer present in the current database. Earlier observations about that thread
+must therefore be treated as historical rather than reproducible current-state
+evidence.
+
+## End-to-end truth ownership
+
+```text
+Authenticated user request
+    |
+    v
+Supervisor creates a typed specialist contract
+    |
+    v
+Specialist optionally reads a relevant skill through progressive disclosure
+    |
+    v
+Human approval for software-specialist execute calls
+    |
+    v
+Postgres sandbox_jobs admission and host worker claim
+    |
+    v
+Ephemeral networkless rootless-Podman container
+    |
+    v
+Persistent per-user/thread workspace and changed output scan
+    |
+    v
+Authenticated artifact registration and SSE delivery
+    |
+    v
+Specialist outcome validator compares report with direct evidence
+    |
+    v
+Root finalizer returns the verified report or a fail-closed limitation
 ```
 
-`./juena up` starts the Podman machine when needed, builds
-`deploy/sandbox/Dockerfile`, starts JüNA and Postgres with the development
-Compose overlay, waits for `sandbox_jobs`, and starts the host worker. Use:
+Truth is split deliberately:
 
-```bash
-./juena ps
-./juena logs
-./juena sandbox-stop
-./juena down
-```
+- The model proposes work and explains scientific meaning.
+- `SkillsMiddleware` exposes metadata and the model decides relevance; a passive
+  observer records successful exact skill reads without blocking other work.
+- The sandbox backend proves command completion and exit status.
+- The artifact store proves which files were accepted and made deliverable.
+- Outcome middleware proves that the specialist contract was satisfied.
+- The root finalizer controls what becomes the final user-visible answer.
 
-The worker PID, log, and default development workspace live under `.sandbox/`.
+Model prose is never execution or artifact evidence.
 
-### Production
+## Findings
 
-Production uses the base Compose file for JüNA and Postgres plus a separate
-host-installed worker running as the unprivileged `juena-sandbox` account. The
-shared workspace is bind-mounted into JüNA, but the Podman socket is never
-mounted there.
+### Critical: incomplete specialist result accepted
 
-Follow [`deploy/SANDBOX.md`](../deploy/SANDBOX.md) for host setup, directory
-ownership, filesystem quota, environment, image build, systemd, and operational
-commands.
+The pinned subagent middleware falls back to the last non-empty assistant
+message when no structured response exists. A progress sentence can therefore
+be returned as if it were a completed delegated task. Model-call limits and
+other early termination paths can produce the same condition.
 
-## Verification
+Required control: every specialist must produce a validated structured outcome;
+missing or incomplete outcomes are failures.
 
-The repository has four validation levels.
+### Critical: supervisor can invent completion
 
-### Unit and component tests
+Specialist tokens and reports are hidden from the normal user answer stream.
+The supervisor receives free-form task text and writes the final response. No
+server boundary currently prevents it from changing a failure into success or
+describing an artifact that does not exist.
 
-```bash
-./juena test
-```
+Required control: verified single-specialist reports bypass supervisor
+rewriting. Invalid results fail closed. Multiple task calls in one user turn
+are rejected before any specialist starts.
 
-This covers job behavior with fakes, backend routing, runtime identity,
-workspaces, path and symlink confinement, executor container configuration,
-worker recovery, approvals, middleware, artifact validation and budgets,
-undelivered-file reporting, stream processing, authenticated artifact access,
-and Streamlit rendering. At the time this document was consolidated, the exact
-working tree passed `348` tests with `4` opt-in sandbox-pipeline tests skipped.
+### High: parallel helpers fragment evidence and correction state
 
-### Postgres integration
+Delegating parts of one objective to different helpers breaks the assumption
+that the process reading the skill and examples is also the process writing,
+probing, correcting, and validating the script. Passing only generated code to
+another helper discards the evidence needed to audit that code.
 
-```bash
-./juena test-integration
-```
+Required control: allow exactly one specialist task per user turn. A request
+that genuinely requires different specialist types must be split into separate
+user turns rather than fanned out by the supervisor.
 
-These tests use development Postgres and cover clean schema creation, exact
-admission, no-row busy behavior, concurrent claiming, workspace/admission lock
-interaction, stale rows, restart failure, the exclusive worker lock, and chat
-ownership/persistence.
+### High: runtime skill enforcement breaks progressive disclosure
 
-### Live Postgres-to-Podman pipeline
+`SkillsMiddleware` supplies progressive metadata so the model can decide
+whether a skill is useful. Making every repository, Context7, filesystem, and
+execution call depend on a skill-read or no-match event changes that design
+into an unconditional gate. The repeated no-match trace demonstrates the
+result: extra tool calls and looping for an objective that needs no skill.
 
-With a foreground worker and explicit test workspace:
+Required control: keep `SkillsMiddleware` as the source of dynamic metadata;
+let the model read relevant skills lazily; expose no no-match tool; never fail a
+specialist solely because it did not read a skill. Record an exact successful
+`SKILL.md` read passively for audit evidence only.
 
-```bash
-JUENA_TEST_DATABASE_URL='postgresql://...' \
-JUENA_TEST_WORKSPACE_ROOT='/absolute/shared/workspaces' \
-JUENA_TEST_SANDBOX_CONCURRENCY=4 \
-uv run --extra dev pytest -q tests/test_sandbox_pipeline_integration.py
-```
+### High: delegation lacks evidence requirements
 
-The live suite exercises stdout/stderr and artifact delivery, full-slot busy
-admission, tenant isolation during timeouts, and—when run separately with
-`JUENA_TEST_WORKER_STOPPED=1`—the unavailable path.
+The current task tool accepts a free-form description. It does not state
+whether execution is required or which result artifacts must exist, so task
+completion cannot be evaluated mechanically.
 
-### Static checks
+Required control: typed delegation fields for objective, specialist,
+`requires_execution`, and required artifact kind/name.
 
-```bash
-git diff --check
-uv run --extra dev ruff check src app tests
-```
+### High: nonzero execution may carry success metadata
 
-Render the merged development Compose configuration after deployment changes,
-and use only the base Compose file for production validation.
+Deep Agents' filesystem tool can return a `ToolMessage` whose content contains
+`[Command failed with exit code 1]` while its message status remains `success`.
+Checking `ToolMessage.status` is therefore insufficient.
 
-## Production enablement gates
+Required control: preserve typed exit evidence from the sandbox backend and
+mark nonzero or unavailable execution as an error at the local middleware
+boundary.
 
-Implementation completeness is not production approval. Keep
-`SANDBOX_ENABLED=false` on the target host until all of the following have
-current evidence:
+### Medium: specialist failures are hidden by streaming
 
-- [ ] Four configured tenants complete concurrent jobs on the production Linux
-  host, and a second active job for one tenant is rejected as busy.
-- [ ] The next job beyond global capacity returns busy immediately and inserts
-  no row.
-- [ ] A second worker exits without claiming work.
-- [ ] An endless job times out while another tenant completes normally.
-- [ ] Killing the worker mid-job removes its managed container, fails the row,
-  and never reruns the command after restart.
-- [ ] Network, DNS, Postgres, application volumes, secrets, Docker/Podman
-  sockets, other tenant workspaces, and arbitrary host paths are unreachable
-  from generated code.
-- [ ] The production workspace filesystem enforces a hard 5 GB quota per
-  workspace; application size checks alone are not treated as a quota.
-- [ ] PNGs, downloadable results, approved-command records, bounded terminal
-  output, and explicit rejection notices reach the authenticated UI and remain
-  correct after chat reload.
-- [ ] JüNA starts and ordinary chat remains usable with the worker stopped;
-  sandbox calls report unavailable without creating rows.
-- [ ] Hourly cleanup removes old terminal rows and idle workspaces while active
-  workspaces remain untouched.
-- [ ] The host has capacity for four configured CPU/memory limits plus JüNA,
-  Postgres, and the operating system.
-- [ ] A 30-session application load test with four simultaneous sandbox jobs
-  shows bounded memory, stable Postgres pools, responsive chat, and immediate
-  predictable busy responses.
-- [ ] Audit logs are protected, rotated, retained, and monitored according to
-  the deployment policy.
-- [ ] The team explicitly accepts stock rootless-Podman shared-kernel risk or
-  deploys and validates the configured gVisor runtime.
+The server intentionally hides subagent tokens and task reports. This keeps the
+UI clean but makes the root final answer the only visible truth boundary. The
+current boundary has no structural validation.
 
-macOS Podman results are development evidence only. They do not prove Linux
-kernel isolation, filesystem quota behavior, or production capacity.
+### Medium: prompts and skills are process-cached
 
-## Code map
+The compiled agent graph is cached for the service lifetime. Prompt and skill
+changes do not become active until the service restarts. Validation that does
+not restart may exercise stale resources.
 
-| Responsibility | Source |
-| --- | --- |
-| Statuses, types, and artifact limits | `src/juena/sandbox/constants.py` |
-| Postgres admission, locks, claiming, polling, and cleanup | `src/juena/sandbox/jobs.py` |
-| Database table and partial indexes | `src/juena/server/database/models.py` |
-| Workspace ownership, staged inputs, paths, scans, and TTL | `src/juena/sandbox/workspace.py` |
-| Podman container configuration and lifecycle | `src/juena/sandbox/executor.py` |
-| Host claim-loop worker | `src/juena/sandbox/worker.py` |
-| Tenant-bound Deep Agents backend and output collection | `src/juena/sandbox/backend.py` |
-| Runtime identity and composite backend construction | `src/juena/sandbox/runtime.py` |
-| Approval validation and resume command | `src/juena/sandbox/approvals.py` |
-| Execution records and final undelivered notices | `src/juena/sandbox/middleware.py` |
-| Authenticated artifact validation, storage, events, and audit | `src/juena/sandbox/artifacts.py` |
-| SSE conversion | `src/juena/server/streaming/` |
-| API start, resume, pending approval, download, and deletion | `src/juena/server/api/endpoints.py` |
-| Streamlit approval and live artifact coordination | `app/chat_interface.py` |
-| Artifact rendering and dead-link sanitization | `app/ui_components.py` |
-| Development launcher | `juena` |
-| Sandbox image | `deploy/sandbox/Dockerfile` |
-| Production worker runbook | `deploy/SANDBOX.md` |
+### Medium: regression coverage stops at metadata and prompts
 
-## Maintained design decisions
+The test suite checks skill discovery and prompt language but did not reproduce
+the complete failure chain: ignored skill, incomplete handoff, supervisor
+fabrication, and absent artifact.
 
-- Postgres is the sole worker channel; do not reintroduce an HTTP broker or a
-  message queue beside `sandbox_jobs`.
-- Containers are ephemeral per command; the workspace, not the container, is
-  what persists across commands.
-- Artifacts are copied eagerly into authenticated storage. A lazy `sandbox:`
-  URL would break when the workspace expires and would make old chats depend on
-  a live execution directory.
-- `/workspace/outputs` is opt-in delivery. Scratch files elsewhere in
-  `/workspace` remain reusable but are not attached.
-- Downloadable result files have no per-turn count cap. The 64 MB turn budget,
-  per-file validation, and eight-file execution scan are the intended controls.
-- Execution records have a separate budget and may fail without blocking the
-  approved command.
-- Artifact failure reporting is deterministic application behavior, not a
-  prompt-only promise and not a retry loop.
-- Runtime package installation and generated-code network access remain
-  forbidden. Add required scientific software to the fixed, reviewed image.
-- A restart may reset the in-memory per-turn delivery budget, but it does not
-  bypass per-file validation, workspace limits, or authenticated ownership.
+### Medium: virtual repository and scratch-file contracts were ambiguous
 
-## Legacy schema note
+The software prompt and JScatter skill named `/repos/...` paths without saying
+that they are available only through read tools. They also did not warn that
+`write_file` refuses an existing scratch path. Both omissions turned a
+recoverable model correction into another failed run.
 
-`sandbox_jobs` is transient metadata and this repository does not migrate old
-experimental broker-era schemas. An existing development table with columns or
-statuses from an earlier RabbitMQ/HTTP-broker implementation must be dropped so
-normal schema creation can recreate the current table:
+Required control: forbid `/repos` in shell commands, imports, subprocesses, and
+script paths; use `/workspace` for executable scratch state; and revise an
+existing file with `edit_file` or a new versioned filename.
 
-```sql
-DROP TABLE IF EXISTS sandbox_jobs;
-```
+### Medium: JScatter headless mode must precede fitting
 
-No user, chat, checkpoint, memory, or artifact table is affected by that
-development-only reset.
+JScatter can invoke xmgrace for fit-progress rendering even when a script does
+not construct a final plot explicitly. Enabling headless mode only at plotting
+time is too late.
+
+Required control: call `js.headless(True)` immediately after import and before
+every fit or `GracePlot` construction. The sandbox image must retain `gracebat`
+for native headless plot output.
+
+## Verified sandbox architecture
+
+Postgres `sandbox_jobs` is the sole application-to-worker control channel. The
+chatbot receives no Podman socket. The host worker runs generated commands in
+fresh rootless containers with no network, a read-only root filesystem,
+dropped capabilities, `no-new-privileges`, bounded resources, and controlled
+mounts.
+
+`/workspace` is writable and persistent for one opaque user/thread workspace;
+`/inputs`, `/repos`, and `/skills` are read-only routes where configured.
+Only changed, policy-accepted files under `/workspace/outputs` can become result
+artifacts. Record artifacts such as the approved command and captured output
+are stored separately and must never satisfy a requested result-artifact
+requirement.
+
+Human approval remains compute consent and command visibility, not the host
+security boundary. The shared Linux kernel, host capacity, rootless runtime,
+filesystem permissions, database topology, and optional gVisor configuration
+must still be validated on the production Linux host.
+
+## Target invariants
+
+1. A user turn can launch at most one specialist task; parallel task calls are
+   rejected before any helper runs.
+2. Skill metadata is injected dynamically; the model decides whether to load a
+   skill from its description.
+3. No synthetic no-match decision is required, and skills never block unrelated
+   repository, documentation, filesystem, or execution work.
+4. A successful exact `SKILL.md` read may be recorded for audit evidence but is
+   not a completion prerequisite.
+5. A progress sentence cannot satisfy a delegated task.
+6. A failed or absent execution cannot satisfy `requires_execution`.
+7. A filename or image description cannot satisfy an artifact requirement;
+   only an authenticated result-artifact reference can.
+8. Earlier failures are tolerated only when a later execution satisfies every
+   requirement in the same task.
+9. Any malformed or unmet outcome produces a deterministic limitation rather
+   than another model completion.
+10. A verified single-specialist report is returned without supervisor
+   rewriting.
+11. `/repos` is never used as an execution-container path; executable scratch
+    files live under `/workspace` and existing files are revised explicitly.
+12. JScatter headless mode is enabled before any fit or GracePlot construction.
+13. Evidence state survives summarization, approval resume, and chat reload.
+14. Prompt and skill validation restarts the service before live testing.
+15. Specialists do not expose `write_todos`; a delegated objective proceeds
+    directly through relevant tools to its structured report.
+
+## Remediation ledger
+
+| Work item | Final status | Validation |
+| --- | --- | --- |
+| Documentation-first audit | Complete | This document records evidence, non-findings, controls, and deployment gates |
+| Serial specialist boundary | Complete | Parallel current-turn task calls run no specialist; legacy multi-task checkpoints also fail closed |
+| Shared dynamic skill inventory | Complete | `SkillsMiddleware` injects the specialist-owned inventory and paths |
+| Model-chosen progressive disclosure | Complete | No no-match tool exists; unrelated tools are never blocked; exact reads are observed passively |
+| Specialist todo-loop removal | Complete | Specialist middleware exposes no `TodoListMiddleware` or `write_todos`; supervisor planning remains available |
+| Typed specialist task contract | Complete | Execution and artifact requirements are Pydantic-validated fields |
+| Structured specialist report | Complete | Both specialists use completed, blocked, or failed structured output |
+| Direct execution evidence | Complete | Backend status, exit code, result artifact IDs, and dropped outputs survive middleware flattening |
+| Outcome validation | Complete | Missing report, required execution, artifact, or delivery evidence downgrades the task to failed; skill use is not required |
+| Fail-closed root finalization | Complete | The supervisor cannot rewrite a delegated result; verified reports render directly and invalid reports produce deterministic limitations |
+| Regression reproduction | Complete | The exact progress-sentence plus fabricated fit/PNG chain is prevented without calling the prepared supervisor synthesis |
+| JScatter execution-path guidance | Complete | `/repos`, headless fitting, and scratch-file revision contracts are explicit and regression-tested |
+| Scientific `.dat` delivery | Complete | `.dat` fit results are collected only after UTF-8 validation and are reloadable as `text/plain` |
+| Live JScatter/Grace smoke | Complete at sandbox truth boundary | Foreground worker completed a weighted sphere fit, native Grace PNG, result registration, claim, and persisted reload |
+| Live external-model acceptance | Pending operator smoke | A real Blablador/Qwen turn must confirm relevant skills load lazily without repeating no-match actions |
+| Target-Linux production gate | Blocked | Capacity and isolation checks must pass on the deployment host |
+
+## Validation gates
+
+Implementation validation must include focused middleware and server tests, the
+complete non-integration suite, Postgres integration through
+`./juena test-integration`, Compose rendering, compilation, packaging, and a
+foreground-worker live run. The live run must restart the application first and
+cover successful execution, rejection, nonzero exit, missing required output,
+artifact reload, workspace exclusion, and cleanup.
+
+The JScatter smoke must verify the installed version, construct
+`js.GracePlot(headless=True)` without the missing-Gracebat exception, fit data
+with uncertainties, write a PNG below `/workspace/outputs`, and deliver the
+registered artifact. A neutron-specialist request must also demonstrate the
+structured direct-report path without execution requirements.
+
+The current macOS development host cannot close the production Linux capacity
+or isolation gate. Production must keep `SANDBOX_ENABLED=false` until the
+operational checklist in `deploy/SANDBOX.md` passes on the actual host.
+
+## Final validation evidence
+
+Validation on 2026-08-11 produced the following current-state results:
+
+- JScatter skill `quick_validate.py`: valid.
+- Complete pytest suite after removing runtime skill enforcement: `363 passed,
+  14 skipped`.
+- Postgres integration launcher: an earlier stopped-worker run passed all 9;
+  the final run passed 8 and skipped only the worker-lock test because the
+  normal development worker was deliberately running.
+- Opt-in live Postgres/Podman pipeline: `3 passed, 1 skipped` before the
+  JScatter-specific addition; the new JScatter test then passed independently.
+- JScatter live run: imported and printed `1.9.0.1`; called
+  `js.headless(True)` before fitting; completed an uncertainty-weighted sphere
+  fit with a finite radius error; constructed `GracePlot(headless=True)`;
+  registered `.dat`, `.json`, and `.png` result artifacts; claimed them at the
+  application boundary; and reloaded the persisted PNG by authenticated ID.
+- Compose development rendering, Python compilation, and `git diff --check`:
+  passed.
+- Wheel and source distribution: built successfully. The wheel contains both
+  agent prompts, passive skill-usage observation, typed contracts, finalizers, execution-evidence
+  module, JScatter `SKILL.md`, `agents/openai.yaml`, and all four references.
+- Rebuilt application container: healthy after repository bootstrap; the first
+  immediate health request raced startup, while the subsequent container health
+  check and log confirmed HTTP 200 readiness.
+
+The foreground validation worker was stopped after the smoke test to release
+its single-worker advisory lock. The rebuilt application, Postgres, and normal
+background sandbox worker were all healthy and running at the final state
+check. Do not start a second worker while that normal worker owns the lock.

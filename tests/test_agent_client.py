@@ -183,6 +183,7 @@ def test_resume_stream_posts_exact_decision(monkeypatch: pytest.MonkeyPatch) -> 
     assert chunks == [{"type": "token", "content": "done"}]
     assert captured["url"] == "http://localhost:8080/juena/resume"
     assert captured["kwargs"]["json"] == {
+        "kind": "execute_approval",
         "thread_id": "thread-1",
         "interrupt_id": "interrupt-1",
         "decision": "edit",
@@ -190,3 +191,50 @@ def test_resume_stream_posts_exact_decision(monkeypatch: pytest.MonkeyPatch) -> 
         "provider": "openai",
         "model": "gpt-4o-mini",
     }
+
+
+def test_resume_stream_posts_an_answer_without_a_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_stream(method: str, url: str, **kwargs):
+        captured.update(method=method, url=url, kwargs=kwargs)
+        return _FakeStreamContext(
+            _FakeStreamResponse(['data: {"type":"token","content":"done"}'])
+        )
+
+    client = client_module.AgentClient(
+        base_url="http://localhost:8080",
+        agent="juena",
+        timeout=5.0,
+        session_token="session",
+    )
+    monkeypatch.setattr(client._client, "stream", fake_stream)
+
+    list(
+        client.resume_stream(
+            thread_id="thread-1",
+            interrupt_id="interrupt-2",
+            answer="Empty cell",
+        )
+    )
+
+    assert captured["kwargs"]["json"] == {
+        "kind": "clarification",
+        "thread_id": "thread-1",
+        "interrupt_id": "interrupt-2",
+        "answer": "Empty cell",
+    }
+
+
+def test_resume_stream_rejects_an_ambiguous_reply() -> None:
+    client = client_module.AgentClient(
+        base_url="http://localhost:8080",
+        agent="juena",
+        timeout=5.0,
+        session_token="session",
+    )
+
+    with pytest.raises(client_module.AgentClientError, match="exactly one"):
+        list(client.resume_stream(thread_id="t", interrupt_id="i"))

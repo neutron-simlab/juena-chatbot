@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from deepagents.backends.protocol import BackendProtocol, LsResult
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
-from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
 from PIL import Image
 
 # Bound at import time, exactly as the sandbox modules under test bind it.
@@ -16,11 +16,13 @@ from PIL import Image
 # global_config; resolving it freshly here would patch an object the code
 # under test is not reading.
 from juena.core.config import global_config
+from juena.agents.specialist_contracts import SpecialistReport
+from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
 from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
 from juena.sandbox.constants import MAX_IMAGE_ARTIFACTS_PER_TURN
+from juena.sandbox.evidence import capture_sandbox_execution
 from juena.sandbox.jobs import SandboxExecutionResult, workspace_id_for
-from juena.sandbox.middleware import SandboxExecutionMiddleware
 from juena.sandbox.runtime import (
     RuntimePodmanSandboxBackend,
     build_sandbox_backend,
@@ -76,7 +78,8 @@ def test_execute_returns_command_output_and_collected_file(tmp_path) -> None:
     )
 
     try:
-        result = backend.execute("python plot.py", timeout=900)
+        with capture_sandbox_execution() as evidence:
+            result = backend.execute("python plot.py", timeout=900)
         refs = store.claim_for_message("user-a", "thread-a")
     finally:
         set_artifact_store_for_tests(None)
@@ -88,6 +91,10 @@ def test_execute_returns_command_output_and_collected_file(tmp_path) -> None:
     )
     assert "Artifacts collected automatically" in result.output
     assert "analysis.py" in result.output
+    assert len(evidence) == 1
+    assert evidence[0].succeeded is True
+    assert evidence[0].artifact_filenames == ["analysis.py"]
+    assert evidence[0].artifact_ids == [refs[0]["artifact_id"]]
     # The approval record is the middleware's job, not the backend's.
     assert [item["filename"] for item in refs] == ["analysis.py"]
 
@@ -330,16 +337,21 @@ def test_output_upload_reports_when_the_file_was_not_delivered(tmp_path) -> None
 
     try:
         write = backend.write("/workspace/outputs/empty.txt", "")
-        final = AIMessage(
-            content=[{"type": "text", "text": "The requested report is ready."}]
-        )
-        update = SandboxExecutionMiddleware().after_model(
-            {"messages": [final]},
+        package = SpecialistOutcomeMiddleware(
+            specialist_name="software-specialist"
+        ).after_agent(
+            {
+                "messages": [HumanMessage("Create empty.txt.")],
+                "structured_response": SpecialistReport(
+                    status="completed",
+                    finding="The requested report is ready.",
+                ),
+            },
             SimpleNamespace(
                 context=SimpleNamespace(user_id="user-a", thread_id="thread-a"),
                 config={"run_id": "run-1"},
             ),
-        )
+        )["messages"][0].text
     finally:
         set_artifact_store_for_tests(None)
 
@@ -347,12 +359,10 @@ def test_output_upload_reports_when_the_file_was_not_delivered(tmp_path) -> None
     # would send the model into a rewrite that collides with its own file.
     assert write.error is None
     assert write.path == "/workspace/outputs/empty.txt"
-    assert update == {"messages": [final]}
-    assert "The requested report is ready" in final.text
-    assert "NOT delivered to the user" in final.text
-    assert "empty.txt" in final.text
-    assert "Generated file is empty" in final.text
-    assert store.drain_undelivered("user-a", "thread-a") == []
+    assert "Produced but NOT delivered" in package
+    assert "empty.txt" in package
+    delivered = package.split("Result artifacts delivered:")[1].splitlines()[0]
+    assert "empty.txt" not in delivered
     attached = store.claim_for_message("user-a", "thread-a")
     assert "empty.txt" not in {item["filename"] for item in attached}
     assert '"event": "artifact_dropped"' in (tmp_path / "audit.jsonl").read_text()

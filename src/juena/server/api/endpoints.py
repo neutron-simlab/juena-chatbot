@@ -42,12 +42,13 @@ from juena.server.database import get_db_session
 from juena.server.database.models import utc_now
 from juena.sandbox.runtime import delete_runtime_workspace, stage_runtime_inputs
 from juena.sandbox.approvals import (
+    EXECUTE_APPROVAL_KIND,
     ApprovalError,
     build_resume_command,
-    get_first_pending_execute_interrupt,
+    get_first_pending_interrupt,
 )
 from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.schemas import ApprovalResumeInput
+from juena.sandbox.schemas import ResumeInput
 
 logger = get_logger(__name__)
 
@@ -325,7 +326,7 @@ async def stream(
 
 
 async def resume_generator(
-    payload: ApprovalResumeInput,
+    payload: ResumeInput,
     authenticated_user_id: str,
     agent_id: str,
 ) -> AsyncGenerator[str, None]:
@@ -368,8 +369,8 @@ async def resume_generator(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Unexpected error resuming sandbox approval")
-        yield sse(events.error_event("Unable to resume sandbox execution"))
+        logger.exception("Unexpected error resuming an interrupted turn")
+        yield sse(events.error_event("Unable to resume this turn"))
 
 
 @router.post(
@@ -379,12 +380,12 @@ async def resume_generator(
 )
 @router.post("/resume", response_class=EventSourceResponse, responses=_sse_response_example())
 async def resume(
-    payload: ApprovalResumeInput,
+    payload: ResumeInput,
     agent_id: str | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> EventSourceResponse:
-    """Resume a pending sandbox execution after an authenticated decision."""
+    """Resume a pending sandbox approval or clarification after an authenticated reply."""
 
     try:
         await get_owned_chat(session, user.id, payload.thread_id)
@@ -396,7 +397,8 @@ async def resume(
 
 
 @router.get("/threads/{thread_id}/pending-approval")
-async def pending_approval(
+@router.get("/threads/{thread_id}/pending-interrupt")
+async def pending_interrupt(
     thread_id: str,
     agent_id: str | None = None,
     provider: str | None = None,
@@ -404,7 +406,11 @@ async def pending_approval(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """Restore a pending command confirmation after a Streamlit reload."""
+    """Restore a pending command confirmation or question after a Streamlit reload.
+
+    ``approval`` still carries a pending sandbox command so an older client keeps
+    working; a pending question arrives under ``clarification``.
+    """
     try:
         await get_owned_chat(session, user.id, thread_id)
     except ChatNotFoundError as exc:
@@ -417,10 +423,20 @@ async def pending_approval(
         provider=provider,
         model=model,
     )
-    interrupt = await get_first_pending_execute_interrupt(agent, run.config)
-    if interrupt is None or not isinstance(interrupt.value, dict):
-        return {"approval": None}
-    return {"approval": events.approval_required_event(interrupt.id, interrupt.value)}
+    empty: dict[str, Any] = {"approval": None, "clarification": None}
+    pending = await get_first_pending_interrupt(agent, run.config)
+    if pending is None:
+        return empty
+    interrupt, kind = pending
+    if kind == EXECUTE_APPROVAL_KIND:
+        return {
+            **empty,
+            "approval": events.approval_required_event(interrupt.id, interrupt.value),
+        }
+    return {
+        **empty,
+        "clarification": events.clarification_required_event(interrupt.id, interrupt.value),
+    }
 
 
 @router.post(

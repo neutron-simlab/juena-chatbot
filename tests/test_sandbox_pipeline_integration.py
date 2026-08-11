@@ -93,6 +93,108 @@ def test_worker_output_and_artifacts_reach_the_application_validator(tmp_path) -
     assert {item["kind"] for item in artifacts} == {"file", "image"}
 
 
+def test_jscatter_fit_graceplot_and_artifact_reload(tmp_path) -> None:
+    jobs = _jobs()
+    workspaces = WorkspaceStore(Path(WORKSPACE_ROOT))  # type: ignore[arg-type]
+    store = ArtifactStore(tmp_path / "artifacts", tmp_path / "audit.jsonl")
+    set_artifact_store_for_tests(store)
+    user_id = "jscatter-live-user"
+    thread_id = f"jscatter-live-{uuid4().hex}"
+    backend = PodmanSandboxBackend(
+        jobs=jobs,
+        workspaces=workspaces,
+        tenant_id=_opaque_id(),
+        workspace_id=_opaque_id(),
+        user_id=user_id,
+        thread_id=thread_id,
+        run_id="jscatter-live-run",
+    )
+    command = r'''mkdir -p outputs && python - <<'PY'
+from pathlib import Path
+import json
+import numpy as np
+import jscatter as js
+
+js.headless(True)
+print("JScatter", js.__version__)
+assert js.__version__ == "1.9.0.1"
+
+def sphere_model(q, radius, scale, background):
+    form = js.ff.sphere(q=q, radius=radius, contrast=0.01)
+    return scale * form.Y + background
+
+q = np.geomspace(0.05, 1.2, 80)
+truth = sphere_model(q, radius=5.5, scale=1.8, background=0.04)
+uncertainty = np.maximum(0.02 * truth, 0.02)
+rng = np.random.default_rng(20260811)
+measured = truth + rng.normal(scale=uncertainty)
+data = js.dA(np.vstack([q, measured, uncertainty]), XYeYeX=[0, 1, 2])
+assert np.all(np.isfinite(data.eY)) and np.all(data.eY > 0)
+
+data.fit(
+    sphere_model,
+    freepar={"radius": 5.0, "scale": 1.5, "background": 0.03},
+    fixpar={},
+    mapNames={"q": "X"},
+    method="lm",
+    output=False,
+)
+fit = data.lastfit
+assert np.isfinite(fit.radius) and np.isfinite(fit.radius_err)
+assert abs(fit.radius - 5.5) < 0.5
+fit.savetxt("outputs/jscatter-fit.dat")
+
+plot = js.GracePlot(headless=True)
+plot.plot(data, sy=1, li=0, le="synthetic data")
+plot.plot(fit, sy=0, li=1, le="JScatter fit")
+plot.xaxis(label=r"q / nm\S-1\N")
+plot.yaxis(label="I(q)")
+plot.legend()
+plot.save("outputs/jscatter-fit.png", size=(3.4, 2.4), dpi=150)
+plot.exit()
+
+Path("outputs/jscatter-fit.json").write_text(
+    json.dumps(
+        {
+            "jscatter_version": js.__version__,
+            "radius": float(fit.radius),
+            "radius_error": float(fit.radius_err),
+        },
+        indent=2,
+    )
+)
+print("fit radius", fit.radius, "+/-", fit.radius_err)
+PY'''
+
+    try:
+        result = backend.execute(command, timeout=60)
+        pending = store.peek_result_refs(user_id, thread_id)
+        delivered = store.claim_for_message(user_id, thread_id)
+        reloaded = [store.get(user_id, item["artifact_id"]) for item in delivered]
+    finally:
+        set_artifact_store_for_tests(None)
+        jobs.close()
+
+    assert result.exit_code == 0, result.output
+    assert "JScatter 1.9.0.1" in result.output
+    assert "fit radius" in result.output
+    assert {item.filename for item in pending} == {
+        "jscatter-fit.dat",
+        "jscatter-fit.json",
+        "jscatter-fit.png",
+    }
+    assert {item["filename"] for item in delivered} == {
+        "jscatter-fit.dat",
+        "jscatter-fit.json",
+        "jscatter-fit.png",
+    }
+    assert all(item is not None for item in reloaded)
+    png = next(
+        item for item in reloaded if item is not None and item[0].filename.endswith(".png")
+    )
+    assert png[1].startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_slots_fill_then_the_next_submission_is_busy_without_a_row() -> None:
     jobs = _jobs()
     tenant_ids = [_opaque_id() for _index in range(CONCURRENCY)]

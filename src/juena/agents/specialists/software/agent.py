@@ -8,13 +8,16 @@ from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 
+from juena.agents.ask_user import build_ask_user_tool
 from juena.agents.specialist_runtime import (
     build_specialist_backend,
     build_specialist_middleware,
     has_authored_skills,
     load_markdown,
 )
+from juena.agents.specialist_contracts import SpecialistReport
 from juena.agents.specialists.software.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
@@ -34,7 +37,7 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "when the sandbox is enabled, this specialist can execute them with user approval."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN35_122B.value
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.MINIMAX_M27.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
@@ -103,14 +106,18 @@ def build_software_specialist(
         model=SOFTWARE_SPECIALIST_MODEL,
         temperature=0.0,
     )
-    runnable = create_agent(
-        model=model,
-        tools=build_tools(
+    specialist_tools = [
+        *build_tools(
             repo_manager,
             vector_index,
             has_repo_research=has_repo_research,
             context7_tools=context7_tools,
         ),
+        build_ask_user_tool(SOFTWARE_SPECIALIST_NAME),
+    ]
+    runnable = create_agent(
+        model=model,
+        tools=specialist_tools,
         system_prompt=build_software_prompt(
             has_repo_research=has_repo_research,
             has_context7=bool(context7_tools),
@@ -122,8 +129,10 @@ def build_software_specialist(
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
+            specialist_name=SOFTWARE_SPECIALIST_NAME,
             enable_execution_approval=sandbox_enabled(),
         ),
+        response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,
         name="juena_software_specialist",
     )

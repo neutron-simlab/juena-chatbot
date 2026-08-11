@@ -8,9 +8,12 @@ from typing import Any
 
 import pytest
 from deepagents.middleware.skills import SkillsMiddleware
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import RunnableLambda
 
 from juena.agents import specialist_runtime
+from juena.agents.loop_guard import RepeatedToolCallMiddleware
+from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.agents.specialists.neutron_research import agent as neutron_agent
 from juena.agents.specialists.neutron_research import tools as neutron_tools
 from juena.agents.specialists.software import agent as software_agent
@@ -65,7 +68,10 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     created: dict[str, Any] = {}
     model = object()
     backend = object()
-    tools = [object()]
+    tools = [
+        SimpleNamespace(name="search_code_semantic"),
+        SimpleNamespace(name="resolve-library-id"),
+    ]
     middleware = [object()]
     runnable = RunnableLambda(lambda state: state)
     repo_manager = SimpleNamespace(cache_dir=Path("/tmp/repos"))
@@ -109,8 +115,11 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     }
     assert created["backend_kwargs"]["repo_cache_root"] == repo_manager.cache_dir
     assert created["agent_kwargs"]["model"] is model
-    assert created["agent_kwargs"]["tools"] is tools
+    assert created["agent_kwargs"]["tools"][:-1] == list(tools)
+    assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
     assert created["agent_kwargs"]["middleware"] is middleware
+    assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"
+    assert "protected_tool_names" not in created["middleware_kwargs"]
     assert created["agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert spec["name"] == software_agent.SOFTWARE_SPECIALIST_NAME
     assert spec["description"] == software_agent.SOFTWARE_SPECIALIST_DESCRIPTION
@@ -119,10 +128,10 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert spec["runnable"] is runnable
 
 
-def test_software_specialist_defaults_to_qwen() -> None:
+def test_software_specialist_defaults_to_minimax() -> None:
     assert (
         software_agent.SOFTWARE_SPECIALIST_MODEL
-        == BlabladorModelName.QWEN35_122B.value
+        == BlabladorModelName.MINIMAX_M27.value
     )
 
 
@@ -172,8 +181,10 @@ def test_neutron_specialist_owns_fixed_model_and_runtime(
     }
     assert "repo_cache_root" not in created["backend_kwargs"]
     assert created["agent_kwargs"]["model"] is model
-    assert created["agent_kwargs"]["tools"] is tools
+    assert created["agent_kwargs"]["tools"][:-1] == list(tools)
+    assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
     assert created["agent_kwargs"]["middleware"] is middleware
+    assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"
     assert created["agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert spec["name"] == neutron_agent.NEUTRON_RESEARCH_SPECIALIST_NAME
     assert spec["description"] == neutron_agent.NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION
@@ -234,6 +245,7 @@ def test_skills_middleware_requires_a_valid_owned_skill(
         filesystem_tool_descriptions={},
         skills_dir=empty_skills,
         skills_label="No skills",
+        specialist_name="test-specialist",
     )
     owner_middleware = specialist_runtime.build_specialist_middleware(
         backend=owner_backend,
@@ -242,10 +254,23 @@ def test_skills_middleware_requires_a_valid_owned_skill(
         filesystem_tool_descriptions={},
         skills_dir=owned_skills,
         skills_label="Software",
+        specialist_name="test-specialist",
     )
 
     assert not any(isinstance(item, SkillsMiddleware) for item in no_skills_middleware)
     assert sum(isinstance(item, SkillsMiddleware) for item in owner_middleware) == 1
+    assert sum(
+        isinstance(item, SpecialistOutcomeMiddleware) for item in owner_middleware
+    ) == 1
+    assert not any(
+        isinstance(item, TodoListMiddleware)
+        for middleware in (no_skills_middleware, owner_middleware)
+        for item in middleware
+    )
+    assert all(
+        sum(isinstance(item, RepeatedToolCallMiddleware) for item in middleware) == 1
+        for middleware in (no_skills_middleware, owner_middleware)
+    )
 
 
 def test_packaged_jscatter_skill_is_lazily_discoverable() -> None:

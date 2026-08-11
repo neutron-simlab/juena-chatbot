@@ -26,11 +26,13 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "patterns. Do not use it for broad repository discovery."
     ),
     "write_file": (
-        "Write only short disposable scratch notes. `/repos` and `/inputs` are "
-        "read-only; return proposed code changes in the report."
+        "Create only short disposable scratch files at new `/workspace` paths. This "
+        "tool refuses an existing path; use `edit_file` or a new filename for a "
+        "revision. `/repos` and `/inputs` are read-only tool routes, not execution paths."
     ),
     "edit_file": (
-        "Edit only disposable scratch notes. `/repos` and `/inputs` are read-only."
+        "Revise an existing disposable scratch file under `/workspace`. `/repos` and "
+        "`/inputs` are read-only."
     ),
 }
 

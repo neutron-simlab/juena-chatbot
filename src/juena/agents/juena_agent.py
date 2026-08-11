@@ -10,15 +10,16 @@ from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
-from langchain.agents.middleware import TodoListMiddleware
 from langgraph.graph.state import CompiledStateGraph
 
+from juena.agents.ask_user import build_ask_user_tool
 from juena.agents.backends import (
     JUENA_MEMORY_SYSTEM_PROMPT,
     MEMORY_SOURCES,
     SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS,
     build_supervisor_backend,
 )
+from juena.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialist_runtime import (
     SUPERVISOR_MODEL_CALL_LIMIT,
     SUPERVISOR_TOOL_CALL_LIMIT,
@@ -47,12 +48,15 @@ logger = get_logger(__name__)
 JUENA_AGENT_ID = "juena"
 SUMMARIZER_PROVIDER = Provider.BLABLADOR.value
 SUMMARIZER_MODEL = BlabladorModelName.GPT_OSS.value
-SUPERVISOR_TASK_DESCRIPTION = """Delegate a substantive domain task to one specialist.
-Use one specialist by default. Launch multiple specialist tasks only when the user
-asks for a comparison or the request contains independent aspects that require
-different expertise. Give each specialist a self-contained task with only relevant
-user context and saved preferences. The specialist returns a private Markdown report
-for the supervisor to reconcile into the final answer.
+SUPERVISOR_TASK_DESCRIPTION = """Delegate a substantive domain task to a specialist.
+Give the specialist a self-contained objective with only the relevant user context and
+saved preferences. Prefer one specialist; use more only for an explicit comparison or
+clearly independent aspects that need different expertise. Resolve an ambiguous request
+with ask_user before delegating rather than guessing on the user's behalf.
+
+Every result arrives as a `<specialist_report>` block paired with a
+`<verified_by_server>` block. The second block is written by the server from the actual
+sandbox exit codes and the artifact store; it overrides anything the report claims.
 
 Available specialist types:
 {available_agents}
@@ -114,7 +118,9 @@ async def create_juena_agent(
     store = get_store()
     supervisor_backend = build_supervisor_backend(store)
     middleware = [
-        TodoListMiddleware(),
+        # No TodoListMiddleware: the supervisor delegates, synthesizes, and asks.
+        # A todo list adds no evidence and is the tool models most readily loop on.
+        RepeatedToolCallMiddleware(),
         FilesystemMiddleware(
             backend=supervisor_backend,
             custom_tool_descriptions=SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS,
@@ -145,7 +151,7 @@ async def create_juena_agent(
 
     agent = create_agent(
         model=supervisor_model,
-        tools=[],
+        tools=[build_ask_user_tool(JUENA_AGENT_ID)],
         system_prompt=load_markdown("juena.agents", "SUPERVISOR.md"),
         middleware=middleware,
         context_schema=RuntimeModelContext,

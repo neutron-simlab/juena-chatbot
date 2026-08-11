@@ -13,8 +13,10 @@ Two rules shape this module:
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
+from langgraph.types import Interrupt
 
 from juena.core.log import get_logger
+from juena.sandbox.approvals import EXECUTE_APPROVAL_KIND, interrupt_kind
 from juena.server.errors import MessageProcessingError, StreamingError
 from juena.server.streaming import events
 from juena.server.streaming.handlers import (
@@ -29,6 +31,17 @@ logger = get_logger(__name__)
 
 # Preview length for a tool result shown inside the status container.
 _TOOL_SUMMARY_CHARS = 120
+
+
+def interrupt_event(interrupt: Interrupt) -> dict[str, Any] | None:
+    """Build the SSE payload for one pending interrupt, or None to skip it."""
+
+    kind = interrupt_kind(interrupt)
+    if kind is None or not isinstance(interrupt.value, dict):
+        return None
+    if kind == EXECUTE_APPROVAL_KIND:
+        return events.approval_required_event(interrupt.id, interrupt.value)
+    return events.clarification_required_event(interrupt.id, interrupt.value)
 
 
 def _tool_summary(message: ToolMessage) -> str:
@@ -128,9 +141,10 @@ class StreamEventProcessor:
                         or interrupt.id in self._streamed_interrupt_ids
                     ):
                         continue
-                    if isinstance(interrupt.value, dict):
+                    payload = interrupt_event(interrupt)
+                    if payload is not None:
                         self._streamed_interrupt_ids.add(interrupt.id)
-                        yield events.approval_required_event(interrupt.id, interrupt.value)
+                        yield payload
                 for message in extract_update_messages(event):
                     async for payload in self._handle_message(message, from_subagent):
                         yield payload

@@ -35,25 +35,17 @@ class _ToolModel(FakeMessagesListChatModel):
         return self
 
 
-def _report(finding: str) -> str:
-    return (
-        f"## Finding\n{finding}\n"
-        "## Evidence\nScripted evidence\n"
-        "## Actions\nNone\n"
-        "## Artifacts\nNone\n"
-        "## Limitations\nScripted test report\n"
-    )
-
-
 def _build_supervisor(
     responses: list[AIMessage],
     captured: dict[str, list[str]],
 ) -> Any:
     def specialist(name: str, finding: str) -> dict[str, Any]:
-        def run(state: dict[str, Any]) -> dict[str, list[AIMessage]]:
-            request = next(message for message in state["messages"] if isinstance(message, HumanMessage))
+        def run(state: dict[str, Any]) -> dict[str, Any]:
+            request = next(
+                message for message in state["messages"] if isinstance(message, HumanMessage)
+            )
             captured.setdefault(name, []).append(request.text)
-            return {"messages": [AIMessage(content=_report(finding))]}
+            return {"messages": [AIMessage(content=finding)]}
 
         description = (
             SOFTWARE_SPECIALIST_DESCRIPTION
@@ -66,14 +58,13 @@ def _build_supervisor(
             "runnable": RunnableLambda(run),
         }
 
-    backend = StateBackend()
     return create_agent(
         model=_ToolModel(responses=responses),
         tools=[],
         system_prompt="Delegate substantive domain work and synthesize the reports.",
         middleware=[
             SubAgentMiddleware(
-                backend=backend,
+                backend=StateBackend(),
                 subagents=[
                     specialist(SOFTWARE_SPECIALIST_NAME, "Repository behavior confirmed."),
                     specialist(
@@ -83,9 +74,22 @@ def _build_supervisor(
                 ],
                 system_prompt=None,
                 task_description=SUPERVISOR_TASK_DESCRIPTION,
-            )
+            ),
         ],
         checkpointer=InMemorySaver(),
+    )
+
+
+def _task_call(objective: str, subagent_type: str, call_id: str) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "task",
+                "args": {"description": objective, "subagent_type": subagent_type},
+                "id": call_id,
+            }
+        ],
     )
 
 
@@ -114,20 +118,7 @@ def test_supervisor_uses_one_matching_specialist_by_default(
 ) -> None:
     captured: dict[str, list[str]] = {}
     supervisor = _build_supervisor(
-        [
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "description": task_description,
-                        "subagent_type": target,
-                    },
-                    "id": "delegate-one",
-                }],
-            ),
-            AIMessage(content=final_answer),
-        ],
+        [_task_call(task_description, target, "delegate-one"), AIMessage(content=final_answer)],
         captured,
     )
 
@@ -137,12 +128,46 @@ def test_supervisor_uses_one_matching_specialist_by_default(
     )
 
     assert captured == {target: [task_description]}
+    # The specialist report is the supervisor's input; the supervisor writes the answer.
     assert result["messages"][-1].text == final_answer
-    report_message = next(message for message in result["messages"] if isinstance(message, ToolMessage))
-    assert "## Finding" in report_message.text
+    report = next(message for message in result["messages"] if isinstance(message, ToolMessage))
+    assert "confirmed" in report.text
 
 
-def test_supervisor_fans_out_only_for_independent_mixed_request() -> None:
+def test_delegated_task_contains_only_relevant_memory_preference() -> None:
+    captured: dict[str, list[str]] = {}
+    delegated = (
+        "Inspect the repository. Relevant saved preference: prefer Python examples. "
+        "Return exact paths and limitations."
+    )
+    supervisor = _build_supervisor(
+        [
+            _task_call(delegated, SOFTWARE_SPECIALIST_NAME, "delegate-with-preference"),
+            AIMessage(content="The answer uses Python examples."),
+        ],
+        captured,
+    )
+
+    supervisor.invoke(
+        {
+            "messages": [
+                (
+                    "user",
+                    "Inspect the repository. Saved notes also contain an unrelated "
+                    "dark-mode preference.",
+                )
+            ]
+        },
+        config={"configurable": {"thread_id": "memory-filter"}},
+    )
+
+    task = captured[SOFTWARE_SPECIALIST_NAME][0]
+    assert "prefer Python examples" in task
+    assert "dark-mode" not in task
+    assert "complete memory" not in task
+
+
+def test_two_specialists_can_run_for_genuinely_independent_aspects() -> None:
     captured: dict[str, list[str]] = {}
     supervisor = _build_supervisor(
         [
@@ -160,7 +185,7 @@ def test_supervisor_fans_out_only_for_independent_mixed_request() -> None:
                     {
                         "name": "task",
                         "args": {
-                            "description": "Explain the independent neutron-science concept.",
+                            "description": "Explain neutron spin echo.",
                             "subagent_type": NEUTRON_RESEARCH_SPECIALIST_NAME,
                         },
                         "id": "delegate-neutron",
@@ -177,51 +202,5 @@ def test_supervisor_fans_out_only_for_independent_mixed_request() -> None:
         config={"configurable": {"thread_id": "mixed-request"}},
     )
 
-    assert set(captured) == {
-        SOFTWARE_SPECIALIST_NAME,
-        NEUTRON_RESEARCH_SPECIALIST_NAME,
-    }
-    assert result["messages"][-1].text == (
-        "The repository and neutron findings are reconciled here."
-    )
-    assert sum(isinstance(message, ToolMessage) for message in result["messages"]) == 2
-
-
-def test_delegated_task_contains_only_relevant_memory_preference() -> None:
-    captured: dict[str, list[str]] = {}
-    delegated = (
-        "Inspect the repository. Relevant saved preference: prefer Python examples. "
-        "Return exact paths and limitations."
-    )
-    supervisor = _build_supervisor(
-        [
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "description": delegated,
-                        "subagent_type": SOFTWARE_SPECIALIST_NAME,
-                    },
-                    "id": "delegate-with-preference",
-                }],
-            ),
-            AIMessage(content="The answer uses Python examples."),
-        ],
-        captured,
-    )
-
-    supervisor.invoke(
-        {
-            "messages": [(
-                "user",
-                "Inspect the repository. Saved notes also contain an unrelated dark-mode preference.",
-            )]
-        },
-        config={"configurable": {"thread_id": "memory-filter"}},
-    )
-
-    task = captured[SOFTWARE_SPECIALIST_NAME][0]
-    assert "prefer Python examples" in task
-    assert "dark-mode" not in task
-    assert "complete memory" not in task
+    assert set(captured) == {SOFTWARE_SPECIALIST_NAME, NEUTRON_RESEARCH_SPECIALIST_NAME}
+    assert "reconciled here" in result["messages"][-1].text

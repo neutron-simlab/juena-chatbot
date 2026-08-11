@@ -48,6 +48,16 @@ def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
     }
     assert all((JSCATTER_SKILL / path).is_file() for path in reference_paths)
     assert "[TODO" not in skill_text
+    assert re.search(r"They do not exist inside the\s+execution container", skill_text)
+    assert "before any fit or" in skill_text
+    assert "do not retry `write_file` with" in skill_text
+
+    recipes = (
+        JSCATTER_SKILL / "references/execution-recipes.md"
+    ).read_text(encoding="utf-8")
+    assert "is not mounted inside the" in recipes
+    assert "before every fitting or plotting" in recipes
+    assert "`write_file` will not overwrite" in recipes
 
     interface = yaml.safe_load(
         (JSCATTER_SKILL / "agents/openai.yaml").read_text(encoding="utf-8")

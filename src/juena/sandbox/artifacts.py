@@ -40,7 +40,18 @@ MAX_UNDELIVERED_NOTICES_PER_TURN = 8
 ArtifactCategory = Literal["result", "record"]
 
 _TEXT_EXTENSIONS = frozenset(
-    {".csv", ".ipynb", ".json", ".log", ".md", ".py", ".sh", ".tsv", ".txt"}
+    {
+        ".csv",
+        ".dat",
+        ".ipynb",
+        ".json",
+        ".log",
+        ".md",
+        ".py",
+        ".sh",
+        ".tsv",
+        ".txt",
+    }
 )
 
 
@@ -101,6 +112,7 @@ class _PendingTurn:
     """
 
     ids: list[str] = field(default_factory=list)
+    result_ids: list[str] = field(default_factory=list)
     images: int = 0
     result_bytes: int = 0
     records: int = 0
@@ -129,6 +141,7 @@ class _PendingTurn:
         if category == "record":
             self.records += 1
             return
+        self.result_ids.append(artifact_id)
         self.result_bytes += size
         if kind == "image":
             self.images += 1
@@ -291,6 +304,37 @@ class ArtifactStore:
             ids = pending.ids if pending is not None else []
             refs = [stored.public_ref() for item in ids if (stored := self._load(user_id, item))]
         return [ref.model_dump(mode="json") for ref in refs]
+
+    def peek_result_refs(self, user_id: str, thread_id: str) -> list[ArtifactRef]:
+        """Return pending user-result references without claiming message delivery."""
+
+        with self._lock:
+            pending = self._pending_message.get((user_id, thread_id))
+            ids = list(pending.result_ids) if pending is not None else []
+            return [
+                stored.public_ref()
+                for artifact_id in ids
+                if (stored := self._load(user_id, artifact_id)) is not None
+            ]
+
+    def peek_undelivered(self, user_id: str, thread_id: str) -> list[tuple[str, str]]:
+        """Return pending delivery failures without consuming the final report notice."""
+
+        with self._lock:
+            pending = self._pending_message.get((user_id, thread_id))
+            if pending is None:
+                return []
+            queued = list(pending.undelivered)
+            if pending.undelivered_omitted:
+                count = pending.undelivered_omitted
+                noun = "file" if count == 1 else "files"
+                queued.append(
+                    (
+                        f"{count} additional output {noun}",
+                        "Details omitted because this report is bounded",
+                    )
+                )
+            return queued
 
     def note_undelivered(
         self,

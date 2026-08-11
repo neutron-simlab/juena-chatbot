@@ -43,6 +43,20 @@ def error_event(content: str) -> dict[str, Any]:
     return {"type": "error", "content": content}
 
 
+def clarification_required_event(interrupt_id: str, value: dict[str, Any]) -> dict[str, Any]:
+    """Surface a question an agent raised with `ask_user`."""
+    options = value.get("options")
+    return {
+        "type": "clarification_required",
+        "interrupt_id": interrupt_id,
+        "asked_by": value.get("asked_by") or "",
+        "question": value.get("question") or "",
+        "options": [item for item in options if isinstance(item, str)]
+        if isinstance(options, list)
+        else [],
+    }
+
+
 def approval_required_event(interrupt_id: str, value: dict[str, Any]) -> dict[str, Any]:
     action_requests = value.get("action_requests") or []
     review_configs = value.get("review_configs") or []

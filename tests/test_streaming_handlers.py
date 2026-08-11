@@ -178,6 +178,54 @@ async def test_v2_interrupt_becomes_clickable_approval_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_specialist_question_becomes_a_clarification_event() -> None:
+    """A question raised inside a subagent still reaches the user's stream."""
+
+    interrupt = Interrupt(
+        id="interrupt-2",
+        value={
+            "kind": "clarification",
+            "asked_by": "software-specialist",
+            "question": "Which background subtraction should I use?",
+            "options": ["Solvent-only", "Empty cell", 7],
+        },
+    )
+
+    payloads = await _collect(
+        _processor(),
+        {
+            "type": "updates",
+            "ns": ("tools:abc",),
+            "data": {"__interrupt__": (interrupt,)},
+        },
+    )
+
+    assert payloads == [
+        {
+            "type": "clarification_required",
+            "interrupt_id": "interrupt-2",
+            "asked_by": "software-specialist",
+            "question": "Which background subtraction should I use?",
+            "options": ["Solvent-only", "Empty cell"],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_unrecognisable_interrupt_is_not_streamed() -> None:
+    payloads = await _collect(
+        _processor(),
+        {
+            "type": "updates",
+            "ns": (),
+            "data": {"__interrupt__": (Interrupt(id="interrupt-3", value={"kind": "other"}),)},
+        },
+    )
+
+    assert payloads == []
+
+
+@pytest.mark.asyncio
 async def test_resumed_interrupt_is_not_emitted_as_a_stale_approval() -> None:
     interrupt = Interrupt(
         id="interrupt-1",

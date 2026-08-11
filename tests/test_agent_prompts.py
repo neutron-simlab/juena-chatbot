@@ -7,13 +7,7 @@ from juena.agents.specialists.neutron_research.agent import build_neutron_resear
 from juena.agents.specialists.software.agent import build_software_prompt
 from juena.sandbox.software import repository_software_requirements
 
-REPORT_HEADINGS = (
-    "## Finding",
-    "## Evidence",
-    "## Actions",
-    "## Artifacts",
-    "## Limitations",
-)
+STRUCTURED_REPORT_FIELDS = ("status", "finding", "evidence", "actions", "limitations")
 
 
 @pytest.mark.parametrize(
@@ -39,10 +33,37 @@ def test_supervisor_prompt_enforces_strict_delegation_and_memory_scope() -> None
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
     assert "Delegate every substantive" in prompt
-    assert "Use one specialist by default" in prompt
+    assert "Prefer one specialist" in prompt
     assert "never paste the complete memory file" in prompt
-    assert "Produce the only user-facing answer" in prompt
     assert "Never rerun specialist code" in prompt
+
+
+def test_supervisor_prompt_makes_the_server_block_authoritative() -> None:
+    """The supervisor writes the answer, so it must know which block wins."""
+
+    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+
+    assert "`<specialist_report>`" in prompt
+    assert "`<verified_by_server>`" in prompt
+    assert "It is authoritative and overrides the report" in prompt
+    assert "STATUS: UNVERIFIED" in prompt
+    assert "Only mention files the verified block actually lists" in prompt
+
+
+@pytest.mark.parametrize(
+    ("package", "filename"),
+    [
+        ("juena.agents", "SUPERVISOR.md"),
+        ("juena.agents.specialists.software", "AGENT.md"),
+        ("juena.agents.specialists.neutron_research", "AGENT.md"),
+    ],
+)
+def test_prompts_tell_every_agent_when_to_ask_the_user(package: str, filename: str) -> None:
+    prompt = load_markdown(package, filename)
+
+    assert "`ask_user`" in prompt
+    assert "The user is the domain expert; you are not." in prompt
+    assert "never ask the same question twice" in prompt or "never re-ask" in prompt
 
 
 def test_supervisor_routes_every_sandbox_request_to_the_software_specialist() -> None:
@@ -62,8 +83,8 @@ def test_supervisor_routes_every_sandbox_request_to_the_software_specialist() ->
     ],
 )
 def test_specialist_prompts_share_the_report_contract(prompt: str) -> None:
-    assert all(heading in prompt for heading in REPORT_HEADINGS)
-    assert "artifact ID | filename | MIME type | caption" in prompt
+    assert "## Structured report" in prompt
+    assert all(f"`{field}`" in prompt for field in STRUCTURED_REPORT_FIELDS)
 
 
 @pytest.mark.parametrize(
@@ -94,6 +115,15 @@ def test_software_prompt_reports_files_that_were_not_delivered() -> None:
     assert "Never claim the user can see a file the tool did not attach." in prompt
 
 
+def test_software_prompt_explains_virtual_repos_and_safe_script_revision() -> None:
+    prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
+
+    assert "/repos` is a virtual read-tool route" in prompt
+    assert "never use it in `execute`" in prompt
+    assert "`write_file` creates a new path and refuses an existing one" in prompt
+    assert "with `edit_file` or choose a new filename" in prompt
+
+
 def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
     prompt = build_software_prompt(has_repo_research=False, has_context7=False)
 
@@ -102,27 +132,22 @@ def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
     assert "Do not claim to inspect local repositories" in prompt
 
 
-def test_software_prompt_requires_loading_applicable_dynamic_skills() -> None:
+def test_software_prompt_preserves_model_chosen_lazy_skill_loading() -> None:
     authored_prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
 
-    skill_gate = authored_prompt.index("## Mandatory skill gate")
+    skill_loading = authored_prompt.index("## Lazy skill loading")
     repository_workflow = authored_prompt.index("For local repository questions")
 
-    assert skill_gate < repository_workflow
-    assert "before any repository search" in authored_prompt
-    assert "This is mandatory, not a suggestion." in authored_prompt
+    assert skill_loading < repository_workflow
     assert "dynamically injected **Available Skills** metadata" in authored_prompt
+    assert "Decide from each listed description" in authored_prompt
     assert "read its exact listed `SKILL.md`" in authored_prompt
     assert "load only the supporting references" in authored_prompt
-    assert (
-        "Repository documentation and remembered API knowledge do not replace"
-        in authored_prompt
-    )
-    assert "Only when **Available Skills** is absent or empty" in authored_prompt
-    assert "when no listed description" in authored_prompt
-    assert "matches the objective" in authored_prompt
-    assert "Do not load an unrelated" in authored_prompt
-    assert "skill merely because one is available" in authored_prompt
+    assert "If no listed skill is relevant, continue directly" in authored_prompt
+    assert "Do not call or report a" in authored_prompt
+    assert "no-skill decision" in authored_prompt
+    assert "They do not block" in authored_prompt
+    assert "skill_decision" not in authored_prompt
     assert "jscatter" not in authored_prompt.lower()
 
 

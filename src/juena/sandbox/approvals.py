@@ -1,4 +1,10 @@
-"""Validation and LangGraph resume commands for sandbox approvals."""
+"""Validation and LangGraph resume commands for pending interrupts.
+
+Two kinds travel through this pipe: a sandbox `execute` approval raised by
+`HumanInTheLoopMiddleware`, and a clarification question raised by the `ask_user`
+tool. Both are resumed by interrupt id, so a question asked from inside a
+specialist subgraph resumes that specialist exactly where it paused.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +13,15 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt
 
+from juena.agents.ask_user import CLARIFICATION_KIND
 from juena.sandbox.artifacts import get_artifact_store
-from juena.sandbox.schemas import ApprovalResumeInput
+from juena.sandbox.schemas import (
+    ApprovalResumeInput,
+    ClarificationResumeInput,
+    ResumeInput,
+)
+
+EXECUTE_APPROVAL_KIND = "execute_approval"
 
 
 class ApprovalError(ValueError):
@@ -28,21 +41,35 @@ async def get_pending_interrupt(
     raise ApprovalError("Approval is stale, already used, or does not belong to this thread")
 
 
-async def get_first_pending_execute_interrupt(
+def interrupt_kind(interrupt: Interrupt) -> str | None:
+    """Classify one pending interrupt, or return None when it is unusable."""
+
+    value = interrupt.value
+    if not isinstance(value, dict):
+        return None
+    if value.get("kind") == CLARIFICATION_KIND:
+        return CLARIFICATION_KIND if isinstance(value.get("question"), str) else None
+    try:
+        _execute_action(interrupt)
+    except ApprovalError:
+        return None
+    return EXECUTE_APPROVAL_KIND
+
+
+async def get_first_pending_interrupt(
     agent: CompiledStateGraph,
     config: dict[str, Any],
-) -> Interrupt | None:
-    """Return the first valid execute interrupt, including after a UI reload."""
+) -> tuple[Interrupt, str] | None:
+    """Return the first usable pending interrupt, including after a UI reload."""
+
     snapshot = await agent.aget_state(config=config)
     for task in getattr(snapshot, "tasks", ()):
         for interrupt in getattr(task, "interrupts", ()):
             if not isinstance(interrupt, Interrupt):
                 continue
-            try:
-                _execute_action(interrupt)
-            except ApprovalError:
-                continue
-            return interrupt
+            kind = interrupt_kind(interrupt)
+            if kind is not None:
+                return interrupt, kind
     return None
 
 
@@ -63,14 +90,12 @@ def _execute_action(interrupt: Interrupt) -> dict[str, Any]:
     return action
 
 
-async def build_resume_command(
+def _execute_resume(
     *,
-    agent: CompiledStateGraph,
-    config: dict[str, Any],
+    interrupt: Interrupt,
     user_id: str,
     payload: ApprovalResumeInput,
 ) -> Command:
-    interrupt = await get_pending_interrupt(agent, config, payload.interrupt_id)
     action = _execute_action(interrupt)
     original_args = dict(action["args"])
 
@@ -100,8 +125,7 @@ async def build_resume_command(
             },
         }
 
-    store = get_artifact_store()
-    store.audit(
+    get_artifact_store().audit(
         {
             "event": "sandbox_approval",
             "user_id": user_id,
@@ -112,10 +136,45 @@ async def build_resume_command(
             "decision": payload.decision,
         }
     )
-    return Command(
-        resume={
-            payload.interrupt_id: {
-                "decisions": [decision],
-            }
+    return Command(resume={payload.interrupt_id: {"decisions": [decision]}})
+
+
+def _clarification_resume(
+    *,
+    interrupt: Interrupt,
+    user_id: str,
+    payload: ClarificationResumeInput,
+) -> Command:
+    if interrupt_kind(interrupt) != CLARIFICATION_KIND:
+        raise ApprovalError("This interrupt is not a pending question")
+    answer = payload.answer.strip()
+    if not answer:
+        raise ApprovalError("An answer must not be empty")
+    get_artifact_store().audit(
+        {
+            "event": "clarification_answered",
+            "user_id": user_id,
+            "thread_id": payload.thread_id,
+            "interrupt_id": payload.interrupt_id,
         }
     )
+    # The tool returns this string, so the asking agent resumes with the user's
+    # own words rather than a decision code.
+    return Command(resume={payload.interrupt_id: answer})
+
+
+async def build_resume_command(
+    *,
+    agent: CompiledStateGraph,
+    config: dict[str, Any],
+    user_id: str,
+    payload: ResumeInput,
+) -> Command:
+    """Validate one pending interrupt and build its typed resume command."""
+
+    interrupt = await get_pending_interrupt(agent, config, payload.interrupt_id)
+    if isinstance(payload, ClarificationResumeInput):
+        return _clarification_resume(interrupt=interrupt, user_id=user_id, payload=payload)
+    if interrupt_kind(interrupt) != EXECUTE_APPROVAL_KIND:
+        raise ApprovalError("This interrupt is not a pending sandbox command")
+    return _execute_resume(interrupt=interrupt, user_id=user_id, payload=payload)

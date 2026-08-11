@@ -7,12 +7,15 @@ from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 
+from juena.agents.ask_user import build_ask_user_tool
 from juena.agents.specialist_runtime import (
     build_specialist_backend,
     build_specialist_middleware,
     load_markdown,
 )
+from juena.agents.specialist_contracts import SpecialistReport
 from juena.agents.specialists.neutron_research.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
@@ -62,9 +65,13 @@ def build_neutron_research_specialist(
         model=NEUTRON_RESEARCH_SPECIALIST_MODEL,
         temperature=0.0,
     )
+    specialist_tools = [
+        *build_tools(tavily_tool),
+        build_ask_user_tool(NEUTRON_RESEARCH_SPECIALIST_NAME),
+    ]
     runnable = create_agent(
         model=model,
-        tools=build_tools(tavily_tool),
+        tools=specialist_tools,
         system_prompt=build_neutron_research_prompt(has_tavily=tavily_tool is not None),
         middleware=build_specialist_middleware(
             backend=backend,
@@ -73,7 +80,9 @@ def build_neutron_research_specialist(
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Neutron research",
+            specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
         ),
+        response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,
         name="juena_neutron_research_specialist",
     )

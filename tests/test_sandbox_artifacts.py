@@ -89,6 +89,9 @@ def test_execution_records_do_not_consume_the_result_budget(tmp_path) -> None:
     )
 
     assert plot.kind == "image"
+    assert [ref.artifact_id for ref in store.peek_result_refs("user-a", "thread-a")] == [
+        plot.artifact_id
+    ]
 
     with pytest.raises(ValueError, match="execution records"):
         store.register_artifact(
@@ -162,6 +165,27 @@ def test_downloadable_files_are_not_capped_by_count(tmp_path) -> None:
     assert len({ref.artifact_id for ref in refs}) == 30
 
 
+def test_scientific_dat_output_is_validated_as_utf8_text(tmp_path) -> None:
+    store = _store(tmp_path)
+    ref = store.register_artifact(
+        user_id="user-a",
+        thread_id="thread-a",
+        run_id=None,
+        filename="jscatter-fit.dat",
+        content=b"q I eI\n0.1 42 0.2\n",
+    )
+
+    assert (ref.kind, ref.mime_type) == ("file", "text/plain")
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        store.register_artifact(
+            user_id="user-a",
+            thread_id="thread-a",
+            run_id=None,
+            filename="invalid.dat",
+            content=b"\xff\xfe",
+        )
+
+
 def test_begin_turn_discards_a_stale_pending_window(tmp_path) -> None:
     """A cancelled stream never reaches the drain, so the next turn clears it."""
     store = _store(tmp_path)
@@ -190,8 +214,10 @@ def test_undelivered_notice_queue_is_bounded(tmp_path) -> None:
             "not allowed",
         )
 
+    preview = store.peek_undelivered("user-a", "thread-a")
     notices = store.drain_undelivered("user-a", "thread-a")
 
+    assert preview == notices
     assert len(notices) == MAX_UNDELIVERED_NOTICES_PER_TURN + 1
     assert notices[-1] == (
         f"{overflow} additional output files",

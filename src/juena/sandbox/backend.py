@@ -31,6 +31,7 @@ from langgraph.config import get_stream_writer
 
 from juena.core.config import global_config
 from juena.sandbox.artifacts import get_artifact_store, undelivered_note
+from juena.sandbox.evidence import record_sandbox_execution
 from juena.sandbox.jobs import SandboxJobs
 from juena.sandbox.policy import is_redundant_artifact_export
 from juena.sandbox.schemas import ArtifactRef
@@ -130,6 +131,11 @@ class PodmanSandboxBackend(BaseSandbox):
                     "reason": "artifact_already_collected",
                 }
             )
+            record_sandbox_execution(
+                command=command,
+                status="skipped",
+                exit_code=0,
+            )
             return ExecuteResponse(
                 output=(
                     "The application already collects files under /workspace/outputs "
@@ -202,6 +208,15 @@ class PodmanSandboxBackend(BaseSandbox):
                 job_id=str(result.job_id),
                 exit_code=result.exit_code,
             )
+            record_sandbox_execution(
+                command=command,
+                status=result.status,
+                exit_code=result.exit_code,
+                truncated=result.truncated,
+                artifact_ids=[ref.artifact_id for ref in attached],
+                artifact_filenames=[ref.filename for ref in attached],
+                dropped=dropped,
+            )
             model_output = result.output.rstrip()
             note = _artifact_note(attached, dropped)
             if note:
@@ -223,6 +238,11 @@ class PodmanSandboxBackend(BaseSandbox):
                 }
             )
             self._status("failed", "Sandbox worker unavailable")
+            record_sandbox_execution(
+                command=command,
+                status="worker_error",
+                exit_code=None,
+            )
             return ExecuteResponse(output=f"Sandbox unavailable: {exc}", exit_code=None)
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:

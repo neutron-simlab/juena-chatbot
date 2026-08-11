@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Awaitable, Callable
-from typing import Any
+from dataclasses import replace
+from typing import Annotated, Any, NotRequired
 
-from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, ToolMessage, merge_content
+from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import PrivateStateAttr
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
 
 from juena.sandbox.artifacts import (
     ARTIFACT_MESSAGE_KEY,
     get_artifact_store,
-    undelivered_note,
+)
+from juena.sandbox.evidence import (
+    SandboxExecutionEvidence,
+    capture_sandbox_execution,
 )
 from juena.sandbox.policy import requires_execution_approval
 from juena.sandbox.runtime import _context_value
@@ -79,7 +86,15 @@ def _result_text(result: Any) -> str:
     return message.text if message is not None else ""
 
 
-class SandboxExecutionMiddleware(AgentMiddleware):
+class SandboxExecutionState(AgentState):
+    """Specialist-private direct execution evidence."""
+
+    sandbox_execution_events: NotRequired[
+        Annotated[list[dict[str, Any]], operator.add, PrivateStateAttr]
+    ]
+
+
+class SandboxExecutionMiddleware(AgentMiddleware[SandboxExecutionState]):
     """Record the approved sandbox command and its output as artifacts.
 
     `HumanInTheLoopMiddleware` raises its approval interrupt in `after_model`,
@@ -87,26 +102,6 @@ class SandboxExecutionMiddleware(AgentMiddleware):
     the human has already approved -- and `request.tool_call` carries the final,
     post-edit command. No approval state has to be stored or matched by text.
     """
-
-    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        """Put any last undelivered write into the specialist's final report."""
-        last_ai = _final_ai_message(state)
-        identity = _identity(runtime)
-        if last_ai is None or identity is None:
-            return None
-        user_id, thread_id, _run_id = identity
-        pending = get_artifact_store().drain_undelivered(user_id, thread_id)
-        if not pending:
-            return None
-        note = undelivered_note(pending)
-        if last_ai.text.strip():
-            last_ai.content = merge_content(last_ai.content, f"\n\n{note}")
-        else:
-            last_ai.content = note
-        return {"messages": [last_ai]}
-
-    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self.after_model(state, runtime)
 
     def _before(self, request: Any) -> tuple[str, str, str | None, str] | None:
         """Persist the command about to run; return the identity to reuse."""
@@ -138,33 +133,9 @@ class SandboxExecutionMiddleware(AgentMiddleware):
             pass
         return user_id, thread_id, run_id, command
 
-    @staticmethod
-    def _report_undelivered(user_id: str, thread_id: str, result: Any) -> None:
-        """Append `write_file` delivery failures to the command the model just ran.
-
-        A write into `/workspace/outputs` registers its artifact outside any
-        command, and `write_file` has no channel for a warning: deepagents
-        renders success as "Updated file <path>" and treats anything in the
-        error field as a failed write. This is the first place afterwards that
-        both carries free text and belongs to the model rather than to an
-        internal `ls`/`read`/`glob` helper, which parse their output.
-        """
-        message = _tool_message(result)
-        if message is None:
-            return
-        store = get_artifact_store()
-        pending = store.drain_undelivered(user_id, thread_id)
-        if not pending:
-            return
-        existing = message.text.rstrip()
-        note = undelivered_note(pending)
-        message.content = f"{existing}\n\n{note}" if existing else note
-
     @classmethod
     def _after(cls, record: tuple[str, str, str | None, str], result: Any) -> None:
         user_id, thread_id, run_id, command = record
-        # Before the text is read, so the stored record matches what the model saw.
-        cls._report_undelivered(user_id, thread_id, result)
         text = _result_text(result)
         store = get_artifact_store()
         if text:
@@ -190,6 +161,34 @@ class SandboxExecutionMiddleware(AgentMiddleware):
             }
         )
 
+    @staticmethod
+    def _with_evidence(
+        result: Any,
+        command: str,
+        events: list[SandboxExecutionEvidence],
+    ) -> Command:
+        message = _tool_message(result)
+        if not events:
+            events = [
+                SandboxExecutionEvidence(
+                    command=command,
+                    status="tool_error",
+                    exit_code=None,
+                )
+            ]
+        if message is not None:
+            message.status = "success" if events[-1].succeeded else "error"
+        update = getattr(result, "update", None)
+        merged = dict(update) if isinstance(update, dict) else {}
+        if isinstance(result, ToolMessage):
+            merged["messages"] = [result]
+        merged["sandbox_execution_events"] = [
+            event.model_dump(mode="json") for event in events
+        ]
+        if isinstance(result, Command):
+            return replace(result, update=merged)
+        return Command(update=merged)
+
     def wrap_tool_call(
         self,
         request: Any,
@@ -198,9 +197,10 @@ class SandboxExecutionMiddleware(AgentMiddleware):
         record = self._before(request)
         if record is None:
             return handler(request)
-        result = handler(request)
+        with capture_sandbox_execution() as events:
+            result = handler(request)
         self._after(record, result)
-        return result
+        return self._with_evidence(result, record[3], events)
 
     async def awrap_tool_call(
         self,
@@ -210,6 +210,7 @@ class SandboxExecutionMiddleware(AgentMiddleware):
         record = self._before(request)
         if record is None:
             return await handler(request)
-        result = await handler(request)
+        with capture_sandbox_execution() as events:
+            result = await handler(request)
         self._after(record, result)
-        return result
+        return self._with_evidence(result, record[3], events)

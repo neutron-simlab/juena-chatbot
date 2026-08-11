@@ -17,7 +17,10 @@ signatures.
    version differs, disclose the mismatch and verify every used signature against
    `help(...)`, its docstring, or matching source before continuing.
 4. Prefer exact version-matched evidence in `/repos/jscatter/src/jscatter/doc/source/`
-   and `/repos/jscatter/src/jscatter/`. Use the condensed references for workflow
+   and `/repos/jscatter/src/jscatter/`. These are virtual paths for `read_file`,
+   `grep`, `glob`, and indexed repository tools only. They do not exist inside the
+   execution container: never pass `/repos` to `execute`, `cd`, Python imports,
+   subprocesses, or script filenames. Use the condensed references for workflow
    guidance, not as a substitute for an exact callable signature.
 5. Never invent an instrument setting, unit, column meaning, uncertainty, contrast,
    sample composition, or physical constraint. Request or state missing assumptions.
@@ -61,13 +64,21 @@ Read more than one reference only when the task genuinely crosses those boundari
 
 ## Execute within JueNA's sandbox
 
-- Read only from `/inputs`, `/repos`, and `/skills`. Use `/workspace` for temporary
-  state and `/workspace/outputs` for requested or reusable artifacts.
+- Inspect `/repos` and `/skills` only through the specialist's read tools. `/inputs`
+  is also mounted read-only inside `execute`; use it for staged inputs and use
+  `/workspace` for writable state. Never assume the virtual `/repos` or `/skills`
+  routes are mounted in the execution container. Use `/workspace/outputs` for
+  requested or reusable artifacts.
 - Do not install packages or access the network. JScatter is already installed.
-- Call `js.headless(True)` before producing plots. Use JScatter's native `GracePlot`
+- Call `js.headless(True)` immediately after importing JScatter and before any fit or
+  `GracePlot` construction. Fits can launch live xmgrace progress plotting even when
+  the script does not explicitly create a plot. Use JScatter's native `GracePlot`
   by default and save an editable `.agr` plus a PNG when useful; its required
   `gracebat` executable is preinstalled. Use Matplotlib's non-interactive object API
   for plots that need more complex or portable customization.
+- `write_file` only creates a new scratch path. When correcting a script that already
+  exists, use `edit_file` or a new versioned filename; do not retry `write_file` with
+  the same path.
 - Use explicit output filenames and include units in axes and saved metadata.
 - After a successful command reports collected artifacts, stop executing and return
   the specialist report. Do not re-read or encode collected output files.

@@ -7,7 +7,7 @@ from langgraph.types import Interrupt
 
 from juena.sandbox.approvals import ApprovalError, build_resume_command
 from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.sandbox.schemas import ApprovalResumeInput
+from juena.sandbox.schemas import ApprovalResumeInput, ClarificationResumeInput
 from juena.sandbox.policy import requires_execution_approval
 
 
@@ -122,7 +122,7 @@ async def test_stale_or_cross_thread_interrupt_is_rejected(artifact_store) -> No
 async def test_non_execute_interrupt_is_rejected(artifact_store) -> None:
     interrupt = _interrupt()
     interrupt.value["action_requests"][0]["name"] = "write_file"
-    with pytest.raises(ApprovalError, match="Only sandbox execute"):
+    with pytest.raises(ApprovalError, match="not a pending sandbox command"):
         await build_resume_command(
             agent=_Agent([interrupt]),
             config={},
@@ -151,3 +151,50 @@ def test_redundant_artifact_export_does_not_request_human_approval() -> None:
     assert requires_execution_approval(request) is False
     request.tool_call["args"]["command"] = "python /workspace/plot.py"
     assert requires_execution_approval(request) is True
+
+
+def _question(interrupt_id: str = "interrupt-2") -> Interrupt:
+    return Interrupt(
+        id=interrupt_id,
+        value={
+            "kind": "clarification",
+            "asked_by": "software-specialist",
+            "question": "Which background subtraction should I use?",
+            "options": ["Solvent-only", "Empty cell"],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_answer_resumes_the_asking_agent_with_the_users_own_words(
+    artifact_store,
+) -> None:
+    command = await build_resume_command(
+        agent=_Agent([_question()]),
+        config={},
+        user_id="user-a",
+        payload=ClarificationResumeInput(
+            kind="clarification",
+            thread_id="thread-a",
+            interrupt_id="interrupt-2",
+            answer="  Empty cell  ",
+        ),
+    )
+
+    assert command.resume == {"interrupt-2": "Empty cell"}
+
+
+@pytest.mark.asyncio
+async def test_an_answer_cannot_approve_a_pending_sandbox_command(artifact_store) -> None:
+    with pytest.raises(ApprovalError, match="not a pending question"):
+        await build_resume_command(
+            agent=_Agent([_interrupt()]),
+            config={},
+            user_id="user-a",
+            payload=ClarificationResumeInput(
+                kind="clarification",
+                thread_id="thread-a",
+                interrupt_id="interrupt-1",
+                answer="approve it",
+            ),
+        )

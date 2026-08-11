@@ -31,6 +31,7 @@ MAX_RECORD_ARTIFACTS_PER_TURN = 40
 # Downloadable (non-image) artifact types, mapped to the MIME type served back.
 DOWNLOAD_TYPES = {
     ".csv": "text/csv",
+    ".dat": "text/plain",
     ".ipynb": "application/x-ipynb+json",
     ".json": "application/json",
     ".log": "text/plain",

@@ -342,7 +342,7 @@ def test_pending_approval_offers_one_click_choices(monkeypatch) -> None:
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
 
-    assert chat_interface.render_pending_approval() is True
+    assert chat_interface.render_pending_interrupt() is True
 
     # The card is drawn twice into the same placeholder: live, then spent.
     assert slot.container_calls == 2
@@ -398,9 +398,96 @@ def test_pending_approval_ignores_clicks_once_a_decision_is_taken(monkeypatch) -
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
 
-    assert chat_interface.render_pending_approval() is False
+    assert chat_interface.render_pending_interrupt() is False
 
     assert all(kwargs["disabled"] for _label, kwargs in calls)
+    resume_mock.assert_not_called()
+
+
+def test_pending_question_offers_suggestions_and_a_free_text_answer(monkeypatch) -> None:
+    chat_interface = _import_chat_interface(monkeypatch)
+    calls: list[tuple[str, dict]] = []
+    clarification = {
+        "type": "clarification_required",
+        "interrupt_id": "interrupt-2",
+        "asked_by": "software-specialist",
+        "question": "Which background subtraction?",
+        "options": ["Solvent-only", "Empty cell"],
+    }
+    session_state = _SessionState(
+        thread_id="thread-1",
+        messages=[ChatMessage(type="human", content="reduce this")],
+        pending_approvals={"thread-1": clarification},
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+    )
+    slot = _FakePlaceholder()
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        container=lambda **_kwargs: _DummyContext(),
+        subheader=Mock(),
+        write=Mock(),
+        caption=Mock(),
+        text_area=Mock(return_value=""),
+        button=Mock(return_value=False),
+        columns=lambda count: [
+            _ButtonColumn("Empty cell", calls) for _ in range(count)
+        ],
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(side_effect=[slot, Mock()]),
+    )
+    resume_mock = Mock()
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
+
+    assert chat_interface.render_pending_interrupt() is True
+
+    # Live card, then a spent copy redrawn into the same placeholder.
+    assert slot.container_calls == 2
+    assert [label for label, _kwargs in calls[:2]] == ["Solvent-only", "Empty cell"]
+    assert all(kwargs["disabled"] for _label, kwargs in calls[2:])
+    assert session_state["clarify_answer:thread-1:interrupt-2"] == "Empty cell"
+    resume_mock.assert_called_once()
+    assert resume_mock.call_args.kwargs["answer"] == "Empty cell"
+    assert resume_mock.call_args.args[1] is None
+
+
+def test_a_question_waits_until_an_answer_is_actually_given(monkeypatch) -> None:
+    """Rendering the card must not resume the turn on its own."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    calls: list[tuple[str, dict]] = []
+    clarification = {
+        "type": "clarification_required",
+        "interrupt_id": "interrupt-2",
+        "asked_by": "juena",
+        "question": "Which instrument?",
+        "options": [],
+    }
+    session_state = _SessionState(
+        thread_id="thread-1",
+        messages=[ChatMessage(type="human", content="explain")],
+        pending_approvals={"thread-1": clarification},
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+    )
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        container=lambda **_kwargs: _DummyContext(),
+        subheader=Mock(),
+        write=Mock(),
+        caption=Mock(),
+        text_area=Mock(return_value="   "),
+        button=Mock(return_value=True),
+        columns=lambda count: [_ButtonColumn("", calls) for _ in range(count)],
+        chat_message=lambda _role: _DummyContext(),
+        empty=Mock(return_value=_FakePlaceholder()),
+    )
+    resume_mock = Mock()
+    monkeypatch.setattr(chat_interface, "st", fake_st)
+    monkeypatch.setattr(chat_interface, "stream_and_display_resume", resume_mock)
+
+    # Send was clicked, but the box holds only whitespace.
+    assert chat_interface.render_pending_interrupt() is False
     resume_mock.assert_not_called()
 
 
