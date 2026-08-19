@@ -17,19 +17,10 @@ from deepagents.backends.protocol import (
 MEMORY_NAMESPACE_PREFIX = "memories"
 MEMORY_SOURCES = ["/memories/AGENTS.md"]
 
-#: Where a specialist leaves evidence for the next one.
-#:
-#: **It is not one place.** A specialist writes it through whatever its backend's
-#: default is: graph state when there is no sandbox, and the per-thread Podman
-#: workspace when there is. Both work for the case they were built for -- the
-#: workspace persists across delegations on a thread, so interactive specialists
-#: still see each other's findings -- but they are different stores, and a
-#: background specialist (which never has a sandbox) always writes to state.
-#:
-#: A composite *route* would unify them, and must not be used: `CompositeBackend`
-#: strips the matched prefix, so `/findings/x.md` would be stored under `/x.md`,
-#: indistinguishable from any other top-level file. `juena.research` therefore
-#: carries findings back through the job row instead of relying on shared state.
+#: Where a specialist leaves evidence for the next one, and the key it is stored
+#: under in the graph's ``files`` channel. Mounted through
+#: :class:`FindingsStateBackend` in every specialist backend -- see that class for
+#: why it cannot be a plain ``StateBackend``.
 FINDINGS_PREFIX = "/findings/"
 
 JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
@@ -72,22 +63,30 @@ JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
 
 SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
-        "List the supervisor's persistent memory directory. Domain files and "
-        "staged inputs belong to specialists."
+        "List `/findings/` to see what your specialists have established on this "
+        "conversation, or `/memories/` for saved preferences. Nothing else is "
+        "visible to you: staged inputs and repository files belong to specialists."
     ),
     "read_file": (
-        "Read `/memories/AGENTS.md` when saved preferences are relevant to "
-        "delegation or the final answer. Do not use this tool for domain research."
+        "Read a `/findings/<topic>.md` a specialist reported, to weigh its "
+        "evidence or reconcile it with another report; or `/memories/AGENTS.md` "
+        "when saved preferences bear on delegation. This is not domain research "
+        "-- it shows you what a specialist already found, and you cannot search "
+        "repositories or run code yourself."
     ),
-    "grep": "Search only the supervisor's saved memory for an exact preference.",
-    "glob": "Find only files under `/memories/`; normally only `AGENTS.md` exists.",
+    "grep": (
+        "Search `/findings/` for a term across everything your specialists have "
+        "established, or `/memories/` for an exact saved preference."
+    ),
+    "glob": "Find files under `/findings/` or `/memories/`; nothing else is visible.",
     "write_file": (
         "Create `/memories/AGENTS.md` only when the user explicitly asks you to "
-        "remember something."
+        "remember something. `/findings/` is written by specialists, never by you."
     ),
     "edit_file": (
         "Edit `/memories/AGENTS.md` only when the user explicitly asks you to "
-        "remember or forget something."
+        "remember or forget something. `/findings/` is written by specialists, "
+        "never by you."
     ),
 }
 
@@ -134,6 +133,142 @@ class ReadOnlyInputsStateBackend(StateBackend):
         if self._is_read_only_path(file_path):
             return EditResult(error=f"Cannot edit read-only staged input path '{file_path}'.")
         return super().edit(file_path, old_string, new_string, replace_all=replace_all)
+
+
+class FindingsStateBackend(StateBackend):
+    """``/findings/`` on the graph's ``files`` channel, with the path kept intact.
+
+    Two problems make this class necessary rather than a plain ``StateBackend``.
+
+    *It must be a route.* Left to a specialist backend's default, ``/findings/``
+    is graph state without the sandbox but the Podman container **with** it --
+    and that container's root filesystem is read-only, so `write_file` failed
+    outright with ``Errno 30: Read-only file system: '/findings'``. A background
+    specialist never has a sandbox, so the two halves could not exchange anything
+    even when the write succeeded.
+
+    *But a route rewrites the key.* ``CompositeBackend`` strips a matched prefix
+    before delegating and re-adds it to whatever comes back, so a plain
+    ``StateBackend`` here would store ``/findings/survey.md`` as ``/survey.md`` --
+    indistinguishable from any other top-level file, and missed by the prefix
+    filter :mod:`juena.research` uses to decide what a background run produced.
+
+    So this presents the stripped view the composite expects while storing the
+    full path: prefix on the way in, strip on the way out.
+
+    **Synchronous methods only.** ``BackendProtocol`` implements every ``a*``
+    method as ``asyncio.to_thread(self.<sync>, ...)``, so an async call already
+    arrives here -- and an ``a*`` override that maps the path as well applies the
+    mapping twice, storing ``/findings/findings/survey.md`` on the path the
+    running agent actually takes. The same rule explains why ``glob`` and
+    ``grep`` are overridden rather than ``glob_info`` / ``grep_raw``:
+    ``StateBackend`` implements the public pair directly against its own state
+    and never calls the underscore variants.
+    """
+
+    _PREFIX = "/findings"
+
+    def _stored(self, path: str) -> str:
+        """The composite's stripped path, as a real key."""
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return self._PREFIX + path
+
+    def _visible(self, path: str) -> str:
+        """A stored key, back in the form the composite will re-prefix."""
+        return path[len(self._PREFIX):] or "/"
+
+    def _remap(self, entries: Any) -> Any:
+        for entry in entries or []:
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                entry["path"] = self._visible(entry["path"])
+        return entries
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return super().read(self._stored(file_path), offset=offset, limit=limit)
+
+    def ls(self, path: str) -> LsResult:
+        result = super().ls(self._stored(path))
+        return LsResult(entries=self._remap(result.entries), error=result.error)
+
+    def glob(self, pattern: str, path: str | None = None) -> Any:
+        result = super().glob(pattern, self._stored(path or "/"))
+        result.matches = self._remap(result.matches)
+        return result
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
+        result = super().grep(pattern, self._stored(path or "/"), glob)
+        result.matches = self._remap(result.matches)
+        return result
+
+    #: Reserved for the collection boundary, which parks a background result here
+    #: when the conversation changed the same path while the job ran. Nothing an
+    #: agent writes belongs in it, and a write that landed here would be
+    #: indistinguishable from a preserved conflict.
+    _RESERVED = "/_conflicts/"
+    _RESERVED_ERROR = (
+        "/findings/_conflicts/ is written by the server when a background result "
+        "cannot be merged. Write your finding to /findings/<topic>.md instead."
+    )
+
+    def _reserved(self, file_path: str) -> bool:
+        return self._stored(file_path).startswith(self._PREFIX + self._RESERVED)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        if self._reserved(file_path):
+            return WriteResult(error=self._RESERVED_ERROR)
+        return super().write(self._stored(file_path), content)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        if self._reserved(file_path):
+            return EditResult(error=self._RESERVED_ERROR)
+        return super().edit(
+            self._stored(file_path), old_string, new_string, replace_all=replace_all
+        )
+
+
+class ReadOnlyFindingsStateBackend(FindingsStateBackend):
+    """What specialists established, for the supervisor to read but never add to.
+
+    The supervisor delegates rather than researches, so its backend refuses
+    everything outside ``/memories/``. That line was drawn one notch too tight:
+    it also blocked reading what came *back*, leaving the supervisor unable to
+    confirm that a specialist wrote the finding it claimed, or to reconcile two
+    reports without delegating a third time to do it.
+
+    Reading is the whole of the grant. ``/findings/`` records what somebody
+    observed -- paths, line numbers, values -- and the supervisor deals in
+    paraphrase of reports; letting it write here would file its own summary as
+    evidence. It also still has no way to *gather* anything: no repository
+    search, no sandbox. It can read what specialists found, not become one.
+
+    Synchronous overrides only, for the reason :class:`FindingsStateBackend`
+    documents -- ``BackendProtocol`` routes every ``a*`` method through its plain
+    counterpart, so the refusal is inherited rather than restated.
+    """
+
+    _ERROR = (
+        "Only specialists write to /findings/; it holds what they observed. "
+        "Delegate the work instead."
+    )
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error=self._ERROR)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        return EditResult(error=self._ERROR)
 
 
 class SupervisorStateBackend(StateBackend):
@@ -199,5 +334,10 @@ def build_supervisor_backend(store: Any) -> CompositeBackend:
             # per-thread working memory, not something the user owns across
             # threads, and the checkpointer already persists it.
             "/conversation_history/": StateBackend(),
+            # A specialist's `files` merge back into this same channel when its
+            # delegation returns, so the evidence was always here -- the
+            # supervisor was simply not allowed to look at it. Read-only; see
+            # `ReadOnlyFindingsStateBackend` for where that line falls and why.
+            FINDINGS_PREFIX: ReadOnlyFindingsStateBackend(),
         },
     )

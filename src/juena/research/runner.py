@@ -21,6 +21,7 @@ from uuid import UUID
 from langchain_core.messages import AIMessage, HumanMessage
 
 from juena.agents.backends import FINDINGS_PREFIX
+from juena.agents.findings import FindingsMap, findings_delta, fingerprint
 from juena.core.log import get_logger
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
@@ -80,12 +81,15 @@ def _report_text(result: dict[str, Any]) -> str:
     return NO_REPORT
 
 
-def _written_findings(result: dict[str, Any]) -> dict[str, Any]:
-    """Files the run left under `/findings/`, to hand back on collection."""
-    files = result.get("files") or {}
-    return {
-        path: data for path, data in files.items() if path.startswith(FINDINGS_PREFIX)
-    }
+def _written_findings(result: dict[str, Any], seed: dict[str, Any]) -> FindingsMap:
+    """Findings this run created or changed, measured against what it was given.
+
+    A prefix filter alone returns the whole seeded snapshot too, because the job
+    starts with the conversation's findings in its state. Collecting that would
+    rewrite every finding with a copy the run never touched -- reverting anything
+    edited while the job was still working.
+    """
+    return findings_delta(seed, result.get("files"))
 
 
 async def _invoke(
@@ -165,7 +169,10 @@ async def _run(
             job_id,
             status="succeeded",
             report=_report_text(result),
-            findings=_written_findings(result),
+            findings=_written_findings(result, seed),
+            # The revision this run read, so collection can tell "nobody touched
+            # it since" from "the conversation moved on while I was working".
+            base_findings=fingerprint(seed),
         )
         logger.info("Research job %s finished (%s)", job_id, specialist)
 

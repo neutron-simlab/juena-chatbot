@@ -23,7 +23,12 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
 )
 
-from juena.agents.backends import ReadOnlyFilesystemBackend, ReadOnlyInputsStateBackend
+from juena.agents.backends import (
+    FINDINGS_PREFIX,
+    FindingsStateBackend,
+    ReadOnlyFilesystemBackend,
+    ReadOnlyInputsStateBackend,
+)
 from juena.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.core.config import global_config
@@ -46,8 +51,14 @@ SPECIALIST_TOOL_CALL_LIMIT = 150
 #: (`RESEARCH_TIMEOUT_SECONDS`); this only stops a loop from spinning forever.
 BACKGROUND_MODEL_CALL_LIMIT = 150
 BACKGROUND_TOOL_CALL_LIMIT = 400
+#: Questions allowed per graph *invocation*, not per user turn: answering one
+#: resumes the graph, which starts a new invocation and resets the count. So this
+#: bounds one uninterrupted stretch of asking, and the prompt rule against
+#: re-asking an answered question is what covers the rest.
 ASK_USER_CALL_LIMIT = 3
 MODEL_MAX_RETRIES = 3
+#: Pinned rather than inherited: `ToolRetryMiddleware` defaults to 2 today, and a
+#: silent upstream change to that default would silently change JueNA's policy.
 TOOL_MAX_RETRIES = 2
 
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -63,10 +74,9 @@ UNATTENDED_NOTICE = (
     "with the evidence you can gather, and put whatever you could not settle in "
     "`limitations` -- an honest gap there is worth far more than a guess, "
     "because the supervisor can act on it and cannot act on a guess.\n\n"
-    "Your report is the deliverable. Write to `/findings/` as usual, and know "
-    "that its **contents** are carried back with the report rather than the file "
-    "itself -- so put the evidence in the file, not a pointer to somewhere else, "
-    "and keep it tight enough to be worth reading whole."
+    "Your report is the deliverable. The `/findings/` rule is unchanged here: "
+    "write a file only if this objective asked you to, and if it did, the file "
+    "itself comes back with the report for whoever is delegated to next."
 )
 
 
@@ -134,7 +144,7 @@ def build_specialist_backend(
 ) -> CompositeBackend:
     """Build isolated staged-input, repository, and optional skill routes."""
 
-    routes: dict[str, Any] = {}
+    routes: dict[str, Any] = {FINDINGS_PREFIX: FindingsStateBackend()}
     if repo_cache_root is not None:
         routes["/repos/"] = ReadOnlyFilesystemBackend(
             root_dir=repo_cache_root,
@@ -155,8 +165,24 @@ def resilience_middleware(
     *,
     model_call_limit: int,
     tool_call_limit: int,
+    ask_user_bound: bool = True,
 ) -> list[Any]:
-    """Build retry, fallback, and loop-limit middleware in nesting order."""
+    """Build retry, fallback, and budget middleware in nesting order.
+
+    **Every budget here is per graph invocation.** A resume after an `ask_user`
+    answer or a sandbox approval is a new invocation, so these counts start again.
+    No `thread_limit` is set: the stock one spans every later turn of the same
+    chat, which would eventually stop a healthy long conversation. Bounding a
+    *user turn* needs a turn identity JueNA does not have yet.
+
+    Only `ModelCallLimitMiddleware` terminates. The tool limiters stay on
+    `exit_behavior="continue"`, which is a mechanical cap -- the over-budget call
+    does not run -- rather than a terminal one: `exit_behavior="end"` raises
+    `NotImplementedError` when the offending response carries other pending tool
+    calls, so a parallel batch that crossed the budget would crash the graph
+    instead of ending it. The repeated-call guard closes the observed loop, and
+    the model-call limit remains the final bound.
+    """
 
     middleware: list[Any] = []
     if fallback_models:
@@ -166,14 +192,18 @@ def resilience_middleware(
         ToolRetryMiddleware(max_retries=TOOL_MAX_RETRIES),
         ModelCallLimitMiddleware(run_limit=model_call_limit, exit_behavior="end"),
         ToolCallLimitMiddleware(run_limit=tool_call_limit, exit_behavior="continue"),
-        # Asking is cheap for the model and expensive for the user. Cap it so a
-        # stuck agent cannot turn one turn into an interrogation.
-        ToolCallLimitMiddleware(
-            tool_name="ask_user",
-            run_limit=ASK_USER_CALL_LIMIT,
-            exit_behavior="continue",
-        ),
     ])
+    if ask_user_bound:
+        # Asking is cheap for the model and expensive for the user, so one
+        # uninterrupted stretch of asking is capped. Omitted where `ask_user` is
+        # not bound at all: a budget on an absent tool can never fire.
+        middleware.append(
+            ToolCallLimitMiddleware(
+                tool_name="ask_user",
+                run_limit=ASK_USER_CALL_LIMIT,
+                exit_behavior="continue",
+            )
+        )
     return middleware
 
 
@@ -202,9 +232,11 @@ def build_specialist_middleware(
     summarizer_model: Any,
     fallback_models: list[Any],
     filesystem_tool_descriptions: dict[str, str],
-    skills_dir: Path | None,
-    skills_label: str,
     specialist_name: str,
+    # Omitted by a specialist that authors no skills, rather than pointed at a
+    # directory that does not exist.
+    skills_dir: Path | None = None,
+    skills_label: str = "",
     enable_execution_approval: bool = False,
     unattended: bool = False,
 ) -> list[Any]:
@@ -242,6 +274,7 @@ def build_specialist_middleware(
             tool_call_limit=(
                 BACKGROUND_TOOL_CALL_LIMIT if unattended else SPECIALIST_TOOL_CALL_LIMIT
             ),
+            ask_user_bound=not unattended,
         ),
     ])
     if enable_execution_approval:

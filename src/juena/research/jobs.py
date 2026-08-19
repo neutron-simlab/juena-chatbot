@@ -13,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
+from juena.agents.findings import FindingsMap
 from juena.core.log import get_logger
 from juena.research.constants import (
     ACTIVE_STATUSES,
@@ -79,7 +80,8 @@ async def finish(
     *,
     status: ResearchStatus,
     report: str = "",
-    findings: dict[str, str] | None = None,
+    findings: FindingsMap | None = None,
+    base_findings: dict[str, str] | None = None,
     error: str = "",
 ) -> None:
     """Record a terminal outcome. Only an active job can reach one."""
@@ -95,6 +97,7 @@ async def finish(
                 status=status,
                 report=report,
                 findings=findings or {},
+                base_findings=base_findings or {},
                 error=error,
                 finished_at=datetime.now(UTC),
             )

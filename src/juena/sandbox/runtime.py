@@ -19,7 +19,11 @@ from deepagents.backends.utils import file_data_to_string
 from langgraph.config import get_config
 from langgraph.runtime import get_runtime
 
-from juena.agents.backends import ReadOnlyFilesystemBackend
+from juena.agents.backends import (
+    FINDINGS_PREFIX,
+    FindingsStateBackend,
+    ReadOnlyFilesystemBackend,
+)
 from juena.core.config import global_config
 from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
 from juena.sandbox.jobs import SandboxJobs, tenant_id_for, workspace_id_for
@@ -167,6 +171,11 @@ def build_sandbox_backend(
     sandbox = RuntimePodmanSandboxBackend()
     routes: dict[str, Any] = {
         "/inputs/": ReadOnlySandboxInputsBackend(sandbox),
+        # Graph state, never the container. The sandbox root is read-only, so a
+        # specialist writing here got `Errno 30: Read-only file system`; and even
+        # a writable container would hide findings from a background specialist,
+        # which runs with no sandbox at all.
+        FINDINGS_PREFIX: FindingsStateBackend(),
     }
     if repo_cache_root is not None:
         routes["/repos/"] = ReadOnlyFilesystemBackend(

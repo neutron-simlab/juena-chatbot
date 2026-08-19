@@ -20,6 +20,8 @@ from juena.agents.backends import (
     SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS,
     build_supervisor_backend,
 )
+from juena.agents.delegation import with_delegation_boundary
+from juena.research.delivery import ResearchDeliveryMiddleware
 from juena.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialist_runtime import (
     SUPERVISOR_MODEL_CALL_LIMIT,
@@ -164,13 +166,19 @@ async def create_juena_agent(
         # the authoritative specialist names and descriptions.
         SubAgentMiddleware(
             backend=supervisor_backend,
-            subagents=specialists,
+            # Not the compiled graphs directly: see `juena.agents.delegation` for
+            # what may cross into a specialist and what comes back.
+            subagents=with_delegation_boundary(specialists),
             system_prompt=None,
             task_description=SUPERVISOR_TASK_DESCRIPTION,
         ),
         create_summarization_middleware(summarizer_model, supervisor_backend),
         PatchToolCallsMiddleware(),
         ArtifactMessageMiddleware(),
+        # Declares the private, checkpointed marker `check_research` stamps when
+        # it delivers a background result, which is what makes collection
+        # idempotent across a crash on either side of the checkpoint.
+        ResearchDeliveryMiddleware(),
         RuntimeModelMiddleware(),
         *resilience_middleware(
             fallback_models,

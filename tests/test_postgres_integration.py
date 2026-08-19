@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, MessagesState, START, StateGraph
 from sqlalchemy import inspect
 
+from juena.agents.findings import validate_findings
 from juena.core.config import global_config
 from fastapi import HTTPException
 from juena.server.auth import (
@@ -632,6 +633,53 @@ async def test_a_collected_result_is_never_reported_twice(
         assert await research_jobs.for_thread(thread, user) == []
         # Still readable by id -- collected means "already reported", not "gone".
         assert (await research_jobs.get(job.id, user)) is not None
+
+
+@pytest.mark.asyncio
+async def test_findings_survive_postgres_with_their_full_file_data_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The column is JSON, so nothing on the database side guarantees the shape.
+
+    `findings` was annotated `dict[str, str]` while it actually held Deep Agents
+    `FileData`, and the value is merged straight back into the graph's `files`
+    channel on collection -- where a malformed entry breaks every later read of
+    that path. This exercises the real round trip rather than the annotation:
+    every `FileData` key must come back, and `base_findings` must come back
+    alongside it, because a conflict cannot be detected without the revision the
+    job read.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        user = await _research_user("research-shape")
+        thread = f"thread-{uuid4()}"
+
+        stored = {
+            "/findings/survey.md": {
+                "content": "silx fits with leastsq.py line 40",
+                "encoding": "utf-8",
+                "created_at": "2026-08-19T10:00:00+00:00",
+                "modified_at": "2026-08-19T10:05:00+00:00",
+            }
+        }
+        job = await research_jobs.create(
+            user_id=user, thread_id=thread, specialist="s", objective="survey", concurrency=4
+        )
+        assert job is not None
+        await research_jobs.finish(
+            job.id,
+            status="succeeded",
+            report="<specialist_report>\nStatus: OK\n</specialist_report>",
+            findings=stored,
+            base_findings={"/findings/survey.md": "what the job read"},
+        )
+
+        fetched = await research_jobs.get(job.id, user)
+        assert fetched is not None
+        assert fetched.findings == stored, "a FileData key was lost in the round trip"
+        assert fetched.base_findings == {"/findings/survey.md": "what the job read"}
+        # And what actually reaches graph state is the validated form.
+        assert validate_findings(fetched.findings) == stored
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TypedDict
+from uuid import uuid4
 
 import pytest
 from deepagents.backends.utils import create_file_data
@@ -16,6 +17,7 @@ from juena.agents.backends import (
     JUENA_MEMORY_SYSTEM_PROMPT,
     MEMORY_SOURCES,
     ReadOnlyFilesystemBackend,
+    ReadOnlyFindingsStateBackend,
     ReadOnlyInputsStateBackend,
     SupervisorStateBackend,
     build_supervisor_backend,
@@ -50,6 +52,94 @@ def test_supervisor_state_backend_hides_staged_and_scratch_files() -> None:
     assert backend.write("/scratch.txt", "blocked").error is not None
     assert backend.edit("/inputs/current_message.txt", "a", "b").error is not None
     assert backend.ls("/").entries == []
+
+
+@pytest.mark.asyncio
+async def test_the_supervisor_may_read_findings_but_never_write_them() -> None:
+    """Refused on both paths, from one pair of overrides.
+
+    `BackendProtocol` implements every `a*` method as
+    `asyncio.to_thread(self.<sync>, ...)`, so guarding the plain method guards
+    both -- which is why only the plain pair is overridden here. Asserted rather
+    than assumed: the async path is the one the server actually takes, and an
+    earlier bug in `FindingsStateBackend` lived only there.
+    """
+    backend = ReadOnlyFindingsStateBackend()
+
+    assert backend.write("/survey.md", "my own summary").error is not None
+    assert backend.edit("/survey.md", "a", "b").error is not None
+    assert (await backend.awrite("/survey.md", "my own summary")).error is not None
+    assert (await backend.aedit("/survey.md", "a", "b")).error is not None
+
+
+@pytest.mark.asyncio
+async def test_the_supervisor_can_reason_over_a_finding_a_specialist_left() -> None:
+    """`/findings/` was in the supervisor's state all along, just unreadable.
+
+    A specialist's `files` merge into the parent when its delegation returns, so
+    the evidence arrives on its own -- but `SupervisorStateBackend` refuses every
+    path outside `/memories/`, so the supervisor could not open what it had been
+    handed. It could not check that a claimed finding existed, nor reconcile two
+    reports without delegating a third time.
+
+    Driven with `ainvoke`, and the stored key is asserted unchanged: the route
+    strips `/findings/` before delegating, so a backend that does not put it back
+    stores the file somewhere nothing else will look.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import ToolMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+            return self
+
+    def call(name: str, args: dict, call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+        )
+
+    path = "/findings/survey.md"
+    agent = create_agent(
+        model=ToolModel(
+            responses=[
+                call("ls", {"path": "/findings"}, "ls"),
+                call("read_file", {"file_path": path}, "read"),
+                call("grep", {"pattern": "leastsq", "path": "/findings"}, "grep"),
+                call("write_file", {"file_path": "/findings/mine.md", "content": "x"}, "write"),
+                call("edit_file", {"file_path": path, "old_string": "silx", "new_string": "no"}, "edit"),
+                AIMessage(content="done"),
+            ]
+        ),
+        tools=[],
+        middleware=[FilesystemMiddleware(backend=build_supervisor_backend(InMemoryStore()))],
+        checkpointer=InMemorySaver(),
+    )
+    result = await agent.ainvoke(
+        {
+            "messages": [("user", "what did the specialist find?")],
+            "files": {path: create_file_data("silx fits with leastsq.py line 40")},
+        },
+        config={"configurable": {"thread_id": "supervisor-findings"}},
+        context=RuntimeModelContext(
+            provider="p", model="m", thread_id="t", user_id=str(uuid4())
+        ),
+    )
+    said = {
+        message.tool_call_id: str(message.content)
+        for message in result["messages"]
+        if isinstance(message, ToolMessage)
+    }
+
+    assert path in said["ls"], "the supervisor cannot list a finding it was handed"
+    assert "leastsq.py line 40" in said["read"], "the supervisor cannot open a finding"
+    assert path in said["grep"] and "/findings/findings/" not in said["grep"]
+    assert "Only specialists write" in said["write"]
+    assert "Only specialists write" in said["edit"]
+    assert list(result["files"]) == [path], "the supervisor altered the evidence"
 
 
 def test_supervisor_filesystem_filters_the_execute_tool() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -36,7 +35,6 @@ NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION = (
 )
 NEUTRON_RESEARCH_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
 NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.GPT_OSS.value
-_SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
 def build_neutron_research_prompt(
@@ -73,7 +71,7 @@ def build_neutron_research_specialist(
     ``ask_user``: a job nobody is watching cannot have its question answered.
     """
 
-    backend = build_specialist_backend(skills_dir=_SPECIALIST_SKILLS_PATH)
+    backend = build_specialist_backend()
     model = build_chat_model(
         provider=NEUTRON_RESEARCH_SPECIALIST_PROVIDER,
         model=NEUTRON_RESEARCH_SPECIALIST_MODEL,
@@ -94,8 +92,6 @@ def build_neutron_research_specialist(
             summarizer_model=summarizer_model,
             fallback_models=fallback_models,
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
-            skills_dir=_SPECIALIST_SKILLS_PATH,
-            skills_label="Neutron research",
             specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
             unattended=unattended,
         ),

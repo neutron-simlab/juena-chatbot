@@ -91,10 +91,35 @@ def test_only_findings_come_back() -> None:
                 "/workspace/notes.txt": {"content": "disposable"},
                 "/inputs/current_message.txt": {"content": "the objective, echoed"},
             }
-        }
+        },
+        {},
     )
 
     assert set(written) == {"/findings/sasview-fitting.md"}
+
+
+def test_a_finding_the_run_only_inherited_does_not_come_back() -> None:
+    """The seeded snapshot is not a result, and returning it is not harmless.
+
+    A job starts with the conversation's findings in its state, so a plain prefix
+    filter hands every one of them back. Collecting that rewrites each path with
+    a copy the run never touched -- reverting anything edited while it worked.
+    """
+    seed = {
+        "/findings/untouched.md": {"content": "written before the job started"},
+        "/findings/extended.md": {"content": "original"},
+    }
+    result = {
+        "files": {
+            **seed,
+            "/findings/extended.md": {"content": "original\nplus what the job found"},
+            "/findings/new.md": {"content": "only this run made it"},
+        }
+    }
+
+    written = runner._written_findings(result, seed)
+
+    assert set(written) == {"/findings/extended.md", "/findings/new.md"}
 
 
 # --------------------------------------------------------------------------- #
@@ -198,122 +223,199 @@ def test_an_unattended_software_specialist_never_gets_the_sandbox(
     assert "Sandboxed execution is unavailable" in kwargs["system_prompt"]
 
 
-def test_findings_never_go_behind_a_composite_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`/findings/` must stay on the default backend, never become a route.
+class _RefusingSandbox:
+    """Stands in for the Podman backend and fails loudly if anything reaches it.
 
-    Routing it to a `StateBackend` looks like the obvious way to make it mean one
-    place regardless of the sandbox. It is not: `CompositeBackend` strips the
-    matched prefix, so `/findings/survey.md` would be stored under `/survey.md`,
-    where nothing can tell a finding from any other top-level file -- and the
-    runner's own filtering would stop matching. This pins the behaviour that
-    makes the shortcut wrong, so it is not rediscovered by trying it.
+    The container's root filesystem is read-only, so a `/findings/` write that
+    got this far used to fail with `Errno 30: Read-only file system`.
     """
-    from deepagents.backends import StateBackend
+
+    def __getattr__(self, name: str):
+        def refuse(*_args: Any, **_kwargs: Any):
+            raise AssertionError(f"/findings must never reach the sandbox (called {name})")
+
+        return refuse
+
+
+def _findings_backends(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    """The specialist backend in both shapes: with a sandbox and without."""
+    from juena.agents.specialist_runtime import build_specialist_backend
+
+    monkeypatch.setattr(sandbox_runtime.global_config, "SANDBOX_ENABLED", True)
+    monkeypatch.setattr(
+        sandbox_runtime, "RuntimePodmanSandboxBackend", lambda: _RefusingSandbox()
+    )
+    return [
+        ("plain", build_specialist_backend()),
+        (
+            "sandboxed",
+            sandbox_runtime.build_sandbox_backend(
+                repo_cache_root=None, skills_dir=None, has_skills=False
+            ),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_findings_are_writable_and_readable_with_or_without_a_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/findings/` is graph state in both shapes, under its own full path.
+
+    Three bugs meet here. Left to the backend's default, `/findings/` was the
+    Podman container when the sandbox was on -- and that root is read-only, so
+    `write_file` failed outright with `Errno 30`. Routing it to a plain
+    `StateBackend` instead fixed the write but rewrote the key: `CompositeBackend`
+    strips a matched prefix, so `/findings/survey.md` was stored as `/survey.md`,
+    indistinguishable from any other top-level file and missed by the filter
+    `juena.research` uses. `FindingsStateBackend` does both halves.
+
+    Driven with `ainvoke` deliberately, because that is what the server does and
+    the third bug lived only there: `BackendProtocol` implements every `a*`
+    method as `asyncio.to_thread(self.<sync>, ...)`, so an `a*` override that
+    mapped the path applied it twice. An earlier version of this test called
+    `invoke`, passed, and proved nothing about the running system.
+    """
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from juena.agents.backends import FINDINGS_PREFIX
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+            return self
+
+    def call(name: str, args: dict, call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+        )
+
+    path = "/findings/jscatter-example-plot.md"
+    for label, backend in _findings_backends(monkeypatch):
+        agent = create_agent(
+            model=ToolModel(
+                responses=[
+                    call("write_file", {"file_path": path, "content": "headless is required"}, "w"),
+                    call("ls", {"path": "/findings"}, "ls"),
+                    call("read_file", {"file_path": path}, "r"),
+                    call("grep", {"pattern": "headless", "path": "/findings"}, "g"),
+                    call("edit_file", {"file_path": path, "old_string": "required", "new_string": "mandatory"}, "e"),
+                    AIMessage(content="done"),
+                ]
+            ),
+            tools=[],
+            middleware=[FilesystemMiddleware(backend=backend)],
+            checkpointer=InMemorySaver(),
+        )
+        result = await agent.ainvoke(
+            {"messages": [("user", "record a finding")]},
+            config={"configurable": {"thread_id": f"findings-{label}"}},
+        )
+        said = {
+            message.tool_call_id: str(message.content)
+            for message in result["messages"]
+            if isinstance(message, ToolMessage)
+        }
+
+        assert "Errno 30" not in said["w"], f"{label} could not write a finding"
+        assert path in said["ls"], f"{label} cannot list its own finding"
+        assert "headless" in said["r"], f"{label} cannot read its own finding"
+        # Double-prefixing is the failure mode when the wrong method is overridden:
+        # `StateBackend.grep` never routes through `grep_raw`.
+        assert path in said["g"] and "/findings/findings/" not in said["g"]
+        assert "Successfully replaced" in said["e"], f"{label} cannot extend a finding"
+        assert list(result.get("files") or {}) == [path], (
+            f"{label} stored the finding under a key nothing else will match"
+        )
+
+
+def test_a_finding_written_by_one_delegation_reaches_the_next() -> None:
+    """The claim `/findings/` exists to make true, finally asserted.
+
+    A specialist cannot see the conversation or any earlier delegation; the
+    `files` channel is the only thing that crosses. deepagents copies a
+    subagent's whole state back except `messages`, `todos` and
+    `structured_response`, so `files` rides along -- **but only if the parent has
+    a `files` channel at all**, which it gets from `FilesystemMiddleware`. Drop
+    that middleware from the supervisor and every finding is silently discarded.
+
+    The reader proves it saw the file by editing it: `edit_file` fails on a path
+    that is not there, so the changed content in the parent's state is the proof.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from deepagents.middleware.subagents import SubAgentMiddleware
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from juena.agents.backends import build_supervisor_backend
     from juena.agents.specialist_runtime import build_specialist_backend
 
-    monkeypatch.setattr(sandbox_runtime.global_config, "SANDBOX_ENABLED", True)
-    monkeypatch.setattr(sandbox_runtime, "RuntimePodmanSandboxBackend", lambda: object())
-    sandboxed = sandbox_runtime.build_sandbox_backend(
-        repo_cache_root=None, skills_dir=None, has_skills=False
-    )
-    assert FINDINGS_PREFIX not in build_specialist_backend().routes
-    assert FINDINGS_PREFIX not in sandboxed.routes
+    path = "/findings/jscatter-example-plot.md"
 
     class ToolModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
             return self
 
-    routed = create_agent(
+    def call(name: str, args: dict, call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+        )
+
+    def specialist(responses: list) -> Any:
+        return create_agent(
+            model=ToolModel(responses=responses),
+            tools=[],
+            middleware=[FilesystemMiddleware(backend=build_specialist_backend())],
+        )
+
+    writer = specialist([
+        call("write_file", {"file_path": path, "content": "## Key Patterns\nheadless first\n"}, "w"),
+        AIMessage(content="wrote the finding"),
+    ])
+    reader = specialist([
+        call("ls", {"path": "/findings"}, "ls"),
+        call("edit_file", {"file_path": path, "old_string": "headless first", "new_string": "READ BY THE SECOND SPECIALIST"}, "e"),
+        AIMessage(content="read the finding"),
+    ])
+
+    supervisor = create_agent(
         model=ToolModel(
             responses=[
-                AIMessage(
-                    content="",
-                    tool_calls=[{
-                        "name": "write_file",
-                        "args": {
-                            "file_path": "/findings/survey.md",
-                            "content": "silx uses leastsq",
-                        },
-                        "id": "write",
-                        "type": "tool_call",
-                    }],
-                ),
+                call("task", {"description": "record it", "subagent_type": "writer"}, "t1"),
+                call("task", {"description": "build on it", "subagent_type": "reader"}, "t2"),
                 AIMessage(content="done"),
             ]
         ),
         tools=[],
         middleware=[
-            FilesystemMiddleware(
-                backend=CompositeBackend(
-                    default=StateBackend(), routes={FINDINGS_PREFIX: StateBackend()}
-                )
-            )
+            # Without this the supervisor has no `files` channel and every
+            # finding a specialist writes is dropped on the way back.
+            FilesystemMiddleware(backend=build_supervisor_backend(InMemoryStore())),
+            SubAgentMiddleware(
+                backend=build_supervisor_backend(InMemoryStore()),
+                subagents=[
+                    {"name": "writer", "description": "writes", "runnable": writer},
+                    {"name": "reader", "description": "reads", "runnable": reader},
+                ],
+                system_prompt=None,
+            ),
         ],
         checkpointer=InMemorySaver(),
     )
-    result = routed.invoke(
-        {"messages": [("user", "record a finding")]},
-        config={"configurable": {"thread_id": "routed-findings"}},
+    result = supervisor.invoke(
+        {"messages": [("user", "go")]},
+        config={"configurable": {"thread_id": "cross-delegation"}},
     )
 
-    assert list(result.get("files") or {}) == ["/survey.md"], (
-        "a route strips its prefix, which is exactly why /findings must not be one"
+    files = result.get("files") or {}
+    assert path in files, "the first delegation's finding never reached the conversation"
+    assert "READ BY THE SECOND SPECIALIST" in str(files[path]["content"]), (
+        "the second delegation could not open the first one's finding"
     )
-
-
-def test_a_background_run_without_a_sandbox_keeps_the_findings_prefix() -> None:
-    """The background specialist's `/findings/` is graph state, keys intact.
-
-    It has no sandbox, so `/findings/` falls to the default state backend and the
-    full path survives -- which is what `_written_findings` filters on.
-    """
-    from juena.agents.backends import FINDINGS_PREFIX
-    from juena.agents.specialist_runtime import build_specialist_backend
-
-    backend = build_specialist_backend()
-    assert FINDINGS_PREFIX not in backend.routes
-    assert runner.FINDINGS_PREFIX == FINDINGS_PREFIX
-
-
-def test_findings_ride_back_inside_the_report() -> None:
-    """The supervisor cannot open a `/findings/` path, so it gets the text.
-
-    Its own backend serves `/memories/` only, and a specialist it delegates to
-    afterwards may be reading `/findings/` from a sandbox workspace the
-    background run never touched. The content is the one form that always works.
-    """
-    from juena.tools.research import _report_with_findings
-
-    job = SimpleNamespace(
-        report="<specialist_report>\nStatus: OK\n</specialist_report>",
-        findings={"/findings/survey.md": {"content": "silx uses leastsq.py at line 40"}},
-    )
-    combined = _report_with_findings(job)
-
-    assert "Status: OK" in combined
-    assert "/findings/survey.md" in combined
-    assert "silx uses leastsq.py at line 40" in combined
-
-    bare = SimpleNamespace(report="just the report", findings={})
-    assert _report_with_findings(bare) == "just the report"
-
-
-def test_a_very_long_finding_is_truncated_before_it_enters_history() -> None:
-    from juena.tools.research import _FINDINGS_PREVIEW, _report_with_findings
-
-    job = SimpleNamespace(
-        report="r", findings={"/findings/huge.md": {"content": "x" * (_FINDINGS_PREVIEW * 3)}}
-    )
-    combined = _report_with_findings(job)
-
-    assert "truncated" in combined
-    assert len(combined) < _FINDINGS_PREVIEW * 2
 
 
 # --------------------------------------------------------------------------- #

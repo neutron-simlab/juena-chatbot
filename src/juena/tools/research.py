@@ -19,17 +19,19 @@ from langgraph.types import Command
 
 from juena.core.log import get_logger
 from juena.research import jobs, runner
+from juena.research.delivery import (
+    DELIVERED_KEY,
+    current_findings,
+    delivered_ids,
+    describe,
+    plan_merge,
+)
 from juena.research.constants import BUSY_MESSAGE, DEFAULT_CONCURRENCY
 from juena.server.database.models import ResearchJob
 
 logger = get_logger(__name__)
 
 _OBJECTIVE_PREVIEW = 80
-
-#: How much of each findings file rides back in the tool result. Generous, since
-#: it replaces a file the supervisor cannot open, but bounded: this text stays in
-#: checkpointed history for the rest of the conversation.
-_FINDINGS_PREVIEW = 4000
 
 START_DESCRIPTION = """Delegate a long objective to a specialist that runs in the background.
 
@@ -50,10 +52,12 @@ started and that you will report back."""
 CHECK_DESCRIPTION = """Read the result of one background research job by its id.
 
 Returns the specialist's full report once it has finished, or its status if it
-has not. Whatever the run wrote to `/findings/` comes back inside the result, in
-a `<findings_written>` block -- that text is the evidence, and it is the only
-copy you will get. Do not try to open those paths yourself; if a follow-up
-specialist needs the detail, paste the relevant part into its objective.
+has not. It is the same package `task` returns: the specialist's own finding,
+evidence and limitations, alongside the server's verification.
+
+Whatever the run wrote to `/findings/` is merged into this conversation, so a
+specialist you delegate to afterwards reads it the same way it reads a finding
+left by any earlier delegation.
 
 A finished job is handed over only once; after that it stops appearing in
 `list_research`."""
@@ -100,29 +104,6 @@ def _summary(job: ResearchJob) -> dict[str, Any]:
         "age_seconds": _age_seconds(job),
         "objective": objective,
     }
-
-
-def _report_with_findings(job: ResearchJob) -> str:
-    """The report, followed by whatever the run wrote to `/findings/`.
-
-    Inlined rather than left as a path because the supervisor cannot open one:
-    its own backend serves `/memories/` only, and a specialist it delegates to
-    may be reading `/findings/` from a sandbox workspace this run never touched.
-    Truncated per file -- this lands in checkpointed history for the rest of the
-    conversation, and the report is meant to be the summary.
-    """
-    findings = job.findings or {}
-    if not findings:
-        return job.report
-
-    sections = [job.report, "", "<findings_written>"]
-    for path in sorted(findings):
-        content = str((findings[path] or {}).get("content", ""))
-        if len(content) > _FINDINGS_PREVIEW:
-            content = content[:_FINDINGS_PREVIEW].rstrip() + "\n… (truncated)"
-        sections.extend([f"--- {path} ---", content])
-    sections.append("</findings_written>")
-    return "\n".join(sections)
 
 
 def build_research_tools(
@@ -210,21 +191,32 @@ def build_research_tools(
                 "they can watch it and answer any question it raises."
             )
 
-        await jobs.mark_collected(job.id)
-        # Two ways back, because neither alone is enough.
-        #
-        # The state merge makes `/findings/` readable to a later specialist --
-        # but only where `/findings/` *is* state. With the sandbox enabled a
-        # specialist's default backend is its Podman workspace, and nothing in
-        # graph state reaches inside it. So the text goes back too: appended to
-        # the report, it is the one form the supervisor can always act on,
-        # because it can paste it into the next objective.
+        if str(job.id) in delivered_ids(runtime.state):
+            # The report reached a checkpoint; the row simply never learned. Mark
+            # it now rather than handing the same result over a second time.
+            await jobs.mark_collected(job.id)
+            return (
+                f"Research job {job_id} was already reported in this conversation. "
+                "Use what is already here rather than repeating it."
+            )
+
+        merged, conflicts = plan_merge(
+            findings=job.findings,
+            base_findings=job.base_findings,
+            current=current_findings(runtime.state),
+            job_id=job.id,
+        )
+        # One atomic write: the report, the findings this run produced, and the
+        # marker proving both landed. `collected_at` is deliberately *not* set
+        # here -- see `juena.research.delivery` for why the acknowledgement waits
+        # for the next call.
         return Command(
             update={
-                "files": job.findings or {},
+                "files": merged,
+                DELIVERED_KEY: [str(job.id)],
                 "messages": [
                     ToolMessage(
-                        _report_with_findings(job),
+                        describe(job.report, conflicts, job.id),
                         tool_call_id=runtime.tool_call_id,
                     )
                 ],
@@ -239,8 +231,17 @@ def build_research_tools(
         user_id, thread_id = identity
 
         pending = await jobs.for_thread(thread_id, user_id)
-        if not pending:
+        # Reconcile before listing: a job whose report reached a checkpoint but
+        # whose row never learned would otherwise be offered again every turn.
+        delivered = delivered_ids(runtime.state)
+        outstanding = []
+        for job in pending:
+            if str(job.id) in delivered:
+                await jobs.mark_collected(job.id)
+                continue
+            outstanding.append(job)
+        if not outstanding:
             return "[]"
-        return json.dumps([_summary(job) for job in pending], separators=(",", ":"))
+        return json.dumps([_summary(job) for job in outstanding], separators=(",", ":"))
 
     return [start_research, check_research, list_research]

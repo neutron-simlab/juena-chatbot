@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import inspect
+
 import pytest
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
@@ -115,6 +117,118 @@ def test_resilience_middleware_omits_fallback_without_models() -> None:
         )
     ]
     assert "ModelFallbackMiddleware" not in types
+
+
+def _limiters(**kwargs: Any) -> list[Any]:
+    return [
+        item
+        for item in specialist_runtime.resilience_middleware(
+            [], model_call_limit=10, tool_call_limit=20, **kwargs
+        )
+        if type(item).__name__ in ("ModelCallLimitMiddleware", "ToolCallLimitMiddleware")
+    ]
+
+
+def test_only_the_model_call_limit_terminates() -> None:
+    """`exit_behavior="end"` on a tool limiter crashes on a parallel batch.
+
+    LangChain raises `NotImplementedError` -- "Cannot end execution with other
+    tool calls pending" -- when the response that crossed the budget also carries
+    another tool call. So the tool limiters stay a mechanical cap: the
+    over-budget call does not run. The repeated-call guard closes the observed
+    loop and the model-call limit is the final bound.
+    """
+    behaviours = {
+        type(item).__name__: item.exit_behavior for item in _limiters()
+    }
+
+    assert behaviours["ModelCallLimitMiddleware"] == "end"
+    assert all(
+        item.exit_behavior == "continue"
+        for item in _limiters()
+        if type(item).__name__ == "ToolCallLimitMiddleware"
+    )
+
+
+def test_no_budget_spans_more_than_one_invocation() -> None:
+    """Deliberately absent, not overlooked.
+
+    A resume after an approval or an `ask_user` answer is a new invocation, so
+    `run_limit` restarts -- but the stock `thread_limit` counts every later turn
+    of the same chat too, which would eventually stop a healthy long
+    conversation. Bounding a user *turn* needs a turn identity JueNA does not
+    have. Until then the honest contract is per invocation.
+    """
+    assert all(item.thread_limit is None for item in _limiters())
+
+    source = inspect.getsource(specialist_runtime.resilience_middleware)
+    assert "thread_limit" not in source.split('"""')[2]
+
+
+@pytest.mark.asyncio
+async def test_a_long_conversation_is_not_ended_by_earlier_turns() -> None:
+    """Driven through a graph, because the config assertion alone is not proof.
+
+    Two turns on one `thread_id` whose combined model calls exceed the limit. If
+    a `thread_limit` is ever added, the second turn stops answering and this
+    fails -- which is the whole point of writing it down.
+    """
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+            return self
+
+    agent = create_agent(
+        model=ToolModel(responses=[AIMessage(content=f"answer {i}") for i in range(6)]),
+        tools=[],
+        middleware=specialist_runtime.resilience_middleware(
+            [], model_call_limit=2, tool_call_limit=4
+        ),
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "one-long-chat"}}
+
+    answers = [
+        (await agent.ainvoke({"messages": [("user", f"question {turn}")]}, config=config))[
+            "messages"
+        ][-1].text
+        for turn in range(3)
+    ]
+
+    assert all("answer" in text for text in answers), (
+        f"a later turn stopped answering: {answers}"
+    )
+
+
+def test_the_tool_retry_policy_is_pinned_not_inherited() -> None:
+    """`ToolRetryMiddleware` defaults to 2 today; a silent upstream change to
+    that default would silently change JueNA's policy."""
+
+    retry = next(
+        item
+        for item in specialist_runtime.resilience_middleware(
+            [], model_call_limit=10, tool_call_limit=20
+        )
+        if type(item).__name__ == "ToolRetryMiddleware"
+    )
+
+    assert retry.max_retries == specialist_runtime.TOOL_MAX_RETRIES == 2
+
+
+def test_a_budget_on_an_absent_tool_is_not_built() -> None:
+    """`ask_user` is not bound to a background specialist, so nothing can call it."""
+
+    named = [
+        item.tool_name for item in _limiters(ask_user_bound=False) if hasattr(item, "tool_name")
+    ]
+
+    assert "ask_user" not in named
+    assert "ask_user" in [
+        item.tool_name for item in _limiters() if hasattr(item, "tool_name")
+    ]
 
 
 @pytest.mark.asyncio

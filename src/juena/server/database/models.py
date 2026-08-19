@@ -20,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from juena.agents.findings import FindingsMap
 from juena.research.constants import ACTIVE_STATUSES as ACTIVE_RESEARCH_STATUSES
 from juena.sandbox.constants import ACTIVE_STATUSES
 
@@ -196,7 +197,17 @@ class ResearchJob(Base):
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     report: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    findings: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    # Deep Agents `FileData`, not plain strings: {path: {content, encoding, ...}}.
+    # Only what the run created or changed -- never the snapshot it was seeded
+    # with. JSON guarantees none of that shape, so anything read back out goes
+    # through `juena.agents.findings.validate_findings` before it reaches state.
+    findings: Mapped[FindingsMap] = mapped_column(JSON, nullable=False, default=dict)
+    # The findings content this run started from, keyed by path. Collection
+    # compares it against the conversation's current value to tell an ordinary
+    # merge from a conflict.
+    base_findings: Mapped[dict[str, str]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
