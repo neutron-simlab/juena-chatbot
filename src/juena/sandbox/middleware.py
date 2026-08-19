@@ -30,9 +30,20 @@ def _final_ai_message(state: Any) -> AIMessage | None:
 
 
 class ArtifactMessageMiddleware(AgentMiddleware):
-    """Attach pending artifact references to the supervisor's final AI message."""
+    """Attach pending artifact references to the supervisor's final AI message.
 
-    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+    On `after_agent` rather than `after_model`, because a budget that ends a run
+    returns `jump_to: "end"` and the graph routes straight past every
+    `after_model` hook. A supervisor turn cut short that way used to drop its
+    pending artifacts silently -- the plots were generated, collected, and then
+    never attached to anything the user could see.
+
+    `after_agent` runs once, on every path out of the graph, which is exactly the
+    guarantee this needs. It costs nothing on the ordinary path: the claim is a
+    no-op until the final model response has no tool calls left to make.
+    """
+
+    def after_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         last_ai = _final_ai_message(state)
         if last_ai is None:
             return None
@@ -50,8 +61,8 @@ class ArtifactMessageMiddleware(AgentMiddleware):
         }
         return {"messages": [last_ai]}
 
-    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self.after_model(state, runtime)
+    async def aafter_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return self.after_agent(state, runtime)
 
 
 def _identity(runtime: Any) -> tuple[str, str, str | None] | None:
