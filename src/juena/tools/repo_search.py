@@ -53,8 +53,7 @@ def _resolve_repo_id(repo_manager: RepoManager, repo_id: str) -> str | None:
         return lower_to_id[repo_id.lower()]
 
     normalised_to_id = {
-        _normalise_repo_label(candidate): candidate
-        for candidate in repo_ids
+        _normalise_repo_label(candidate): candidate for candidate in repo_ids
     }
     return normalised_to_id.get(_normalise_repo_label(repo_id))
 
@@ -80,7 +79,9 @@ def _unknown_repo_response(repo_manager: RepoManager, repo_id: str) -> str:
 
 def _distance_sort_key(hit: dict[str, Any]) -> tuple[float, str, str, int]:
     distance = hit.get("distance")
-    numeric_distance = float(distance) if isinstance(distance, (int, float)) else float("inf")
+    numeric_distance = (
+        float(distance) if isinstance(distance, (int, float)) else float("inf")
+    )
     return (
         numeric_distance,
         str(hit.get("repo_id", "")),
@@ -114,7 +115,7 @@ def _serialize_vector_hit(repo_id: str, hit: dict) -> dict:
 
     file_path = str(hit.get("file_path", ""))
     content = str(hit.get("content", ""))
-    return {
+    serialised = {
         "id": hit.get("id", ""),
         "repo_id": repo_id,
         "file_path": file_path,
@@ -127,6 +128,16 @@ def _serialize_vector_hit(repo_id: str, hit: dict) -> dict:
         "char_count": len(content),
         "preview": _compact_preview(content),
     }
+
+    # Only pgvector hits carry these, and only for chunks that have them. Added
+    # when present rather than always, so a Chroma hit does not grow three null
+    # keys the model has to read past on every result.
+    for locator in ("start_line", "end_line", "symbol"):
+        value = hit.get(locator)
+        if value is not None:
+            serialised[locator] = value
+
+    return serialised
 
 
 def _search_code_semantic(
@@ -143,14 +154,20 @@ def _search_code_semantic(
             query,
             n_results=n_results,
         )
-        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], separators=(",", ":"))
+        return json.dumps(
+            [_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits],
+            separators=(",", ":"),
+        )
 
     resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
     if resolved_repo_id is None:
         return _unknown_repo_response(repo_manager, repo_id)
 
     hits = vector_index.search(resolved_repo_id, query, n_results=n_results)
-    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], separators=(",", ":"))
+    return json.dumps(
+        [_serialize_vector_hit(resolved_repo_id, hit) for hit in hits],
+        separators=(",", ":"),
+    )
 
 
 def _search_docs_local(
@@ -168,7 +185,10 @@ def _search_docs_local(
             n_results=max_results,
             where={"is_doc": True},
         )
-        return json.dumps([_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits], separators=(",", ":"))
+        return json.dumps(
+            [_serialize_vector_hit(str(hit["repo_id"]), hit) for hit in hits],
+            separators=(",", ":"),
+        )
 
     resolved_repo_id = _resolve_repo_id(repo_manager, repo_id)
     if resolved_repo_id is None:
@@ -180,7 +200,10 @@ def _search_docs_local(
         n_results=max_results,
         where={"is_doc": True},
     )
-    return json.dumps([_serialize_vector_hit(resolved_repo_id, hit) for hit in hits], separators=(",", ":"))
+    return json.dumps(
+        [_serialize_vector_hit(resolved_repo_id, hit) for hit in hits],
+        separators=(",", ":"),
+    )
 
 
 def build_code_chat_tools(

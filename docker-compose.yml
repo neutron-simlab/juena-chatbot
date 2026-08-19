@@ -74,6 +74,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - BLABLADOR_API_KEY=${BLABLADOR_API_KEY:-}
       - BLABLADOR_BASE_URL=${BLABLADOR_BASE_URL:-}
+      # Repository search goes to juena-rag when this is set, and to the in-pod
+      # Chroma index when it is not. A service running on the host is reached at
+      # `host.docker.internal`, not `127.0.0.1` -- inside here that is this
+      # container's own loopback.
+      - JUENA_RAG_URL=${JUENA_RAG_URL:-}
       
       # LLM Settings
       - MAX_TOKENS=${MAX_TOKENS:-10000}
