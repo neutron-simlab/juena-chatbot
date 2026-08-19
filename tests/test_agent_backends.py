@@ -195,3 +195,56 @@ def test_specialist_backend_reads_staged_inputs_inside_graph(tmp_path: Path) -> 
         if isinstance(message, ToolMessage) and message.tool_call_id == "read-input"
     )
     assert "supplied evidence" in str(tool_message.content)
+
+
+def test_summarization_can_park_evicted_turns_and_read_them_back() -> None:
+    """The supervisor's evicted history had nowhere to go, so it was dropped.
+
+    `SupervisorStateBackend` refuses every path outside `/memories/` -- right for
+    domain files, wrong for the one file summarization writes and then points the
+    model at. Run inside a graph because the route is a `StateBackend`.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import ToolMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    history = "/conversation_history/thread-1.md"
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+            return self
+
+    def call(name: str, args: dict, call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+        )
+
+    agent = create_agent(
+        model=ToolModel(
+            responses=[
+                call("write_file", {"file_path": history, "content": "## Summarized at 2026"}, "park"),
+                call("read_file", {"file_path": history}, "recall"),
+                call("write_file", {"file_path": "/notes.md", "content": "a domain file"}, "refused"),
+                AIMessage(content="done"),
+            ]
+        ),
+        tools=[],
+        middleware=[FilesystemMiddleware(backend=build_supervisor_backend(InMemoryStore()))],
+        checkpointer=InMemorySaver(),
+    )
+    result = agent.invoke(
+        {"messages": [("user", "compact this conversation")]},
+        config={"configurable": {"thread_id": "summarised"}},
+    )
+
+    said = {
+        message.tool_call_id: str(message.content)
+        for message in result["messages"]
+        if isinstance(message, ToolMessage)
+    }
+
+    assert "## Summarized at 2026" in said["recall"], "the history must be readable back"
+    assert "only /memories" in said["refused"], "domain files stay refused"

@@ -437,3 +437,33 @@ async def test_subagent_detection_matches_real_langgraph_namespaces() -> None:
     classified = {ns: is_subagent_namespace(ns) for ns in namespaces}
     assert any(classified.values()), f"no subagent namespace detected in {namespaces}"
     assert any(not flag for flag in classified.values()), "supervisor traffic missing"
+
+
+@pytest.mark.asyncio
+async def test_summarization_deletions_are_not_shown_as_an_error() -> None:
+    """`RemoveMessage` trims state; rendering it sent the user an error event.
+
+    It arrives in the same `updates` stream as real turns once a conversation is
+    long enough to summarize, so the user saw "Failed to process message" in
+    place of their answer.
+    """
+    from langchain_core.messages import RemoveMessage
+
+    payloads = await _collect(
+        _processor(),
+        (
+            ("model",),
+            "updates",
+            {
+                "agent": {
+                    "messages": [
+                        RemoveMessage(id="old-1"),
+                        AIMessage(content="here is your answer", id="a-9"),
+                    ]
+                }
+            },
+        ),
+    )
+
+    assert [p["type"] for p in payloads] == ["message"]
+    assert "error" not in {p["type"] for p in payloads}

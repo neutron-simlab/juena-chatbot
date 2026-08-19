@@ -28,6 +28,19 @@ class BlabladorModelName(StrEnum):
     QWEN35_122B = "02 - Qwen3.5-122B-A10B-FP8, general purpose large model"
 
 
+#: Total context each Blablador model serves -- input plus output -- in tokens.
+#: Read from the provider itself (`GET /v1/models` reports `max_model_len`) on
+#: 2026-08-19, not guessed. LangChain has no profile entry for these names, and
+#: without one the summarization middleware falls back to a fixed 170,000-token
+#: threshold, which is above the window it exists to protect. Re-check with:
+#:   curl -H "Authorization: Bearer $BLABLADOR_API_KEY" $BLABLADOR_BASE_URL/models
+BLABLADOR_MAX_MODEL_LEN: Dict[str, int] = {
+    BlabladorModelName.GPT_OSS.value: 131_072,
+    BlabladorModelName.MINIMAX_M27.value: 131_072,
+    BlabladorModelName.QWEN35_122B.value: 262_144,
+}
+
+
 # Display name shown in UI for Blablador models (model id -> label)
 BLABLADOR_MODEL_DISPLAY_NAMES: Dict[str, str] = {
     BlabladorModelName.GPT_OSS.value: "GPT-OSS-120b",

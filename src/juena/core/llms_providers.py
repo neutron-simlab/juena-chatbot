@@ -18,6 +18,7 @@ from langchain_core.language_models import BaseChatModel
 
 from juena.core.paths import get_config
 from juena.schema.llm_models import (
+    BLABLADOR_MAX_MODEL_LEN,
     Provider,
     get_models_for_provider,
     get_default_model_for_provider,
@@ -60,7 +61,7 @@ def get_available_providers() -> Dict[str, bool]:
 # MODEL CONSTRUCTION
 # =============================================================================
 
-def _model_kwargs(provider: str, temperature: float, overrides: dict) -> dict:
+def _model_kwargs(provider: str, model: str, temperature: float, overrides: dict) -> dict:
     """Build the init_chat_model keyword arguments for a provider."""
     config = get_config()
     kwargs: dict[str, Any] = {
@@ -75,6 +76,14 @@ def _model_kwargs(provider: str, temperature: float, overrides: dict) -> dict:
     if provider == Provider.BLABLADOR.value:
         kwargs["api_key"] = config.BLABLADOR_API_KEY
         kwargs["base_url"] = config.BLABLADOR_BASE_URL
+        context_window = BLABLADOR_MAX_MODEL_LEN.get(model)
+        if context_window is not None:
+            # What the model may *read*: the whole window minus the room already
+            # reserved for what it writes. Summarization reads this to decide
+            # when to compact, and an unset profile leaves it with no ceiling.
+            kwargs["profile"] = {
+                "max_input_tokens": context_window - kwargs["max_tokens"]
+            }
     else:
         kwargs["api_key"] = config.OPENAI_API_KEY
 
@@ -85,7 +94,7 @@ def _model_kwargs(provider: str, temperature: float, overrides: dict) -> dict:
 
 
 def _build(provider: str, model: str, temperature: float, overrides: dict) -> BaseChatModel:
-    return init_chat_model(model, **_model_kwargs(provider, temperature, overrides))
+    return init_chat_model(model, **_model_kwargs(provider, model, temperature, overrides))
 
 
 @lru_cache(maxsize=32)

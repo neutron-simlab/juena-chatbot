@@ -176,5 +176,13 @@ def build_supervisor_backend(store: Any) -> CompositeBackend:
                 store=store,
                 namespace=user_store_namespace,
             ),
+            # Where summarization parks the turns it evicts, one file per thread.
+            # Without this route the write fell to `SupervisorStateBackend`, which
+            # refuses everything outside `/memories/` -- so the supervisor's
+            # summaries came with no history to read back, and the evicted
+            # conversation was simply gone. State, not the store: this is
+            # per-thread working memory, not something the user owns across
+            # threads, and the checkpointer already persists it.
+            "/conversation_history/": StateBackend(),
         },
     )

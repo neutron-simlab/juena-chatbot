@@ -12,7 +12,7 @@ Two rules shape this module:
 
 from typing import Any, AsyncGenerator
 
-from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.types import Interrupt
 
 from juena.core.log import get_logger
@@ -161,6 +161,13 @@ class StreamEventProcessor:
         """Convert one complete message into the events the client should see."""
         try:
             if isinstance(message, SystemMessage):
+                return
+
+            # Summarization deletes old turns by emitting `RemoveMessage` into
+            # the same stream. It is an instruction to the state, not something
+            # a person reads, and rendering it raised an error the user saw
+            # instead of their answer.
+            if isinstance(message, RemoveMessage):
                 return
 
             if isinstance(message, ToolMessage):
