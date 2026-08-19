@@ -299,8 +299,12 @@ def test_a_malformed_row_is_dropped_rather_than_merged(broken) -> None:  # noqa:
 
 
 def test_a_reserved_conflict_path_cannot_arrive_from_a_job() -> None:
-    """Defence in depth: the backend refuses the write, and merging refuses it too."""
+    """The backend refuses the write, and validation refuses the stored row.
 
+    Only the collection boundary may fill `_conflicts/`. A job row naming a path
+    inside it would otherwise let a background run choose where the conversation
+    believes its own conflicting version lives.
+    """
     merged, conflicts = plan_merge(
         findings={conflict_path("/findings/survey.md", uuid4()): _file("forged")},
         base_findings={},
@@ -309,6 +313,35 @@ def test_a_reserved_conflict_path_cannot_arrive_from_a_job() -> None:
     )
 
     assert merged == {} and conflicts == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/conversation_history/summary.md",
+        "/inputs/data.dat",
+        "/workspace/outputs/plot.png",
+        "notes.md",
+        "/findings_elsewhere/x.md",
+    ],
+)
+def test_a_stored_path_outside_the_hand_off_channel_is_dropped(path: str) -> None:
+    """Validation is the namespace boundary, not only the shape boundary.
+
+    The column is JSON and a background model authored what went into it. A row
+    reading `/conversation_history/summary.md` would, on merge, overwrite the
+    supervisor's own working memory -- where summarization parks evicted turns --
+    with text nothing verified.
+    """
+    assert validate_findings({path: _file("anything")}) == {}
+
+    merged, _ = plan_merge(
+        findings={path: _file("anything")},
+        base_findings={},
+        current={},
+        job_id=JOB,
+    )
+    assert merged == {}
 
 
 # --------------------------------------------------------------------------- #

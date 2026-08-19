@@ -6,9 +6,9 @@ row says delivered and the conversation never saw it. Marking it afterwards has
 no "afterwards" to hook: a tool returns before the graph commits.
 
 So delivery is acknowledged by the same atomic write that performs it. The
-`Command` that carries the report and the findings also stamps the job id into a
-private, checkpointed state field, and the *next* call reconciles the database
-against that stamp:
+`Command` that carries the outcome also stamps the job id into a private,
+checkpointed state field, and the *next* call reconciles the database against
+that stamp:
 
 * stamp present -> the conversation has it; mark the row collected and say so;
 * stamp absent  -> the write never landed; hand the identical `Command` back.
@@ -17,6 +17,11 @@ Both windows are covered, and replaying is safe because the conflict paths are
 deterministic. The marker is deliberately not inferred from message history:
 summarization moves and drops old tool messages, so an absent report would read
 as an undelivered job long after the user had seen it.
+
+**Every terminal status goes through `deliver`, not just `succeeded`.** A failure
+the user never saw is exactly as lost as a report they never saw, and a cancelled
+job acknowledged nowhere stays outstanding forever -- `list_research` would offer
+it again at the start of every turn for the rest of the conversation.
 """
 
 from __future__ import annotations
@@ -27,11 +32,12 @@ from uuid import UUID
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.agents.middleware.types import PrivateStateAttr
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from juena.agents.findings import (
     FindingsMap,
     conflict_path,
-    is_conflict_path,
     validate_findings,
 )
 
@@ -92,10 +98,10 @@ def plan_merge(
     merged: FindingsMap = {}
     conflicts: list[tuple[str, str]] = []
 
+    # `validate_findings` is the namespace boundary: what survives it is inside
+    # `/findings/` and outside the reserved conflict space, so nothing here can
+    # reach past the hand-off channel however the row was written.
     for path, data in validate_findings(findings).items():
-        # A run cannot author one of these; refuse to merge it if one appears.
-        if is_conflict_path(path):
-            continue
         existing = current.get(path)
         if existing is None:
             merged[path] = data
@@ -109,6 +115,29 @@ def plan_merge(
             conflicts.append((path, reserved))
 
     return merged, conflicts
+
+
+def deliver(
+    *,
+    text: str,
+    job_id: UUID,
+    tool_call_id: str,
+    files: FindingsMap | None = None,
+) -> Command:
+    """Hand one terminal outcome over and record that it was handed over.
+
+    The single shape every ending takes -- report, failure, cancellation -- so
+    the acknowledgement cannot be forgotten on the paths that carry no findings.
+    `collected_at` is deliberately not set here: the row is stamped on the next
+    call, once this write is known to have been checkpointed.
+    """
+    update: dict[str, Any] = {
+        DELIVERED_KEY: [str(job_id)],
+        "messages": [ToolMessage(text, tool_call_id=tool_call_id)],
+    }
+    if files is not None:
+        update["files"] = files
+    return Command(update=update)
 
 
 def describe(report: str, conflicts: list[tuple[str, str]], job_id: UUID) -> str:

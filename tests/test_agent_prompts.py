@@ -305,10 +305,15 @@ def test_supervisor_is_told_a_specialist_cannot_see_earlier_delegations() -> Non
 
     A subagent's state arrives with `messages` replaced by the objective alone, so
     nothing carries across invocations unless the supervisor writes it down.
+
+    The claim is scoped to conversation text rather than to everything: the
+    delegation boundary also passes `/inputs/` and `/findings/`, and an
+    unqualified "only the objective" contradicted the mechanism it described.
     """
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
-    assert "only the `objective` you write" in prompt
+    assert "the only conversation text a specialist receives" in prompt
+    assert "its file view is limited to `/inputs/` and `/findings/`" in prompt
     assert "any earlier delegation" in prompt
     assert "Delegating again on the same subject" in prompt
     assert "do not retry" in prompt

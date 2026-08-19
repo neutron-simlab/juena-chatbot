@@ -14,19 +14,18 @@ from typing import Any
 from uuid import UUID
 
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from juena.core.log import get_logger
 from juena.research import jobs, runner
 from juena.research.delivery import (
-    DELIVERED_KEY,
     current_findings,
+    deliver,
     delivered_ids,
     describe,
     plan_merge,
 )
-from juena.research.constants import BUSY_MESSAGE, DEFAULT_CONCURRENCY
+from juena.research.constants import BUSY_MESSAGE, DEFAULT_CONCURRENCY, TERMINAL_STATUSES
 from juena.server.database.models import ResearchJob
 
 logger = get_logger(__name__)
@@ -100,7 +99,10 @@ def _summary(job: ResearchJob) -> dict[str, Any]:
         "job_id": str(job.id),
         "specialist": job.specialist,
         # One word the model acts on, rather than five it has to interpret.
-        "status": "finished" if job.status in ("succeeded", "failed") else job.status,
+        # Every terminal status reads as `finished`, cancellation included: each
+        # one has an outcome to collect, and collecting is what clears the job
+        # off this list.
+        "status": "finished" if job.status in TERMINAL_STATUSES else job.status,
         "age_seconds": _age_seconds(job),
         "objective": objective,
     }
@@ -175,29 +177,43 @@ def build_research_tools(
         if job is None:
             return f"No research job {job_id} belongs to this conversation."
 
-        if job.status in ("queued", "running"):
+        if job.status not in TERMINAL_STATUSES:
             return (
                 f"Research job {job_id} ({job.specialist}) is still {job.status}, "
                 f"{_age_seconds(job)}s in. Tell the user it is not ready yet rather "
                 "than checking again in this turn."
             )
-        if job.status == "cancelled":
-            return f"Research job {job_id} was cancelled and produced no result."
-        if job.status == "failed":
-            await jobs.mark_collected(job.id)
-            return (
-                f"Research job {job_id} ({job.specialist}) failed: {job.error}. "
-                "Tell the user plainly, and offer to run it again with `task` so "
-                "they can watch it and answer any question it raises."
-            )
-
+        # Asked before the outcome is read, because every terminal status is
+        # delivered through the marker -- a failure reported twice is as wrong as
+        # a report delivered twice.
         if str(job.id) in delivered_ids(runtime.state):
-            # The report reached a checkpoint; the row simply never learned. Mark
-            # it now rather than handing the same result over a second time.
+            # The outcome reached a checkpoint; the row simply never learned.
+            # Mark it now rather than handing the same result over again.
             await jobs.mark_collected(job.id)
             return (
                 f"Research job {job_id} was already reported in this conversation. "
                 "Use what is already here rather than repeating it."
+            )
+
+        if job.status == "cancelled":
+            return deliver(
+                text=(
+                    f"Research job {job_id} ({job.specialist}) was cancelled and "
+                    "produced no result. Tell the user, and ask whether they still "
+                    "want it before starting it again."
+                ),
+                job_id=job.id,
+                tool_call_id=runtime.tool_call_id,
+            )
+        if job.status == "failed":
+            return deliver(
+                text=(
+                    f"Research job {job_id} ({job.specialist}) failed: {job.error}. "
+                    "Tell the user plainly, and offer to run it again with `task` so "
+                    "they can watch it and answer any question it raises."
+                ),
+                job_id=job.id,
+                tool_call_id=runtime.tool_call_id,
             )
 
         merged, conflicts = plan_merge(
@@ -206,21 +222,11 @@ def build_research_tools(
             current=current_findings(runtime.state),
             job_id=job.id,
         )
-        # One atomic write: the report, the findings this run produced, and the
-        # marker proving both landed. `collected_at` is deliberately *not* set
-        # here -- see `juena.research.delivery` for why the acknowledgement waits
-        # for the next call.
-        return Command(
-            update={
-                "files": merged,
-                DELIVERED_KEY: [str(job.id)],
-                "messages": [
-                    ToolMessage(
-                        describe(job.report, conflicts, job.id),
-                        tool_call_id=runtime.tool_call_id,
-                    )
-                ],
-            }
+        return deliver(
+            text=describe(job.report, conflicts, job.id),
+            job_id=job.id,
+            tool_call_id=runtime.tool_call_id,
+            files=merged,
         )
 
     @tool(description=LIST_DESCRIPTION)

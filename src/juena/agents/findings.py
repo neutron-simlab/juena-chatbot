@@ -98,16 +98,24 @@ def fingerprint(files: Mapping[str, Any] | None) -> dict[str, str]:
 def validate_findings(value: Any) -> FindingsMap:
     """Coerce whatever came back from PostgreSQL into `FileData` shape.
 
-    The column is JSON, so nothing on the database side guarantees the shape --
-    and a malformed entry merged into the graph's `files` channel breaks every
-    later read of that path, not just this one. Entries that cannot be repaired
-    are dropped rather than merged.
+    The column is JSON, so nothing on the database side guarantees the shape or
+    the paths -- and this is the one place a row becomes graph state. A malformed
+    entry merged into the `files` channel breaks every later read of that path;
+    a *misplaced* one is worse, because `/conversation_history/summary.md` in
+    that column would overwrite the supervisor's own working memory with text a
+    background model wrote.
+
+    So the path is checked as strictly as the shape: `/findings/`, and never the
+    reserved conflict namespace, which only the collection boundary may fill.
+    Entries failing either check are dropped rather than merged.
     """
     if not isinstance(value, Mapping):
         return {}
     valid: FindingsMap = {}
     for path, data in value.items():
         if not isinstance(path, str) or not isinstance(data, Mapping):
+            continue
+        if not path.startswith(FINDINGS_PREFIX) or is_conflict_path(path):
             continue
         content = data.get("content")
         if not isinstance(content, str):

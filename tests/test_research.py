@@ -439,11 +439,15 @@ def _job(**overrides: Any) -> SimpleNamespace:
 def test_a_finished_job_reads_as_finished_whether_it_worked_or_not() -> None:
     """One word the model acts on, not five it has to interpret.
 
-    `succeeded` and `failed` both mean "there is something here for the user",
-    and the difference is in the report `check_research` hands over.
+    Every terminal status means "there is something here for the user", and the
+    difference is in what `check_research` hands over. Cancellation is included
+    because collecting is what clears a job off the list -- a cancelled job that
+    read as its own status was never collected, so it was offered again at the
+    start of every turn for the rest of the conversation.
     """
     assert _summary(_job(status="succeeded"))["status"] == "finished"
     assert _summary(_job(status="failed"))["status"] == "finished"
+    assert _summary(_job(status="cancelled"))["status"] == "finished"
     assert _summary(_job(status="running"))["status"] == "running"
     assert _summary(_job(status="queued"))["status"] == "queued"
 
@@ -516,3 +520,91 @@ def test_a_run_without_an_authenticated_user_starts_nothing() -> None:
     assert _identity(
         SimpleNamespace(context=SimpleNamespace(user_id=str(user_id), thread_id="t"))
     ) == (user_id, "t")
+
+
+# --------------------------------------------------------------------------- #
+# Collecting a terminal job, whatever its outcome
+# --------------------------------------------------------------------------- #
+
+
+def _collector(monkeypatch: Any, job: SimpleNamespace) -> list:
+    """`check_research` wired to one job, recording every `mark_collected`."""
+    from juena.tools import research as research_tools
+
+    marked: list = []
+
+    async def fake_get(job_id, user_id):  # noqa: ANN001, ANN202, ARG001
+        return job
+
+    async def fake_mark_collected(job_id):  # noqa: ANN001, ANN202
+        marked.append(job_id)
+
+    monkeypatch.setattr(research_tools.jobs, "get", fake_get)
+    monkeypatch.setattr(research_tools.jobs, "mark_collected", fake_mark_collected)
+    return marked
+
+
+def _check_runtime(state: dict | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        context=SimpleNamespace(user_id=str(uuid4()), thread_id="t1"),
+        state=state or {},
+        tool_call_id="call-1",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+async def test_an_outcome_without_findings_is_still_acknowledged_durably(
+    monkeypatch: Any, status: str
+) -> None:
+    """A failure the user never saw is as lost as a report they never saw.
+
+    `failed` used to call `mark_collected` *before* its message was checkpointed,
+    so a crash in between left the row saying delivered and the conversation
+    never seeing why. `cancelled` returned plain text and stamped nothing at all,
+    so it stayed outstanding for the rest of the conversation. Both now take the
+    same route as a report: the marker rides the same write as the message, and
+    the row is stamped on the next call.
+    """
+    job = _job(status=status, error="the model provider refused", finished_at=datetime.now(UTC))
+    marked = _collector(monkeypatch, job)
+    tools = {tool.name: tool for tool in build_research_tools(["software-specialist"])}
+
+    result = await tools["check_research"].coroutine(
+        job_id=str(job.id), runtime=_check_runtime()
+    )
+
+    assert result.update["delivered_research_job_ids"] == [str(job.id)]
+    assert result.update["messages"][0].tool_call_id == "call-1"
+    assert marked == [], "the row must not be stamped before the write is checkpointed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["succeeded", "failed", "cancelled"])
+async def test_a_terminal_job_already_delivered_is_never_handed_over_twice(
+    monkeypatch: Any, status: str
+) -> None:
+    """The marker is checked before the outcome is read, for every status.
+
+    Reporting the same failure twice is exactly as wrong as reporting the same
+    result twice, and this is where the row finally learns it was collected.
+    """
+    job = _job(
+        status=status,
+        error="boom",
+        report="a report",
+        findings={},
+        base_findings={},
+        finished_at=datetime.now(UTC),
+    )
+    marked = _collector(monkeypatch, job)
+    tools = {tool.name: tool for tool in build_research_tools(["software-specialist"])}
+    state = {"delivered_research_job_ids": [str(job.id)]}
+
+    result = await tools["check_research"].coroutine(
+        job_id=str(job.id), runtime=_check_runtime(state)
+    )
+
+    assert isinstance(result, str)
+    assert "already reported" in result
+    assert marked == [job.id]
