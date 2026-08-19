@@ -74,11 +74,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - BLABLADOR_API_KEY=${BLABLADOR_API_KEY:-}
       - BLABLADOR_BASE_URL=${BLABLADOR_BASE_URL:-}
-      # Repository search goes to juena-rag when this is set, and to the in-pod
-      # Chroma index when it is not. A service running on the host is reached at
-      # `host.docker.internal`, not `127.0.0.1` -- inside here that is this
-      # container's own loopback.
-      - JUENA_RAG_URL=${JUENA_RAG_URL:-}
+      # Where repository search comes from. Required, with no default: there is
+      # no local index to fall back to any more, and an unset value used to mean
+      # "serve from whatever Chroma left on disk". A service running on the host
+      # is reached at `host.docker.internal`, not `127.0.0.1` -- inside here that
+      # is this container's own loopback.
+      - JUENA_RAG_URL=${JUENA_RAG_URL:?set JUENA_RAG_URL in your env file (see env.example)}
       
       # LLM Settings
       - MAX_TOKENS=${MAX_TOKENS:-10000}
@@ -150,17 +151,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Docker Desktop resolves `host.docker.internal` on its own; a Linux host
+    # does not, and JUENA_RAG_URL pointing at a service on the host is exactly
+    # the development setup. Declaring it here makes the same .env work on both.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    # Repository bootstrap builds several large HNSW indices in one process.
-    # The previous 2 GB cap killed the process part-way through Vitess and left
-    # its Chroma collection unreadable. Keep this configurable for smaller or
-    # larger hosts, but give the documented development/VM setup enough room.
-    mem_limit: ${JUENA_MEMORY_LIMIT:-12G}
+    # This container no longer indexes: it clones the repositories, and juena-rag
+    # holds the vectors. The old 12 GB was sized for building several large HNSW
+    # indices in one process, which does not happen here any more -- measured at
+    # 353 MiB idle after the cutover. 4 GB leaves room for concurrent chats and
+    # the sandbox API without pretending an index build is coming.
+    mem_limit: ${JUENA_MEMORY_LIMIT:-4G}
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: ${JUENA_MEMORY_LIMIT:-12G}
+          memory: ${JUENA_MEMORY_LIMIT:-4G}
         reservations:
           cpus: '0.5'
           memory: 512M

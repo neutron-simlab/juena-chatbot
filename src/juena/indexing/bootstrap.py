@@ -166,7 +166,12 @@ def _bootstrap_from_manifest_diff(
 
 
 def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
-    """Clone or refresh configured repositories and rebuild stale indices."""
+    """Clone or refresh configured repositories and rebuild stale indices.
+
+    Retired with the Chroma cutover and kept only so the benchmark can still
+    build a Chroma arm -- nothing in the running application calls it. Startup
+    clones, and juena-rag holds the vectors.
+    """
     configs = load_repo_configs(config_path)
     repo_manager = RepoManager(configs)
     vector_index = RepoVectorIndex(repo_manager)
@@ -408,26 +413,16 @@ def validate_bootstrap_ready(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint for repository bootstrap.
+    """CLI entrypoint: clone or refresh every configured repository.
 
-    ``--clone-only`` is what a pod that searches juena-rag needs: the files, so
-    the model can read them, without building an index this process no longer
-    owns.
+    It no longer builds an index. juena-rag holds the vectors and an ingestion
+    job fills them; what this machine still needs is the files, so the model can
+    open one and quote real line numbers.
     """
-    parser = argparse.ArgumentParser(prog="juena.indexing.bootstrap")
-    parser.add_argument(
-        "--clone-only",
-        action="store_true",
-        help="clone or refresh the repositories and build no index",
-    )
-    arguments = parser.parse_args(argv)
+    argparse.ArgumentParser(prog="juena.indexing.bootstrap").parse_args(argv)
 
-    if arguments.clone_only:
-        cloned = clone_repositories()
-        logger.info("Cloned or refreshed %d repository(s)", len(cloned))
-        return 0
-
-    bootstrap_repositories()
+    cloned = clone_repositories()
+    logger.info("Cloned or refreshed %d repository(s)", len(cloned))
     os.environ[BOOTSTRAP_DONE_ENV] = "1"
     return 0
 

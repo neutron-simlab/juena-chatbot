@@ -126,13 +126,22 @@ and operations are documented in [`deploy/SANDBOX.md`](deploy/SANDBOX.md).
 
 ## Startup and Bootstrap
 
-Bootstrap runs before the app starts serving requests.
+Bootstrap runs before the app starts serving requests, and it **clones — it does
+not index.** The vectors live in juena-rag, filled by a separate ingestion job.
+The clone is still needed because search comes over the network but the model
+opens the real file under `/repos/` to quote real line numbers.
 
 - The Docker entrypoint runs `python -m juena.indexing.bootstrap` before starting Streamlit or FastAPI.
-- `main.py` runs the same bootstrap path when started directly, unless `JUENA_BOOTSTRAP_DONE=1` is already set.
-- Bootstrap fails fast: if any configured repository cannot sync or index, startup stops.
+- `main.py` runs the same path when started directly, unless `JUENA_BOOTSTRAP_DONE=1` is already set.
+- A repository that will not clone is logged and skipped; the others still work.
+- `JUENA_RAG_URL` is required. Unset, the process stops rather than falling back
+  to the retired Chroma index, which would serve stale results without anyone
+  noticing.
 
-For each repository, bootstrap:
+The indexing machinery below is retired and reachable only from the retrieval
+benchmark. It is kept until plan 04 step 7 deletes it.
+
+For each repository, the retired indexing path:
 
 1. clones or refreshes the repo
 2. reads the current revision

@@ -4,7 +4,6 @@ FastAPI service for Chatbot Template.
 This module sets up the FastAPI application and registers all endpoint routers.
 """
 
-import asyncio
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -56,40 +55,13 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
         yield
 
 
-def _warm_vector_index() -> None:
-    """Load the repository collections before the first search needs them.
-
-    Chroma loads a collection's HNSW segment lazily, which costs several
-    seconds across all repositories. Chroma shares those segments per index
-    path within the process, so warming here also serves the separate
-    ``RepoVectorIndex`` the agent builds later.
-
-    Never raises: an unsearchable index must not stop the server from starting.
-    """
-    from juena.core.config import global_config
-
-    if global_config.JUENA_RAG_URL:
-        # Nothing to warm: the collections live in the juena-rag pod, and its own
-        # connection pool opens at its startup rather than at ours.
-        return
-
-    try:
-        from juena.indexing.repo_manager import RepoManager
-        from juena.indexing.vector_index import RepoVectorIndex
-
-        RepoVectorIndex(RepoManager()).warm()
-    except Exception:
-        logger.warning("Vector index warm-up failed; searches stay cold", exc_info=True)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Initialize Postgres, the LangGraph checkpointer, and SAML metadata.
     """
-    # Deliberately not awaited: warming takes seconds and the service is
-    # perfectly usable while it runs, so it must not delay readiness.
-    warm_task = asyncio.create_task(asyncio.to_thread(_warm_vector_index))
+    # No index to warm any more: Chroma loaded HNSW segments lazily and needed a
+    # head start, and juena-rag opens its own pool at its own startup.
     async with database_lifespan():
         async with checkpointer_lifespan():
             async with store_lifespan():
@@ -97,7 +69,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     try:
                         yield
                     finally:
-                        warm_task.cancel()
                         # Agents hold network clients (Context7 MCP) for the
                         # process lifetime; close them before the pools go.
                         await shutdown_agents()

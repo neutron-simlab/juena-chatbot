@@ -63,18 +63,14 @@ def test_search_code_semantic_returns_compact_preview() -> None:
         )
     )
 
+    # The whole contract, asserted exactly: an added key costs tokens on every
+    # search, so growing this dict should be a deliberate act, not a slip.
     assert payload == [
         {
-            "id": "hit-1",
             "repo_id": "repo-a",
-            "file_path": "src/auth.py",
             "path": "/repos/repo-a/src/auth.py",
-            "chunk_index": 4,
-            "start_index": 120,
-            "end_index": 120 + len(content),
             "is_doc": False,
             "distance": 0.12,
-            "char_count": len(content),
             "preview": repo_search._compact_preview(content),
         }
     ]
@@ -232,7 +228,13 @@ def test_code_chat_tools_only_exposes_unique_retrieval_tools() -> None:
     assert [tool.name for tool in tools] == [
         "search_code_semantic",
         "search_docs_local",
+        "list_indexed_repositories",
     ]
+    catalogue_tool = next(
+        tool for tool in tools if tool.name == "list_indexed_repositories"
+    )
+    # The whole point of the tool: `ls /repos` answers a different question.
+    assert "cloned on disk" in catalogue_tool.description
     semantic_tool = next(tool for tool in tools if tool.name == "search_code_semantic")
     assert "candidate paths and previews" in semantic_tool.description
     assert "read_file" in semantic_tool.description

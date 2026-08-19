@@ -81,7 +81,7 @@ async def create_juena_agent(
     """Build the strict supervisor and both first-class specialists."""
 
     repo_manager = RepoManager()
-    vector_index = build_search_index(repo_manager)
+    vector_index = build_search_index()
     survey = survey_repositories(repo_manager, vector_index)
     bootstrap_problems = survey.problems
     # One unusable repository no longer removes the tools from the other eight,

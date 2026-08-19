@@ -1,5 +1,4 @@
-"""
-LangChain tools for code-chat: hybrid, semantic, and docs retrieval over
+"""LangChain tools for code-chat: semantic and documentation retrieval over
 configured repositories.
 """
 
@@ -12,7 +11,7 @@ from typing import Any
 from langchain.tools import tool
 
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.vector_index import RepoVectorIndex
+from juena.indexing.rag_index import RagVectorIndex
 
 _PREVIEW_CHARS = 240
 _ALL_REPOS_ID = "all"
@@ -92,7 +91,7 @@ def _distance_sort_key(hit: dict[str, Any]) -> tuple[float, str, str, int]:
 
 def _search_repos_semantic(
     repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
+    vector_index: RagVectorIndex,
     query: str,
     *,
     n_results: int,
@@ -111,38 +110,41 @@ def _search_repos_semantic(
 
 
 def _serialize_vector_hit(repo_id: str, hit: dict) -> dict:
-    """Drop full chunk bodies from vector hits and keep a bounded preview."""
+    """One hit in the smallest shape the model can act on.
 
-    file_path = str(hit.get("file_path", ""))
-    content = str(hit.get("content", ""))
+    Every field is either something the model reads, something it hands to
+    another tool, or something it ranks on. The chunk id, the character offsets
+    and the byte count were none of those and cost a third of the payload on
+    every search, which the specialist runs several times per question.
+    """
+
+    distance = hit.get("distance")
     serialised = {
-        "id": hit.get("id", ""),
         "repo_id": repo_id,
-        "file_path": file_path,
-        "path": _repo_virtual_path(repo_id, file_path),
-        "chunk_index": hit.get("chunk_index", 0),
-        "start_index": hit.get("start_index", 0),
-        "end_index": hit.get("end_index", 0),
+        # The argument for `read_file`. `file_path` used to sit beside this
+        # restating the same path without the prefix.
+        "path": _repo_virtual_path(repo_id, str(hit.get("file_path", ""))),
         "is_doc": hit.get("is_doc", False),
-        "distance": hit.get("distance"),
-        "char_count": len(content),
-        "preview": _compact_preview(content),
+        # Three decimals. The model compares hits with this; the seventeen
+        # digits it used to carry are float noise, not precision.
+        "distance": None if distance is None else round(float(distance), 3),
     }
 
-    # Only pgvector hits carry these, and only for chunks that have them. Added
-    # when present rather than always, so a Chroma hit does not grow three null
-    # keys the model has to read past on every result.
+    # Only present on chunks that have them, and added rather than defaulted so
+    # a hit without a line range does not grow three null keys to read past.
     for locator in ("start_line", "end_line", "symbol"):
         value = hit.get(locator)
         if value is not None:
             serialised[locator] = value
 
+    # Last because it is the longest, and the only field carrying meaning.
+    serialised["preview"] = _compact_preview(str(hit.get("content", "")))
     return serialised
 
 
 def _search_code_semantic(
     repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
+    vector_index: RagVectorIndex,
     repo_id: str,
     query: str,
     n_results: int = 10,
@@ -172,7 +174,7 @@ def _search_code_semantic(
 
 def _search_docs_local(
     repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
+    vector_index: RagVectorIndex,
     repo_id: str,
     query: str,
     max_results: int = 10,
@@ -206,9 +208,34 @@ def _search_docs_local(
     )
 
 
+def _list_indexed_repositories(
+    repo_manager: RepoManager,
+    vector_index: RagVectorIndex,
+) -> str:
+    """The store's catalogue, joined to what the config says each repository is.
+
+    The store is the authority on what is searchable and the config is the
+    authority on what it is for, so a repository present in one and not the
+    other is reported rather than hidden.
+    """
+    entries = []
+    for source in vector_index.catalogue():
+        repo_id = str(source["repo_id"])
+        entry: dict[str, Any] = {"repo_id": repo_id, "chunks": source["chunks"]}
+        config = repo_manager.get_config(repo_id)
+        if config is not None:
+            entry["name"] = config.name
+            entry["description"] = config.description
+        else:
+            entry["name"] = repo_id
+            entry["description"] = "Indexed, but not described in this deployment's config."
+        entries.append(entry)
+    return json.dumps(entries, separators=(",", ":"))
+
+
 def build_code_chat_tools(
     repo_manager: RepoManager,
-    vector_index: RepoVectorIndex,
+    vector_index: RagVectorIndex,
 ) -> list:
     """Create retrieval tools bound to the prepared repository resources."""
 
@@ -237,9 +264,11 @@ def build_code_chat_tools(
             query: Search query -- matched semantically, not literally.
             n_results: Maximum number of results.
 
-        Returns a JSON array of hits with repo_id, file_path, path, chunk_index,
-        is_doc, distance, char_count, and preview fields. The preview is compact
-        and should not be cited as final evidence.
+        Returns a JSON array of hits with repo_id, path, is_doc, distance,
+        preview, and -- where the chunk has them -- start_line, end_line, and
+        symbol. `path` is what you pass to read_file; `distance` is lower for a
+        closer match. The preview is compact and should not be cited as final
+        evidence.
         """
         return _search_code_semantic(
             repo_manager,
@@ -267,8 +296,9 @@ def build_code_chat_tools(
             query: Natural-language question.
             max_results: Maximum results.
 
-        Returns a JSON array of hits with repo_id, file_path, path, chunk_index,
-        is_doc, distance, char_count, and preview fields.
+        Returns a JSON array of hits with repo_id, path, is_doc, distance,
+        preview, and -- where the chunk has them -- start_line, end_line, and
+        symbol.
         """
         return _search_docs_local(
             repo_manager,
@@ -278,7 +308,25 @@ def build_code_chat_tools(
             max_results=max_results,
         )
 
+    @tool
+    def list_indexed_repositories() -> str:
+        """List every repository JueNA has indexed, and what each one is for.
+
+        Use this whenever the user asks which repositories exist, what JueNA
+        knows about, or what it can search. It is the authoritative answer.
+
+        Do not use `ls /repos` to answer that question: that lists what happens
+        to be cloned on disk, which can include repositories that were removed
+        from the index and are not searchable.
+
+        Returns a JSON array of objects with repo_id, name, description, and
+        chunks. `chunks` is how many indexed pieces the repository has; 0 means
+        it is registered but not yet searchable.
+        """
+        return _list_indexed_repositories(repo_manager, vector_index)
+
     return [
         search_code_semantic,
         search_docs_local,
+        list_indexed_repositories,
     ]

@@ -68,8 +68,6 @@ data/
 # benchmarks
 benchmarks/
 
-# Docs
+# Docs -- internal development notes and deployment plans. Deliberately not
+# tracked: they carry infrastructure detail that stays inside the institute.
 DOCS/
-!DOCS/
-DOCS/*
-!DOCS/SANDBOX.md

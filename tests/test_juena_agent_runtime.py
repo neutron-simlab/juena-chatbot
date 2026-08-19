@@ -136,8 +136,7 @@ async def test_supervisor_assembly_registers_both_specialists(
             self.cache_dir = Path("/tmp/test-repos")
 
     class StubVectorIndex:
-        def __init__(self, repo_manager: StubRepoManager) -> None:
-            self.repo_manager = repo_manager
+        """`build_search_index` takes no arguments: the URL is its only input."""
 
     software = {
         "name": SOFTWARE_SPECIALIST_NAME,
@@ -256,8 +255,7 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
         cache_dir = Path("/tmp/unavailable-repos")
 
     class StubVectorIndex:
-        def __init__(self, _repo_manager: StubRepoManager) -> None:
-            pass
+        pass
 
     async def no_context7() -> None:
         return None

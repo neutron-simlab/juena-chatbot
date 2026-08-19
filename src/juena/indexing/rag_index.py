@@ -1,10 +1,11 @@
-"""Search backed by the juena-rag service instead of the embedded Chroma index.
+"""Search backed by the juena-rag service. The only search backend there is.
 
-Presents the four members `juena.tools.repo_search` actually uses --
-``search``, ``search_many`` and the hit dictionary they return -- so swapping it
-in for :class:`~juena.indexing.vector_index.RepoVectorIndex` changes a
-constructor line and nothing else. Indexing is not here: the store is written by
-an ingestion job, not by this process.
+Presents the members `juena.tools.repo_search` uses -- ``search``,
+``search_many`` and the hit dictionary they return -- which is how it replaced
+:class:`~juena.indexing.vector_index.RepoVectorIndex` without the tools noticing.
+That class is retired but still on disk for the benchmark; nothing in the running
+application reaches it. Indexing is not here either: the store is written by an
+ingestion job, not by this process.
 """
 
 from __future__ import annotations
@@ -104,6 +105,17 @@ class RagVectorIndex:
                 return source.chunk_count
         return None
 
+    def catalogue(self) -> list[dict[str, Any]]:
+        """Every repository the store holds, with how many chunks each has.
+
+        One request rather than ``repo_ids`` plus a count per repository, which
+        was nine round trips to answer one question.
+        """
+        return [
+            {"repo_id": source.source_id, "chunks": source.chunk_count}
+            for source in self._store.list_sources()
+        ]
+
     def ping(self) -> None:
         """Reach the service. Raises if it or its database cannot be reached."""
         self._store.ping()
@@ -178,20 +190,23 @@ def _matches(hit: dict[str, Any], where: dict[str, Any]) -> bool:
     return True
 
 
-def build_search_index(repo_manager: Any) -> Any:
-    """The search backend this deployment is configured for.
+def build_search_index() -> RagVectorIndex:
+    """The search backend, which is juena-rag and nothing else.
 
-    ``JUENA_RAG_URL`` set means the shared service; unset means the Chroma index
-    inside this pod. One environment variable rather than a code path, so the
-    cutover -- and the rollback -- is a restart.
+    Refuses to start rather than falling back to the retired Chroma index: an
+    unset variable used to mean "serve from whatever is on disk", and a stale
+    local index that keeps answering is the failure nobody notices.
     """
     from juena.core.config import global_config
 
     url = global_config.JUENA_RAG_URL
     if not url:
-        from juena.indexing.vector_index import RepoVectorIndex
-
-        return RepoVectorIndex(repo_manager)
+        raise RuntimeError(
+            "JUENA_RAG_URL is not set, and repository search has no local index "
+            "to fall back to -- juena-rag holds the vectors. Point it at the "
+            "service: http://host.docker.internal:8100 from a container, "
+            "http://127.0.0.1:8100 natively."
+        )
 
     logger.info("Repository search is served by juena-rag at %s", url)
     return RagVectorIndex(url)

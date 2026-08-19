@@ -50,11 +50,14 @@ else
     echo "ℹ️  No .env file found, using environment variables"
 fi
 
-# Bootstrap repositories before starting any services.
-echo "Bootstrapping repositories and vector indices..."
+# Repositories are cloned before any service starts. No index is built here --
+# juena-rag holds the vectors and a separate ingestion job fills them. What this
+# container still needs is the files, so the model can open one and quote real
+# line numbers.
+echo "Cloning repositories..."
 python -m juena.indexing.bootstrap
 export JUENA_BOOTSTRAP_DONE=1
-echo "✅ Repository bootstrap completed"
+echo "✅ Repositories ready"
 
 # Start Streamlit in the background
 echo "Starting Streamlit UI on port 9501..."

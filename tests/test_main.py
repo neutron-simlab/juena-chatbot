@@ -10,7 +10,7 @@ def test_main_runs_bootstrap_before_starting_server(monkeypatch) -> None:
 
     monkeypatch.delenv(main.BOOTSTRAP_DONE_ENV, raising=False)
     monkeypatch.setenv("RELOAD", "false")
-    monkeypatch.setattr(main, "bootstrap_repositories", lambda: calls.append("bootstrap"))
+    monkeypatch.setattr(main, "clone_repositories", lambda: calls.append("bootstrap"))
     monkeypatch.setattr(main.uvicorn, "run", lambda *args, **kwargs: calls.append(("uvicorn", kwargs)))
 
     main.main()
@@ -35,7 +35,7 @@ def test_main_skips_bootstrap_when_flag_is_present(monkeypatch) -> None:
     monkeypatch.setenv("RELOAD", "true")
     monkeypatch.setattr(
         main,
-        "bootstrap_repositories",
+        "clone_repositories",
         lambda: (_ for _ in ()).throw(AssertionError("bootstrap should be skipped")),
     )
     monkeypatch.setattr(main.uvicorn, "run", lambda *args, **kwargs: calls.append(("uvicorn", kwargs)))

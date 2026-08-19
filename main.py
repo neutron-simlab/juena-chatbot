@@ -9,15 +9,19 @@ import os
 import uvicorn
 
 from juena.core.config import global_config
-from juena.indexing.bootstrap import BOOTSTRAP_DONE_ENV, bootstrap_repositories
+from juena.indexing.bootstrap import BOOTSTRAP_DONE_ENV, clone_repositories
 
 
 def ensure_startup_bootstrap() -> None:
-    """Run repository bootstrap once per process before starting the server."""
+    """Clone the repositories once per process before starting the server.
+
+    No index is built here: juena-rag holds the vectors. The clone is still
+    needed because the model opens the real file to quote real line numbers.
+    """
     if os.getenv(BOOTSTRAP_DONE_ENV) == "1":
         return
 
-    bootstrap_repositories()
+    clone_repositories()
     os.environ[BOOTSTRAP_DONE_ENV] = "1"
 
 

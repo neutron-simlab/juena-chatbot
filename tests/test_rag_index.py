@@ -8,6 +8,7 @@ is a fake, and the shape checks read signatures.
 
 import inspect
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,14 +17,14 @@ from juena.indexing.rag_index import RagVectorIndex, _as_chatbot_hit, _matches
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.tools.repo_search import _serialize_vector_hit
 
-#: What `_serialize_vector_hit` reads out of a hit. A key missing here is a key
-#: the tools would silently default, which is how a hit shape drifts.
+#: What `repo_search` reads out of a hit -- `_serialize_vector_hit` for what the
+#: model sees, `_distance_sort_key` for ranking across repositories. A key
+#: missing here is a key the tools would silently default, which is how a hit
+#: shape drifts. `id`, `start_index` and `end_index` are still produced but no
+#: longer read by anything, so they are not asserted.
 REQUIRED_KEYS = (
-    "id",
     "file_path",
     "chunk_index",
-    "start_index",
-    "end_index",
     "is_doc",
     "distance",
     "content",
@@ -112,10 +113,12 @@ def test_a_hit_survives_the_tools_own_serialiser():
 
     serialised = _serialize_vector_hit(hit["repo_id"], hit)
 
-    assert serialised["file_path"] == "src/jscatter/dataarray.py"
     assert serialised["path"] == "/repos/jscatter/src/jscatter/dataarray.py"
     assert serialised["preview"] == "def fit(self):"
     assert serialised["distance"] == 0.25
+    # Dropped: the model never used them and they were a third of the payload.
+    for gone in ("id", "file_path", "chunk_index", "start_index", "end_index", "char_count"):
+        assert gone not in serialised
 
 
 def test_the_locator_fields_are_added_and_not_substituted():
@@ -197,23 +200,26 @@ def test_a_source_the_store_does_not_have_counts_as_none_not_zero(index):
     assert index.collection_count_existing("declared-only") == 0
 
 
-def test_the_backend_is_chroma_when_no_url_is_configured(monkeypatch):
+def test_an_unset_url_refuses_rather_than_serving_a_stale_local_index(monkeypatch):
+    """The old fallback would have answered from a retired Chroma index.
+
+    Silently serving stale results is the failure nobody notices, so a missing
+    variable has to stop the process instead.
+    """
+    import pytest
+
     from juena.core import config as config_module
     from juena.indexing import rag_index
-    from juena.indexing.vector_index import RepoVectorIndex
 
     monkeypatch.setattr(
         config_module.global_config, "JUENA_RAG_URL", None, raising=False
     )
-    monkeypatch.setattr(rag_index, "RagVectorIndex", lambda url: "rag")
 
-    built = rag_index.build_search_index(object())
-
-    assert isinstance(built, RepoVectorIndex)
+    with pytest.raises(RuntimeError, match="JUENA_RAG_URL is not set"):
+        rag_index.build_search_index()
 
 
 def test_the_backend_is_juena_rag_when_a_url_is_configured(monkeypatch):
-    """Setting one variable is the whole switch -- and unsetting it is the rollback."""
     from juena.core import config as config_module
     from juena.indexing import rag_index
 
@@ -222,4 +228,57 @@ def test_the_backend_is_juena_rag_when_a_url_is_configured(monkeypatch):
     )
     monkeypatch.setattr(rag_index, "RagVectorIndex", lambda url: f"rag at {url}")
 
-    assert rag_index.build_search_index(object()) == "rag at http://rag:8000"
+    assert rag_index.build_search_index() == "rag at http://rag:8000"
+
+
+def test_the_catalogue_reports_every_repository_with_its_chunk_count(index):
+    """One request, not `repo_ids` plus a count per repository."""
+    assert index.catalogue() == [
+        {"repo_id": "jscatter", "chunks": 1641},
+        {"repo_id": "datreat", "chunks": 12362},
+        {"repo_id": "declared-only", "chunks": 0},
+    ]
+
+
+def test_the_repository_list_says_what_each_one_is_for(index):
+    """The store knows what is searchable; the config knows what it is."""
+    import json
+
+    from juena.tools.repo_search import _list_indexed_repositories
+
+    class StubRepoManager:
+        def get_config(self, repo_id):
+            if repo_id == "jscatter":
+                return SimpleNamespace(name="jscatter", description="SAS analysis")
+            return None
+
+    listed = json.loads(_list_indexed_repositories(StubRepoManager(), index))
+
+    assert listed[0] == {
+        "repo_id": "jscatter",
+        "chunks": 1641,
+        "name": "jscatter",
+        "description": "SAS analysis",
+    }
+    # Indexed but undescribed is reported, not hidden -- it is still searchable.
+    assert listed[1]["repo_id"] == "datreat"
+    assert "not described" in listed[1]["description"]
+
+
+def test_the_repository_list_is_the_store_not_the_clone_directory(index):
+    """`ls /repos` shows what is cloned, which is how a removed repo gets named."""
+    import json
+
+    from juena.tools.repo_search import _list_indexed_repositories
+
+    class StubRepoManager:
+        def get_config(self, repo_id):
+            return SimpleNamespace(name=repo_id, description="")
+
+    listed = json.loads(_list_indexed_repositories(StubRepoManager(), index))
+
+    assert [row["repo_id"] for row in listed] == [
+        "jscatter",
+        "datreat",
+        "declared-only",
+    ]
