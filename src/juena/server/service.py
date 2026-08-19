@@ -3,6 +3,7 @@ FastAPI service for Chatbot Template.
 
 This module sets up the FastAPI application and registers all endpoint routers.
 """
+
 import asyncio
 import warnings
 from collections.abc import AsyncGenerator
@@ -65,6 +66,13 @@ def _warm_vector_index() -> None:
 
     Never raises: an unsearchable index must not stop the server from starting.
     """
+    from juena.core.config import global_config
+
+    if global_config.JUENA_RAG_URL:
+        # Nothing to warm: the collections live in the juena-rag pod, and its own
+        # connection pool opens at its startup rather than at ours.
+        return
+
     try:
         from juena.indexing.repo_manager import RepoManager
         from juena.indexing.vector_index import RepoVectorIndex
@@ -113,7 +121,5 @@ app.include_router(api_router)
 async def health_check() -> HealthStatus:
     """Health check endpoint."""
     return HealthStatus(
-        status="ok",
-        version="0.1.0",
-        details={"service": "juena", "uptime": "running"}
+        status="ok", version="0.1.0", details={"service": "juena", "uptime": "running"}
     )

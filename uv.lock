@@ -1320,6 +1320,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "httpx-sse" },
+    { name = "juena-rag", extra = ["client"] },
     { name = "langchain", extra = ["openai"] },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
@@ -1355,6 +1356,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "httpx-sse", specifier = ">=0.4.0" },
+    { name = "juena-rag", extras = ["client"], git = "https://github.com/neutron-simlab/juena-rag.git" },
     { name = "langchain", extras = ["openai"], specifier = ">=1.0.0" },
     { name = "langchain-mcp-adapters", specifier = ">=0.1.9" },
     { name = "langchain-openai", specifier = ">=1.0.0" },
@@ -1378,6 +1380,21 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "juena-rag"
+version = "0.0.1"
+source = { git = "https://github.com/neutron-simlab/juena-rag.git#b7b72954477e781c1bda0828e24c4ecf0ffbccd0" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-language-pack" },
+]
+
+[package.optional-dependencies]
+client = [
+    { name = "httpx" },
+]
 
 [[package]]
 name = "kubernetes"

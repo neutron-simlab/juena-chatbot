@@ -175,7 +175,7 @@ async def test_supervisor_assembly_registers_both_specialists(
         return context7_runtime
 
     monkeypatch.setattr(juena_agent, "RepoManager", StubRepoManager)
-    monkeypatch.setattr(juena_agent, "RepoVectorIndex", StubVectorIndex)
+    monkeypatch.setattr(juena_agent, "build_search_index", StubVectorIndex)
     monkeypatch.setattr(juena_agent, "describe_bootstrap_problems", lambda *_args: [])
     monkeypatch.setattr(juena_agent, "build_chat_model", fake_build_chat_model)
     monkeypatch.setattr(juena_agent, "load_optional_context7_tools", fake_context7_loader)
@@ -280,7 +280,7 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
             return self
 
     monkeypatch.setattr(juena_agent, "RepoManager", StubRepoManager)
-    monkeypatch.setattr(juena_agent, "RepoVectorIndex", StubVectorIndex)
+    monkeypatch.setattr(juena_agent, "build_search_index", StubVectorIndex)
     monkeypatch.setattr(juena_agent, "describe_bootstrap_problems", lambda *_args: ["missing"])
     monkeypatch.setattr(juena_agent, "build_chat_model", lambda **_kwargs: object())
     monkeypatch.setattr(juena_agent, "load_optional_context7_tools", no_context7)

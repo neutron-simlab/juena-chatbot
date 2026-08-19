@@ -33,6 +33,9 @@ dependencies = [
     "langchain-text-splitters>=0.3.0",
     "chonkie[code]>=1.6.1",
     "podman>=5.8.0",
+    # The retrieval store, over HTTP. The `client` extra is httpx only -- no
+    # database driver and no embedder, because the service does both.
+    "juena-rag[client] @ git+https://github.com/neutron-simlab/juena-rag.git",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +48,11 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# juena-rag is installed straight from git -- it is not on PyPI, and hatchling
+# refuses a direct reference unless this says so.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/juena"]

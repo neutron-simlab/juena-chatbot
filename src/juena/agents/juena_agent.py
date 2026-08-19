@@ -33,10 +33,13 @@ from juena.core.llms_providers import build_chat_model
 from juena.core.log import get_logger
 from juena.indexing.bootstrap import describe_bootstrap_problems
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.vector_index import RepoVectorIndex
+from juena.indexing.rag_index import build_search_index
 from juena.schema.llm_models import BlabladorModelName, Provider
 from juena.server.agent.registry import register_agent_factory
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
+from juena.server.agent.runtime_model_middleware import (
+    RuntimeModelContext,
+    RuntimeModelMiddleware,
+)
 from juena.sandbox.middleware import ArtifactMessageMiddleware
 from juena.server.database.checkpointer import get_checkpointer
 from juena.server.database.store import get_store
@@ -78,7 +81,7 @@ async def create_juena_agent(
     """Build the strict supervisor and both first-class specialists."""
 
     repo_manager = RepoManager()
-    vector_index = RepoVectorIndex(repo_manager)
+    vector_index = build_search_index(repo_manager)
     bootstrap_problems = describe_bootstrap_problems(repo_manager, vector_index)
     has_repo_research = not bootstrap_problems
     if bootstrap_problems:
@@ -95,7 +98,9 @@ async def create_juena_agent(
         temperature=0.0,
     )
     context7_runtime = await load_optional_context7_tools()
-    context7_tools = tuple(context7_runtime.tools) if context7_runtime is not None else ()
+    context7_tools = (
+        tuple(context7_runtime.tools) if context7_runtime is not None else ()
+    )
     tavily_tool = load_optional_tavily_tool()
     fallback_models = build_fallback_models()
 

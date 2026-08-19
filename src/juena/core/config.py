@@ -16,6 +16,7 @@ def _repo_data_dir(*parts: str) -> Path:
     """Build a path inside the repository-local data directory."""
     return repo_root() / "data" / Path(*parts)
 
+
 # Load environment variables from .env file
 # If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
 # so that "cp env.example .env" in the repo root works without extra configuration.
@@ -26,36 +27,37 @@ if path_env is None or path_env == "":
 # Use override=False to respect system env vars (default behavior)
 load_dotenv(path_env, override=False)
 
+
 class Config:
     """Essential configuration for JueNA"""
-    
+
     # =============================================================================
     # REQUIRED SETTINGS
     # =============================================================================
-    
+
     # OpenAI API Key
     # Check both .env file and system environment
     # Note: System environment variables take precedence over .env file
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
-    
+
     # =============================================================================
     # LANGSMITH SETTINGS (Optional but recommended)
     # =============================================================================
-    
+
     # LangSmith tracing configuration
     LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     LANGSMITH_ENDPOINT = os.getenv("LANGSMITH_ENDPOINT")
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
     LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT")
-    
+
     # =============================================================================
     # LLM PROVIDER CONFIGURATION
     # =============================================================================
-    
+
     # Provider selection
     DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "blablador")
     FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "blablador")
-    
+
     # Provider-specific default models
     # OpenAI (OpenAI API)
     OPENAI_DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
@@ -63,7 +65,7 @@ class Config:
     # If not set, all models from OpenAIModelName enum will be shown
     # Example: OPENAI_AVAILABLE_MODELS=gpt-4o-mini
     OPENAI_AVAILABLE_MODELS = os.getenv("OPENAI_AVAILABLE_MODELS")
-    
+
     # Blablador (OpenAI-compatible API)
     BLABLADOR_API_KEY = os.getenv("BLABLADOR_API_KEY")
     BLABLADOR_BASE_URL = os.getenv("BLABLADOR_BASE_URL")
@@ -71,11 +73,13 @@ class Config:
         "BLABLADOR_DEFAULT_MODEL",
         _BLABLADOR_DEFAULT_MODEL_ID,
     )
-    BLABLADOR_EMBEDDING_MODEL = os.getenv("BLABLADOR_EMBEDDING_MODEL", "alias-qwen3-8b-embeddings")
+    BLABLADOR_EMBEDDING_MODEL = os.getenv(
+        "BLABLADOR_EMBEDDING_MODEL", "alias-qwen3-8b-embeddings"
+    )
     # Optional: Comma-separated list of available Blablador models to show in UI
     # If not set, all models from BlabladorModelName enum will be shown
     BLABLADOR_AVAILABLE_MODELS = os.getenv("BLABLADOR_AVAILABLE_MODELS")
-    
+
     # Default model (uses provider-specific default based on DEFAULT_PROVIDER if not explicitly set)
     # If DEFAULT_MODEL is not set, it will use the provider-specific default (OPENAI_DEFAULT_MODEL or BLABLADOR_DEFAULT_MODEL)
     # based on DEFAULT_PROVIDER. This allows backward compatibility while supporting provider-specific defaults.
@@ -91,7 +95,7 @@ class Config:
         else:
             # Fallback to OpenAI default for unknown providers
             DEFAULT_MODEL = OPENAI_DEFAULT_MODEL
-    
+
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "10000"))
     TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "60"))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
@@ -109,15 +113,26 @@ class Config:
     # Tavily web search (optional external web search tool)
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
+    # juena-rag, the shared retrieval service. Setting this is the switch: the
+    # repository tools search pgvector over HTTP instead of the Chroma index
+    # inside this pod. Unset, everything behaves exactly as before, which is what
+    # makes the cutover reversible without a deploy.
+    JUENA_RAG_URL = os.getenv("JUENA_RAG_URL", "").strip() or None
+
     # Sandboxed scientific execution. The `sandbox_jobs` table is the only
     # channel between the API and the host-side rootless-Podman worker.
     SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "false").lower() == "true"
     # Development can show the starter for UI review without claiming that a
     # command can run. The click is intercepted until SANDBOX_ENABLED is true.
-    SANDBOX_STARTER_PREVIEW = os.getenv(
-        "SANDBOX_STARTER_PREVIEW",
-        "true" if os.getenv("ENVIRONMENT", "development").lower() != "production" else "false",
-    ).lower() == "true"
+    SANDBOX_STARTER_PREVIEW = (
+        os.getenv(
+            "SANDBOX_STARTER_PREVIEW",
+            "true"
+            if os.getenv("ENVIRONMENT", "development").lower() != "production"
+            else "false",
+        ).lower()
+        == "true"
+    )
     SANDBOX_IDENTITY_SECRET = os.getenv("SANDBOX_IDENTITY_SECRET")
     SANDBOX_WORKSPACE_ROOT = Path(
         os.getenv("SANDBOX_WORKSPACE_ROOT", str(_repo_data_dir("sandbox-workspaces")))
@@ -135,19 +150,19 @@ class Config:
     SANDBOX_AUDIT_FILE = Path(
         os.getenv("SANDBOX_AUDIT_FILE", str(_repo_data_dir("audit", "sandbox.jsonl")))
     )
-    
+
     # =============================================================================
     # SERVER CONFIGURATION
     # =============================================================================
-    
+
     SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
     SERVER_PORT = int(os.getenv("SERVER_PORT", "8080"))
     UI_PORT = int(os.getenv("UI_PORT", "9501"))
-    
+
     # =============================================================================
     # ENVIRONMENT
     # =============================================================================
-    
+
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     _development = ENVIRONMENT.lower() != "production"
@@ -171,10 +186,10 @@ class Config:
         "UI_PUBLIC_URL",
         "http://localhost:9501" if _development else JUENA_PUBLIC_URL,
     )
-    
+
     # Application log directory (for date-based log files)
     LOG_DIR = os.getenv("LOG_DIR", "/tmp/logs")
-    
+
     # Postgres is required by the authenticated production service. Imports and
     # unit tests remain possible without it; the FastAPI lifespan fails clearly.
     DATABASE_URL = os.getenv("DATABASE_URL")
@@ -220,42 +235,48 @@ class Config:
             "It issues sessions without verifying any identity."
         )
     AUTH_DEV_BYPASS = _auth_dev_bypass
-    SESSION_COOKIE_SECURE = os.getenv(
-        "SESSION_COOKIE_SECURE",
-        "false" if _development else "true",
-    ).lower() == "true"
+    SESSION_COOKIE_SECURE = (
+        os.getenv(
+            "SESSION_COOKIE_SECURE",
+            "false" if _development else "true",
+        ).lower()
+        == "true"
+    )
     SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "8"))
 
     @classmethod
     def _check_provider_available(cls, provider_name: str) -> bool:
         """
         Check if a provider is available based on config attributes.
-        
+
         This is used during initialization before the registry is available.
         """
         provider_name = provider_name.lower()
-        if provider_name == 'openai':
+        if provider_name == "openai":
             return bool(cls.OPENAI_API_KEY and cls.OPENAI_API_KEY.strip())
-        elif provider_name == 'blablador':
+        elif provider_name == "blablador":
             return bool(
-                cls.BLABLADOR_API_KEY and cls.BLABLADOR_API_KEY.strip() and
-                cls.BLABLADOR_BASE_URL and cls.BLABLADOR_BASE_URL.strip()
+                cls.BLABLADOR_API_KEY
+                and cls.BLABLADOR_API_KEY.strip()
+                and cls.BLABLADOR_BASE_URL
+                and cls.BLABLADOR_BASE_URL.strip()
             )
         return False
-    
+
     @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
         """
         Get dictionary of available providers (have API keys configured).
-        
+
         Uses direct config checks to avoid circular imports during initialization.
-        
+
         Returns:
             Dict mapping provider names to availability status
         """
         from juena.schema.llm_models import Provider
+
         return {p.value: cls._check_provider_available(p.value) for p in Provider}
-    
+
     @classmethod
     def _default_model_for(cls, provider: str) -> str:
         """Provider-specific default model, matching the class-body derivation."""
@@ -267,16 +288,20 @@ class Config:
     def validate_required(cls):
         """Validate that required environment variables are set"""
         errors = []
-        
+
         # Get available providers
         available_providers = cls.get_available_providers()
-        
+
         # Check if DEFAULT_PROVIDER is available
-        default_provider_available = available_providers.get(cls.DEFAULT_PROVIDER.lower(), False)
-        
+        default_provider_available = available_providers.get(
+            cls.DEFAULT_PROVIDER.lower(), False
+        )
+
         if not default_provider_available:
             # Auto-adjust to first available provider
-            available_list = [p for p, available in available_providers.items() if available]
+            available_list = [
+                p for p, available in available_providers.items() if available
+            ]
             if available_list:
                 cls.DEFAULT_PROVIDER = available_list[0]
                 # DEFAULT_MODEL was derived from the *original* provider at class
@@ -295,16 +320,22 @@ class Config:
 
         # Validate FALLBACK_PROVIDER if set
         if cls.FALLBACK_PROVIDER:
-            fallback_available = available_providers.get(cls.FALLBACK_PROVIDER.lower(), False)
+            fallback_available = available_providers.get(
+                cls.FALLBACK_PROVIDER.lower(), False
+            )
             if not fallback_available:
                 # Read the name before clearing it: the old code interpolated
                 # after the assignment and so always printed 'None'.
                 unavailable = cls.FALLBACK_PROVIDER
                 cls.FALLBACK_PROVIDER = None
-                print(f"⚠️ FALLBACK_PROVIDER '{unavailable}' is not available, cleared fallback")
-        
+                print(
+                    f"⚠️ FALLBACK_PROVIDER '{unavailable}' is not available, cleared fallback"
+                )
+
         if cls.LANGSMITH_TRACING and not cls.LANGSMITH_API_KEY:
-            errors.append("LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled")
+            errors.append(
+                "LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled"
+            )
 
         if cls.SANDBOX_ENABLED:
             if not cls.DATABASE_URL:
@@ -312,15 +343,23 @@ class Config:
             if cls.SANDBOX_CONCURRENCY < 1:
                 errors.append("SANDBOX_CONCURRENCY must be at least 1")
             if not cls.SANDBOX_IDENTITY_SECRET:
-                errors.append("SANDBOX_IDENTITY_SECRET is required when SANDBOX_ENABLED is true")
+                errors.append(
+                    "SANDBOX_IDENTITY_SECRET is required when SANDBOX_ENABLED is true"
+                )
             elif len(cls.SANDBOX_IDENTITY_SECRET) < 32:
-                errors.append("SANDBOX_IDENTITY_SECRET must contain at least 32 characters")
+                errors.append(
+                    "SANDBOX_IDENTITY_SECRET must contain at least 32 characters"
+                )
             if cls.SANDBOX_EXECUTION_TIMEOUT_SECONDS <= 0:
                 errors.append("SANDBOX_EXECUTION_TIMEOUT_SECONDS must be positive")
             if cls.SANDBOX_MAX_OUTPUT_BYTES <= 0:
                 errors.append("SANDBOX_MAX_OUTPUT_BYTES must be positive")
 
-        if not cls._development and cls.SANDBOX_STARTER_PREVIEW and not cls.SANDBOX_ENABLED:
+        if (
+            not cls._development
+            and cls.SANDBOX_STARTER_PREVIEW
+            and not cls.SANDBOX_ENABLED
+        ):
             errors.append(
                 "SANDBOX_STARTER_PREVIEW cannot be enabled in production without SANDBOX_ENABLED"
             )
@@ -342,17 +381,21 @@ class Config:
                 value = getattr(cls, setting_name)
                 if not value:
                     errors.append(f"{setting_name} is required in production")
-                elif not value.lower().startswith("https://") or "localhost" in value.lower():
+                elif (
+                    not value.lower().startswith("https://")
+                    or "localhost" in value.lower()
+                ):
                     errors.append(
                         f"{setting_name} must use a public HTTPS URL in production"
                     )
             if not cls.SESSION_COOKIE_SECURE:
                 errors.append("SESSION_COOKIE_SECURE must be true in production")
-        
+
         if errors:
-            raise ValueError(f"Missing required environment variables: {', '.join(errors)}")
-    
-    
+            raise ValueError(
+                f"Missing required environment variables: {', '.join(errors)}"
+            )
+
     @classmethod
     def setup_langsmith(cls):
         """Setup LangSmith tracing if enabled"""
@@ -365,25 +408,30 @@ class Config:
                 os.environ["LANGSMITH_PROJECT"] = cls.LANGSMITH_PROJECT
             return True
         return False
-    
+
     @classmethod
     def initialize(cls):
         """Initialize configuration - call once at startup"""
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
-        
+
         # Get and display available providers
         available_providers = cls.get_available_providers()
-        available_list = [p for p, available in available_providers.items() if available]
-        
+        available_list = [
+            p for p, available in available_providers.items() if available
+        ]
+
         print(f"✅ Configuration initialized")
         print(f"✅ Environment: {cls.ENVIRONMENT}")
         print(f"✅ Default Provider: {cls.DEFAULT_PROVIDER}")
-        print(f"✅ Available Providers: {', '.join(available_list) if available_list else 'None'}")
+        print(
+            f"✅ Available Providers: {', '.join(available_list) if available_list else 'None'}"
+        )
         print(f"✅ LangSmith: {'enabled' if langsmith_enabled else 'disabled'}")
         print("✅ Persistence: Postgres (required at service startup)")
-        
+
         return cls
+
 
 # Initialize configuration on import
 global_config = Config.initialize()
