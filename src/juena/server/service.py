@@ -13,11 +13,14 @@ from langchain_core._api import LangChainBetaWarning
 
 from juena.core.config import global_config
 from juena.core.log import get_logger
+from juena.research import jobs as research_jobs
+from juena.research import runner as research_runner
 from juena.schema.server import HealthStatus
 from juena.server.agent.registry import shutdown_agents
 from juena.server.api.endpoints import router as api_router
 from juena.server.auth.endpoints import router as auth_router
 from juena.server.chat.endpoints import router as chat_router
+from juena.server.research.endpoints import router as research_router
 from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan
 from juena.server.auth.saml import saml_lifespan
@@ -66,9 +69,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         async with checkpointer_lifespan():
             async with store_lifespan():
                 async with _optional_saml_lifespan():
+                    # Background research runs in this process's event loop, so
+                    # any row still marked active belongs to a process that is
+                    # gone. Sweep before anything can create a new one.
+                    await research_jobs.fail_orphans()
                     try:
                         yield
                     finally:
+                        # In-flight research first: it holds the database and
+                        # the model clients the steps below are about to close.
+                        await research_runner.shutdown()
                         # Agents hold network clients (Context7 MCP) for the
                         # process lifetime; close them before the pools go.
                         await shutdown_agents()
@@ -85,6 +95,7 @@ app = FastAPI(
 # Register routers
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(research_router)
 app.include_router(api_router)
 
 

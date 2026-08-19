@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
@@ -44,6 +45,7 @@ from juena.sandbox.middleware import ArtifactMessageMiddleware
 from juena.server.database.checkpointer import get_checkpointer
 from juena.server.database.store import get_store
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
+from juena.tools.research import build_research_tools
 from juena.tools.tavily import load_optional_tavily_tool
 
 logger = get_logger(__name__)
@@ -72,6 +74,11 @@ class JuenaAgentResources:
 
     app: CompiledStateGraph
     context7_runtime: Context7Runtime | None = None
+    #: The same specialists compiled for unattended work -- no `ask_user`, no
+    #: sandbox. `juena.research.runner` invokes these directly; they are held
+    #: here rather than inside `SubAgentMiddleware`, which owns only the
+    #: interactive set and exposes them only through its `task` closure.
+    background_specialists: dict[str, Any] = field(default_factory=dict)
 
 
 async def create_juena_agent(
@@ -110,21 +117,33 @@ async def create_juena_agent(
     tavily_tool = load_optional_tavily_tool()
     fallback_models = build_fallback_models()
 
-    specialists = [
-        build_software_specialist(
-            repo_manager=repo_manager,
-            vector_index=vector_index,
-            has_repo_research=has_repo_research,
-            context7_tools=context7_tools,
-            summarizer_model=summarizer_model,
-            fallback_models=fallback_models,
-        ),
-        build_neutron_research_specialist(
-            tavily_tool=tavily_tool,
-            summarizer_model=summarizer_model,
-            fallback_models=fallback_models,
-        ),
-    ]
+    def compile_specialists(*, unattended: bool) -> list:
+        return [
+            build_software_specialist(
+                repo_manager=repo_manager,
+                vector_index=vector_index,
+                has_repo_research=has_repo_research,
+                context7_tools=context7_tools,
+                summarizer_model=summarizer_model,
+                fallback_models=fallback_models,
+                unattended=unattended,
+            ),
+            build_neutron_research_specialist(
+                tavily_tool=tavily_tool,
+                summarizer_model=summarizer_model,
+                fallback_models=fallback_models,
+                unattended=unattended,
+            ),
+        ]
+
+    specialists = compile_specialists(unattended=False)
+    # A second compile, not a second set of models: `build_chat_model` caches on
+    # (provider, model, temperature), so this costs tool objects and a prompt
+    # string. The two sets must stay one graph apart -- an unattended specialist
+    # that could still reach `ask_user` would block forever on nobody.
+    background_specialists = {
+        spec["name"]: spec["runnable"] for spec in compile_specialists(unattended=True)
+    }
 
     store = get_store()
     supervisor_backend = build_supervisor_backend(store)
@@ -162,7 +181,10 @@ async def create_juena_agent(
 
     agent = create_agent(
         model=supervisor_model,
-        tools=[build_ask_user_tool(JUENA_AGENT_ID)],
+        tools=[
+            build_ask_user_tool(JUENA_AGENT_ID),
+            *build_research_tools(list(background_specialists)),
+        ],
         system_prompt=load_markdown("juena.agents", "SUPERVISOR.md"),
         middleware=middleware,
         context_schema=RuntimeModelContext,
@@ -174,6 +196,7 @@ async def create_juena_agent(
     resources = JuenaAgentResources(
         app=agent,
         context7_runtime=context7_runtime,
+        background_specialists=background_specialists,
     )
     return (resources, agent)
 

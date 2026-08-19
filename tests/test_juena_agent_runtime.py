@@ -154,10 +154,14 @@ async def test_supervisor_assembly_registers_both_specialists(
         return supervisor_model if kwargs["model"] == "user-model" else summarizer_model
 
     def fake_build_software_specialist(**kwargs: Any) -> dict[str, Any]:
+        # Every call, not the last one: each specialist is now compiled twice,
+        # once for `task` and once for background research.
+        created.setdefault("software_calls", []).append(kwargs)
         created["software_kwargs"] = kwargs
         return software
 
     def fake_build_neutron_specialist(**kwargs: Any) -> dict[str, Any]:
+        created.setdefault("neutron_calls", []).append(kwargs)
         created["neutron_kwargs"] = kwargs
         return neutron
 
@@ -215,9 +219,23 @@ async def test_supervisor_assembly_registers_both_specialists(
     assert created["software_kwargs"]["fallback_models"] == [fallback_model]
     assert created["neutron_kwargs"]["fallback_models"] == [fallback_model]
 
+    # Each specialist is compiled twice: the interactive copy `task` invokes,
+    # and the unattended copy background research invokes.
+    for calls in (created["software_calls"], created["neutron_calls"]):
+        assert [call["unattended"] for call in calls] == [False, True]
+    assert set(resources.background_specialists) == {
+        SOFTWARE_SPECIALIST_NAME,
+        NEUTRON_RESEARCH_SPECIALIST_NAME,
+    }
+
     agent_kwargs = created["agent_kwargs"]
     assert agent_kwargs["model"] is supervisor_model
-    assert [tool.name for tool in agent_kwargs["tools"]] == ["ask_user"]
+    assert [tool.name for tool in agent_kwargs["tools"]] == [
+        "ask_user",
+        "start_research",
+        "check_research",
+        "list_research",
+    ]
     assert agent_kwargs["context_schema"] is RuntimeModelContext
     assert agent_kwargs["store"] is store
     assert created["graph_config"] == {"recursion_limit": 1000}

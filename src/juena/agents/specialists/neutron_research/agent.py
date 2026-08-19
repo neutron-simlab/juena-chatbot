@@ -11,6 +11,7 @@ from langchain.agents.structured_output import ToolStrategy
 
 from juena.agents.ask_user import build_ask_user_tool
 from juena.agents.specialist_runtime import (
+    UNATTENDED_NOTICE,
     build_specialist_backend,
     build_specialist_middleware,
     load_markdown,
@@ -38,7 +39,9 @@ NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.GPT_OSS.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
-def build_neutron_research_prompt(*, has_tavily: bool) -> str:
+def build_neutron_research_prompt(
+    *, has_tavily: bool, unattended: bool = False
+) -> str:
     """Append truthful runtime capability status to the authored prompt."""
 
     prompt = load_markdown("juena.agents.specialists.neutron_research", "AGENT.md")
@@ -51,7 +54,10 @@ def build_neutron_research_prompt(*, has_tavily: bool) -> str:
             "claims that require current external verification and never invent citations."
         )
     )
-    return f"{prompt}\n## Runtime capabilities\n\n- {status}\n"
+    capabilities = f"{prompt}\n## Runtime capabilities\n\n- {status}\n"
+    if not unattended:
+        return capabilities
+    return f"{capabilities}\n## Running unattended\n\n{UNATTENDED_NOTICE}\n"
 
 
 def build_neutron_research_specialist(
@@ -59,8 +65,13 @@ def build_neutron_research_specialist(
     tavily_tool: Any | None,
     summarizer_model: Any,
     fallback_models: list[Any],
+    unattended: bool = False,
 ) -> CompiledSubAgent:
-    """Compile the neutron specialist with its own model, tools, and backend."""
+    """Compile the neutron specialist with its own model, tools, and backend.
+
+    ``unattended`` compiles the copy that background research runs, without
+    ``ask_user``: a job nobody is watching cannot have its question answered.
+    """
 
     backend = build_specialist_backend(skills_dir=_SPECIALIST_SKILLS_PATH)
     model = build_chat_model(
@@ -68,14 +79,16 @@ def build_neutron_research_specialist(
         model=NEUTRON_RESEARCH_SPECIALIST_MODEL,
         temperature=0.0,
     )
-    specialist_tools = [
-        *build_tools(tavily_tool),
-        build_ask_user_tool(NEUTRON_RESEARCH_SPECIALIST_NAME),
-    ]
+    specialist_tools = list(build_tools(tavily_tool))
+    if not unattended:
+        specialist_tools.append(build_ask_user_tool(NEUTRON_RESEARCH_SPECIALIST_NAME))
     runnable = create_agent(
         model=model,
         tools=specialist_tools,
-        system_prompt=build_neutron_research_prompt(has_tavily=tavily_tool is not None),
+        system_prompt=build_neutron_research_prompt(
+            has_tavily=tavily_tool is not None,
+            unattended=unattended,
+        ),
         middleware=build_specialist_middleware(
             backend=backend,
             summarizer_model=summarizer_model,
@@ -84,6 +97,7 @@ def build_neutron_research_specialist(
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Neutron research",
             specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
+            unattended=unattended,
         ),
         response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,

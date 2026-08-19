@@ -20,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from juena.research.constants import ACTIVE_STATUSES as ACTIVE_RESEARCH_STATUSES
 from juena.sandbox.constants import ACTIVE_STATUSES
 
 
@@ -155,3 +156,53 @@ class SandboxJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+_ACTIVE_RESEARCH_PREDICATE = text(
+    "status IN ({})".format(", ".join(f"'{s}'" for s in ACTIVE_RESEARCH_STATUSES))
+)
+
+
+class ResearchJob(Base):
+    """One specialist delegation running detached from the request that started it.
+
+    The supervisor normally delegates inside its own tool call, which ties the
+    specialist's lifetime to the HTTP connection. A row here is the alternative:
+    the run happens in a background task and the answer waits until a later turn
+    collects it, so closing the browser no longer abandons the work.
+
+    `report` holds the finished `<specialist_report>` package verbatim -- the
+    same text the `task` tool would have returned -- and `findings` the files the
+    run wrote under `/findings/`, because a standalone invocation does not share
+    graph state with the conversation that asked for it.
+    """
+
+    __tablename__ = "research_jobs"
+    __table_args__ = (
+        Index("ix_research_jobs_thread_status", "thread_id", "status"),
+        Index(
+            "ix_research_jobs_active_user",
+            "user_id",
+            postgresql_where=_ACTIVE_RESEARCH_PREDICATE,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    specialist: Mapped[str] = mapped_column(String(64), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    report: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    findings: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when a supervisor turn has actually read the result out. Without it the
+    # same finished job is reported again on every following turn.
+    collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

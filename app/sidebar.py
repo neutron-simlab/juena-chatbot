@@ -108,6 +108,50 @@ def _delete_chat_with_server_state(
     return True, None
 
 
+#: What the badge sends when the user asks for a finished result. The supervisor
+#: collects through `check_research`; this only prompts the turn in which it can.
+COLLECT_PROMPT = "Collect the finished background research."
+
+#: How often the badge re-checks. Background research takes minutes, so this is
+#: about the user not having to guess, not about being immediate.
+_RESEARCH_POLL_SECONDS = 15
+
+
+@st.fragment(run_every=_RESEARCH_POLL_SECONDS)
+def _render_research_status() -> None:
+    """Tell the user when background research is running, and when it is ready.
+
+    A fragment rather than a full rerun: this polls on a timer, and reloading the
+    whole page every fifteen seconds would interrupt whatever they are typing.
+    """
+    client = st.session_state.get("client")
+    thread_id = st.session_state.get("thread_id")
+    if not client or not thread_id:
+        return
+
+    try:
+        status = client.list_research(str(thread_id))
+    except AgentClientError:
+        return
+
+    running = int(status.get("running") or 0)
+    ready = int(status.get("ready") or 0)
+    if not running and not ready:
+        return
+
+    st.subheader("Background research")
+    if running:
+        st.caption(f"⏳ {running} running")
+    if ready:
+        label = "1 result ready" if ready == 1 else f"{ready} results ready"
+        if st.button(f"📥 {label}", width="stretch", key="collect-research"):
+            st.session_state.queued_prompt = COLLECT_PROMPT
+            # The chat interface lives outside this fragment, so the whole app
+            # has to rerun for it to see the queued prompt.
+            st.rerun(scope="app")
+    st.divider()
+
+
 def render_sidebar() -> None:
     """Render the sidebar with all configuration options."""
     with st.sidebar:
@@ -123,6 +167,8 @@ def render_sidebar() -> None:
         st.html(_logout_form_html(global_config.JUENA_PUBLIC_URL))
 
         st.divider()
+
+        _render_research_status()
 
         # 1. LLM Configuration
         st.subheader("LLM Configuration")

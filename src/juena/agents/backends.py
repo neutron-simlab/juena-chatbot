@@ -17,6 +17,21 @@ from deepagents.backends.protocol import (
 MEMORY_NAMESPACE_PREFIX = "memories"
 MEMORY_SOURCES = ["/memories/AGENTS.md"]
 
+#: Where a specialist leaves evidence for the next one.
+#:
+#: **It is not one place.** A specialist writes it through whatever its backend's
+#: default is: graph state when there is no sandbox, and the per-thread Podman
+#: workspace when there is. Both work for the case they were built for -- the
+#: workspace persists across delegations on a thread, so interactive specialists
+#: still see each other's findings -- but they are different stores, and a
+#: background specialist (which never has a sandbox) always writes to state.
+#:
+#: A composite *route* would unify them, and must not be used: `CompositeBackend`
+#: strips the matched prefix, so `/findings/x.md` would be stored under `/x.md`,
+#: indistinguishable from any other top-level file. `juena.research` therefore
+#: carries findings back through the job row instead of relying on shared state.
+FINDINGS_PREFIX = "/findings/"
+
 JUENA_MEMORY_SYSTEM_PROMPT = """<agent_memory>
 {agent_memory}
 

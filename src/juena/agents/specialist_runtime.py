@@ -38,11 +38,36 @@ SUPERVISOR_MODEL_CALL_LIMIT = 50
 SUPERVISOR_TOOL_CALL_LIMIT = 100
 SPECIALIST_MODEL_CALL_LIMIT = 60
 SPECIALIST_TOOL_CALL_LIMIT = 150
+#: Background work gets a wider budget, because the reason the interactive one is
+#: tight does not apply: nobody is watching a spinner. The objectives sent here
+#: are the long ones by definition, and a run that exhausts its calls returns no
+#: structured report at all -- so the whole wait produces `STATUS: UNVERIFIED`
+#: and the user gets nothing. Wall-clock is the real bound on a background job
+#: (`RESEARCH_TIMEOUT_SECONDS`); this only stops a loop from spinning forever.
+BACKGROUND_MODEL_CALL_LIMIT = 150
+BACKGROUND_TOOL_CALL_LIMIT = 400
 ASK_USER_CALL_LIMIT = 3
 MODEL_MAX_RETRIES = 3
 TOOL_MAX_RETRIES = 2
 
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+#: Appended to a specialist's prompt when it is compiled for background work.
+#: The capabilities it describes are genuinely absent from that instance -- the
+#: tools are not bound and the sandbox backend is not mounted -- so this tells
+#: the model what it will find rather than asking it to refrain.
+UNATTENDED_NOTICE = (
+    "You are running unattended, as a background job the user started and then "
+    "carried on with their conversation. Nobody is watching this run: `ask_user` "
+    "is not available to you here, and neither is sandboxed execution. Decide "
+    "with the evidence you can gather, and put whatever you could not settle in "
+    "`limitations` -- an honest gap there is worth far more than a guess, "
+    "because the supervisor can act on it and cannot act on a guess.\n\n"
+    "Your report is the deliverable. Write to `/findings/` as usual, and know "
+    "that its **contents** are carried back with the report rather than the file "
+    "itself -- so put the evidence in the file, not a pointer to somewhere else, "
+    "and keep it tight enough to be worth reading whole."
+)
 
 
 class PromptResourceError(RuntimeError):
@@ -181,6 +206,7 @@ def build_specialist_middleware(
     skills_label: str,
     specialist_name: str,
     enable_execution_approval: bool = False,
+    unattended: bool = False,
 ) -> list[Any]:
     """Build the common middleware stack while keeping agent choices local."""
 
@@ -210,8 +236,12 @@ def build_specialist_middleware(
         PatchToolCallsMiddleware(),
         *resilience_middleware(
             fallback_models,
-            model_call_limit=SPECIALIST_MODEL_CALL_LIMIT,
-            tool_call_limit=SPECIALIST_TOOL_CALL_LIMIT,
+            model_call_limit=(
+                BACKGROUND_MODEL_CALL_LIMIT if unattended else SPECIALIST_MODEL_CALL_LIMIT
+            ),
+            tool_call_limit=(
+                BACKGROUND_TOOL_CALL_LIMIT if unattended else SPECIALIST_TOOL_CALL_LIMIT
+            ),
         ),
     ])
     if enable_execution_approval:

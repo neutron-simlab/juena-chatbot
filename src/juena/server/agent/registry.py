@@ -150,6 +150,22 @@ async def get_agent(
     return _agent_registry[agent_id][1]
 
 
+def get_agent_resources(agent_id: str) -> AgentInstance:
+    """The factory's instance object for an already-created agent.
+
+    `get_agent` hands back only the graph, which is all a request needs. Anything
+    that has to reach past the graph -- the background specialists, the Context7
+    session -- lives on the instance beside it. Raises if the agent has not been
+    created yet, because that means the caller ran before the first request.
+    """
+    if agent_id not in _agent_registry:
+        raise AgentNotFoundError(
+            agent_id,
+            details={"error": "agent has not been created yet"},
+        )
+    return _agent_registry[agent_id][0]
+
+
 async def shutdown_agents() -> None:
     """Release long-lived resources held by cached agents.
 

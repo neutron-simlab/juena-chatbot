@@ -496,6 +496,28 @@ class AgentClient:
         pending = payload.get("approval") or payload.get("clarification")
         return pending if isinstance(pending, dict) else None
 
+    def list_research(self, thread_id: str) -> dict[str, Any]:
+        """Background research on a thread that has not been reported yet.
+
+        Returns ``{"jobs": [...], "running": int, "ready": int}``. A failure to
+        reach the server is reported as "nothing outstanding" rather than
+        raised: this feeds a sidebar badge, and a badge is not worth breaking
+        the page for.
+        """
+        empty: dict[str, Any] = {"jobs": [], "running": 0, "ready": 0}
+        try:
+            response = self._client.get(
+                f"{self.base_url}/research",
+                params={"thread_id": thread_id},
+                headers=self._headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return empty
+        return payload if isinstance(payload, dict) else empty
+
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """
         Check if a message is a token message.

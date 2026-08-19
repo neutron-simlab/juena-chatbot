@@ -722,6 +722,12 @@ def render_chat_interface() -> None:
     prompt, attachments = _normalize_chat_submission(submission)
     if submission is None and starter_prompt:
         prompt, attachments = starter_prompt, []
+    # The sidebar's background-research badge queues a prompt rather than
+    # sending one: it runs in a fragment, and only this function owns the
+    # transcript. Popped so a later rerun does not send it twice.
+    if submission is None and not starter_prompt:
+        if queued := st.session_state.pop("queued_prompt", None):
+            prompt, attachments = str(queued), []
 
     if not prompt and not attachments:
         return

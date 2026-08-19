@@ -12,6 +12,7 @@ from langchain.agents.structured_output import ToolStrategy
 
 from juena.agents.ask_user import build_ask_user_tool
 from juena.agents.specialist_runtime import (
+    UNATTENDED_NOTICE,
     build_specialist_backend,
     build_specialist_middleware,
     has_authored_skills,
@@ -44,7 +45,9 @@ SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.MINIMAX_M27.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
-def build_software_prompt(*, has_repo_research: bool, has_context7: bool) -> str:
+def build_software_prompt(
+    *, has_repo_research: bool, has_context7: bool, unattended: bool = False
+) -> str:
     """Append truthful runtime capability status to the authored prompt."""
 
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
@@ -71,13 +74,16 @@ def build_software_prompt(*, has_repo_research: bool, has_context7: bool) -> str
         f"{repository_software_prompt()} "
         "After a successful command reports collected artifacts, do not inspect, encode, "
         "or print those files. Never attempt package installation or network access."
-        if sandbox_enabled()
+        if sandbox_enabled() and not unattended
         else "Sandboxed execution is unavailable. Do not claim to run Python or generate plots."
     )
-    return (
+    capabilities = (
         f"{prompt}\n## Runtime capabilities\n\n"
         f"- {repo_status}\n- {context7_status}\n- {execution_status}\n"
     )
+    if not unattended:
+        return capabilities
+    return f"{capabilities}\n## Running unattended\n\n{UNATTENDED_NOTICE}\n"
 
 
 def build_software_specialist(
@@ -88,17 +94,25 @@ def build_software_specialist(
     context7_tools: Sequence[Any],
     summarizer_model: Any,
     fallback_models: list[Any],
+    unattended: bool = False,
 ) -> CompiledSubAgent:
-    """Compile the software specialist with its own model, tools, and backend."""
+    """Compile the software specialist with its own model, tools, and backend.
+
+    ``unattended`` compiles the copy that background research runs: no
+    ``ask_user`` and no sandbox, because a job nobody is watching cannot answer
+    an interrupt. Both capabilities are removed together -- dropping the approval
+    middleware while leaving `execute` mounted would run commands unapproved.
+    """
 
     repo_cache_root = repo_manager.cache_dir if has_repo_research else None
+    can_execute = sandbox_enabled() and not unattended
     backend = (
         build_sandbox_backend(
             repo_cache_root=repo_cache_root,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             has_skills=has_authored_skills(_SPECIALIST_SKILLS_PATH),
         )
-        if sandbox_enabled()
+        if can_execute
         else build_specialist_backend(
             repo_cache_root=repo_cache_root,
             skills_dir=_SPECIALIST_SKILLS_PATH,
@@ -109,21 +123,23 @@ def build_software_specialist(
         model=SOFTWARE_SPECIALIST_MODEL,
         temperature=0.0,
     )
-    specialist_tools = [
-        *build_tools(
+    specialist_tools = list(
+        build_tools(
             repo_manager,
             vector_index,
             has_repo_research=has_repo_research,
             context7_tools=context7_tools,
-        ),
-        build_ask_user_tool(SOFTWARE_SPECIALIST_NAME),
-    ]
+        )
+    )
+    if not unattended:
+        specialist_tools.append(build_ask_user_tool(SOFTWARE_SPECIALIST_NAME))
     runnable = create_agent(
         model=model,
         tools=specialist_tools,
         system_prompt=build_software_prompt(
             has_repo_research=has_repo_research,
             has_context7=bool(context7_tools),
+            unattended=unattended,
         ),
         middleware=build_specialist_middleware(
             backend=backend,
@@ -133,7 +149,8 @@ def build_software_specialist(
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
             specialist_name=SOFTWARE_SPECIALIST_NAME,
-            enable_execution_approval=sandbox_enabled(),
+            enable_execution_approval=can_execute,
+            unattended=unattended,
         ),
         response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,

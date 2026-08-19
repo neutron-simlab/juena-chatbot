@@ -40,6 +40,8 @@ from juena.server.database import database_lifespan, get_session_factory
 from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
 from juena.server.database.store import store_lifespan
 from juena.server.database.models import AuthSession, utc_now
+from juena.research import jobs as research_jobs
+from juena.research.constants import RESTART_MESSAGE as RESEARCH_RESTART_MESSAGE
 from juena.sandbox.jobs import SandboxJobs, hold_worker_lock
 from juena.sandbox.worker import RESTART_MESSAGE
 
@@ -76,6 +78,7 @@ async def test_clean_schema_and_user_owned_chats(monkeypatch: pytest.MonkeyPatch
             "saml_login_requests",
             "chats",
             "sandbox_jobs",
+            "research_jobs",
         } <= set(table_names)
         # Message content belongs to the checkpointer alone; a mirror table
         # would give the UI and the agent two histories that can drift.
@@ -501,3 +504,150 @@ async def test_checkpoint_and_agents_file_survive_resource_recreation(
             assert alice_memory is not None
             assert "Prefer Python" in alice_memory.value["content"]
             assert bob_memory is None
+
+
+# --------------------------------------------------------------------------- #
+# Background research jobs
+# --------------------------------------------------------------------------- #
+
+
+async def _research_user(prefix: str):
+    """One authenticated user, committed, for a research test."""
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await upsert_saml_user(
+            session,
+            SamlIdentity(
+                subject=f"{prefix}-{uuid4()}",
+                subject_format=PERSISTENT_NAME_ID_FORMAT,
+                issuer="https://ifflogin.fz-juelich.de/saml/idp.xml",
+                in_response_to=f"request-{prefix}",
+            ),
+        )
+        await session.commit()
+        return user.id
+
+
+@pytest.mark.asyncio
+async def test_research_concurrency_is_per_user_and_counts_only_active_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two in flight is a spend limit as much as a concurrency limit.
+
+    Each background job is a full specialist loop against the model provider, so
+    an agent that can start them freely can also spend freely.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        alice = await _research_user("research-alice")
+        bob = await _research_user("research-bob")
+        thread = f"thread-{uuid4()}"
+
+        first = await research_jobs.create(
+            user_id=alice, thread_id=thread, specialist="s", objective="one", concurrency=2
+        )
+        second = await research_jobs.create(
+            user_id=alice, thread_id=thread, specialist="s", objective="two", concurrency=2
+        )
+        third = await research_jobs.create(
+            user_id=alice, thread_id=thread, specialist="s", objective="three", concurrency=2
+        )
+        assert first is not None and second is not None
+        assert third is None, "the third job must be refused, not queued"
+
+        # Another user is not affected by Alice's spend.
+        assert await research_jobs.create(
+            user_id=bob, thread_id=thread, specialist="s", objective="bob's", concurrency=2
+        ) is not None
+
+        # Finishing one frees the slot.
+        await research_jobs.finish(first.id, status="succeeded", report="done")
+        assert await research_jobs.create(
+            user_id=alice, thread_id=thread, specialist="s", objective="four", concurrency=2
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_job_left_running_by_a_dead_process_is_failed_not_left_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run lived in that process's event loop and did not survive it.
+
+    A row still reading `running` would make `check_research` say "still working"
+    forever, which is the one answer that is never true.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        user = await _research_user("research-orphan")
+        thread = f"thread-{uuid4()}"
+
+        job = await research_jobs.create(
+            user_id=user, thread_id=thread, specialist="s", objective="interrupted", concurrency=4
+        )
+        assert job is not None
+        await research_jobs.mark_running(job.id)
+
+        await research_jobs.fail_orphans()
+
+        after = await research_jobs.get(job.id, user)
+        assert after is not None
+        assert after.status == "failed"
+        assert after.error == RESEARCH_RESTART_MESSAGE
+        assert after.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_collected_result_is_never_reported_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`list_research` answers "what do I still owe the user?".
+
+    Without `collected_at` the supervisor would re-report the same finished job
+    on every following turn.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        user = await _research_user("research-collect")
+        thread = f"thread-{uuid4()}"
+
+        job = await research_jobs.create(
+            user_id=user, thread_id=thread, specialist="s", objective="survey", concurrency=4
+        )
+        assert job is not None
+        await research_jobs.finish(
+            job.id,
+            status="succeeded",
+            report="<specialist_report>\nStatus: OK\n</specialist_report>",
+            findings={"/findings/survey.md": {"content": "paths and line numbers"}},
+        )
+
+        pending = await research_jobs.for_thread(thread, user)
+        assert [j.id for j in pending] == [job.id]
+        assert pending[0].findings == {
+            "/findings/survey.md": {"content": "paths and line numbers"}
+        }
+
+        await research_jobs.mark_collected(job.id)
+
+        assert await research_jobs.for_thread(thread, user) == []
+        # Still readable by id -- collected means "already reported", not "gone".
+        assert (await research_jobs.get(job.id, user)) is not None
+
+
+@pytest.mark.asyncio
+async def test_one_users_research_is_invisible_to_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        alice = await _research_user("research-owner")
+        bob = await _research_user("research-intruder")
+        thread = f"thread-{uuid4()}"
+
+        job = await research_jobs.create(
+            user_id=alice, thread_id=thread, specialist="s", objective="private", concurrency=4
+        )
+        assert job is not None
+
+        assert await research_jobs.get(job.id, bob) is None
+        assert await research_jobs.for_thread(thread, bob) == []
