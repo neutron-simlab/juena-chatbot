@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from juena.core.log import get_logger
 from juena.indexing.repo_config import load_repo_configs
-from juena.indexing.repo_manager import ManifestDiff, RepoManager, RevisionDiff, diff_manifests
+from juena.indexing.repo_manager import (
+    ManifestDiff,
+    RepoManager,
+    RevisionDiff,
+    diff_manifests,
+)
 from juena.indexing.vector_index import RepoVectorIndex
 from juena.core.paths import repo_root
 
@@ -112,7 +120,9 @@ def _bootstrap_from_revision_diff(
     if old_manifest:
         return (
             chunk_count,
-            repo_manager.update_manifest_for_revision_diff(repo_id, old_manifest, revision_diff),
+            repo_manager.update_manifest_for_revision_diff(
+                repo_id, old_manifest, revision_diff
+            ),
         )
 
     return chunk_count, repo_manager.build_manifest(repo_id)
@@ -239,19 +249,27 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
                     )
                     _save_manifest(repo_id, new_manifest)
                 else:
-                    logger.info("Full rebuild for %s (no prior manifest baseline)", repo_id)
+                    logger.info(
+                        "Full rebuild for %s (no prior manifest baseline)", repo_id
+                    )
                     new_manifest = repo_manager.build_manifest(repo_id)
                     chunk_count = vector_index.build_index(
-                        repo_id, force=True, repo_revision=repo_revision,
+                        repo_id,
+                        force=True,
+                        repo_revision=repo_revision,
                     )
                     _save_manifest(repo_id, new_manifest)
             else:
                 logger.info(
-                    "Full rebuild for repository %s: %s", repo_id, stale_reason,
+                    "Full rebuild for repository %s: %s",
+                    repo_id,
+                    stale_reason,
                 )
                 new_manifest = repo_manager.build_manifest(repo_id)
                 chunk_count = vector_index.build_index(
-                    repo_id, force=True, repo_revision=repo_revision,
+                    repo_id,
+                    force=True,
+                    repo_revision=repo_revision,
                 )
                 _save_manifest(repo_id, new_manifest)
 
@@ -268,6 +286,85 @@ def bootstrap_repositories(config_path: Path | None = None) -> dict[str, int]:
             raise
 
     return results
+
+
+def clone_repositories(config_path: Path | None = None) -> dict[str, str]:
+    """Clone or refresh every configured repository. No indexing.
+
+    The half of :func:`bootstrap_repositories` this pod still needs once the store
+    is remote: search comes over HTTP, but the model still opens the real file
+    through ``/repos/`` to quote real line numbers, and that needs the bytes here.
+    """
+    repo_manager = RepoManager(load_repo_configs(config_path))
+    revisions: dict[str, str] = {}
+
+    for repo_id in repo_manager.repo_ids:
+        try:
+            repo_manager.resolve_root(repo_id)
+            revisions[repo_id] = repo_manager.current_revision(repo_id)
+            logger.info("Repository %s at %s", repo_id, revisions[repo_id][:12])
+        except Exception:
+            logger.warning("Could not clone or refresh %s", repo_id, exc_info=True)
+
+    return revisions
+
+
+@dataclass(frozen=True)
+class RepositorySurvey:
+    """Which repositories are usable, and what is wrong with the rest.
+
+    One pass rather than two questions, because asking a remote store twice costs
+    a round trip per repository for an answer that cannot have changed in between.
+    """
+
+    searchable: list[str]
+    problems: list[str]
+
+    @property
+    def any_searchable(self) -> bool:
+        return bool(self.searchable)
+
+
+def survey_repositories(
+    repo_manager: RepoManager, vector_index: Any
+) -> RepositorySurvey:
+    """Check every repository once: is it cloned, and does the store hold it?
+
+    A repository needs **both** to be useful -- the store answers the search and
+    the clone answers the file read that follows it -- but one broken repository
+    is not a reason to take the tools away from the other eight, which is what
+    `describe_bootstrap_problems` used to cause.
+    """
+    searchable: list[str] = []
+    problems: list[str] = []
+
+    if not repo_manager.repo_ids:
+        return RepositorySurvey(searchable=[], problems=["no repositories configured"])
+
+    for repo_id in repo_manager.repo_ids:
+        cloned = repo_manager.has_local_root(repo_id)
+        if not cloned:
+            problems.append(f"repository cache missing for '{repo_id}'")
+
+        try:
+            chunk_count = vector_index.collection_count_existing(repo_id)
+        except Exception as error:
+            # An unreachable store is a running problem, not a startup one. Say so
+            # and carry on: taking the tools away here would outlive the outage,
+            # because the compiled graph is cached for the life of the process.
+            problems.append(f"search backend unreachable: {error}")
+            return RepositorySurvey(
+                searchable=list(repo_manager.repo_ids), problems=problems
+            )
+
+        if chunk_count is None:
+            problems.append(f"vector index missing for '{repo_id}'")
+        elif chunk_count == 0:
+            problems.append(f"vector index empty for '{repo_id}'")
+        elif cloned:
+            searchable.append(repo_id)
+
+    return RepositorySurvey(searchable=searchable, problems=problems)
 
 
 def describe_bootstrap_problems(
@@ -297,7 +394,9 @@ def describe_bootstrap_problems(
     return problems
 
 
-def validate_bootstrap_ready(repo_manager: RepoManager, vector_index: RepoVectorIndex) -> None:
+def validate_bootstrap_ready(
+    repo_manager: RepoManager, vector_index: RepoVectorIndex
+) -> None:
     """Ensure repository clones and vector indices already exist locally."""
     problems = describe_bootstrap_problems(repo_manager, vector_index)
     if problems:
@@ -308,8 +407,26 @@ def validate_bootstrap_ready(repo_manager: RepoManager, vector_index: RepoVector
         )
 
 
-def main() -> int:
-    """CLI entrypoint for repository bootstrap."""
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for repository bootstrap.
+
+    ``--clone-only`` is what a pod that searches juena-rag needs: the files, so
+    the model can read them, without building an index this process no longer
+    owns.
+    """
+    parser = argparse.ArgumentParser(prog="juena.indexing.bootstrap")
+    parser.add_argument(
+        "--clone-only",
+        action="store_true",
+        help="clone or refresh the repositories and build no index",
+    )
+    arguments = parser.parse_args(argv)
+
+    if arguments.clone_only:
+        cloned = clone_repositories()
+        logger.info("Cloned or refreshed %d repository(s)", len(cloned))
+        return 0
+
     bootstrap_repositories()
     os.environ[BOOTSTRAP_DONE_ENV] = "1"
     return 0

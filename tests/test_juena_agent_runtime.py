@@ -17,6 +17,7 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.store.memory import InMemoryStore
 
 from juena.agents import juena_agent
+from juena.indexing.bootstrap import RepositorySurvey
 from juena.agents import specialist_runtime
 from juena.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialists.neutron_research.agent import (
@@ -176,7 +177,11 @@ async def test_supervisor_assembly_registers_both_specialists(
 
     monkeypatch.setattr(juena_agent, "RepoManager", StubRepoManager)
     monkeypatch.setattr(juena_agent, "build_search_index", StubVectorIndex)
-    monkeypatch.setattr(juena_agent, "describe_bootstrap_problems", lambda *_args: [])
+    monkeypatch.setattr(
+        juena_agent,
+        "survey_repositories",
+        lambda *_args: RepositorySurvey(searchable=["jscatter"], problems=[]),
+    )
     monkeypatch.setattr(juena_agent, "build_chat_model", fake_build_chat_model)
     monkeypatch.setattr(juena_agent, "load_optional_context7_tools", fake_context7_loader)
     monkeypatch.setattr(juena_agent, "load_optional_tavily_tool", lambda: tavily_tool)
@@ -281,7 +286,11 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
 
     monkeypatch.setattr(juena_agent, "RepoManager", StubRepoManager)
     monkeypatch.setattr(juena_agent, "build_search_index", StubVectorIndex)
-    monkeypatch.setattr(juena_agent, "describe_bootstrap_problems", lambda *_args: ["missing"])
+    monkeypatch.setattr(
+        juena_agent,
+        "survey_repositories",
+        lambda *_args: RepositorySurvey(searchable=[], problems=["missing"]),
+    )
     monkeypatch.setattr(juena_agent, "build_chat_model", lambda **_kwargs: object())
     monkeypatch.setattr(juena_agent, "load_optional_context7_tools", no_context7)
     monkeypatch.setattr(juena_agent, "load_optional_tavily_tool", lambda: None)

@@ -31,7 +31,7 @@ from juena.agents.specialists.neutron_research import build_neutron_research_spe
 from juena.agents.specialists.software import build_software_specialist
 from juena.core.llms_providers import build_chat_model
 from juena.core.log import get_logger
-from juena.indexing.bootstrap import describe_bootstrap_problems
+from juena.indexing.bootstrap import survey_repositories
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.rag_index import build_search_index
 from juena.schema.llm_models import BlabladorModelName, Provider
@@ -82,12 +82,18 @@ async def create_juena_agent(
 
     repo_manager = RepoManager()
     vector_index = build_search_index(repo_manager)
-    bootstrap_problems = describe_bootstrap_problems(repo_manager, vector_index)
-    has_repo_research = not bootstrap_problems
+    survey = survey_repositories(repo_manager, vector_index)
+    bootstrap_problems = survey.problems
+    # One unusable repository no longer removes the tools from the other eight,
+    # and an unreachable store is reported per request rather than by deleting a
+    # capability for the life of the process.
+    has_repo_research = survey.any_searchable
     if bootstrap_problems:
         logger.warning(
-            "Local repository tools unavailable to the software specialist: %s. "
-            "Run `python -m juena.indexing.bootstrap` to enable them.",
+            "Repository research is degraded (%d repository(s) usable): %s. "
+            "A missing clone is fixed by `python -m juena.indexing.bootstrap "
+            "--clone-only`; a missing index is the ingestion job's business.",
+            len(survey.searchable),
             "; ".join(bootstrap_problems),
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -49,7 +50,9 @@ def test_bootstrap_repositories_rebuilds_stale_indices(
             self.build_calls: list[tuple[str, bool]] = []
             created["vector_index"] = self
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             assert repo_revision == f"{repo_id}-rev"
             return "repository revision changed"
 
@@ -71,7 +74,9 @@ def test_bootstrap_repositories_rebuilds_stale_indices(
                 return count, [{"content": "x"}] * count
             return count
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
     monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: {})
@@ -113,7 +118,9 @@ def test_bootstrap_repositories_raises_immediately_on_failure(
             self.build_calls: list[tuple[str, bool]] = []
             created["vector_index"] = self
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             return "index configuration changed"
 
         def indexed_revision(self, repo_id: str) -> str | None:
@@ -135,7 +142,9 @@ def test_bootstrap_repositories_raises_immediately_on_failure(
                 return 1, [{"content": "x"}]
             return 1
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
     monkeypatch.setattr(bootstrap, "_save_manifest", lambda repo_id, manifest: None)
@@ -169,7 +178,9 @@ def test_bootstrap_repositories_skips_rebuild_for_fresh_indices(
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.repo_manager = repo_manager
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             assert repo_revision == "repo-a-rev"
             return None
 
@@ -189,7 +200,9 @@ def test_bootstrap_repositories_skips_rebuild_for_fresh_indices(
                 return 7, []
             return 7
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
 
@@ -227,7 +240,9 @@ def test_bootstrap_incremental_when_manifest_exists(
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.repo_manager = repo_manager
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             return "repository revision changed"
 
         def indexed_revision(self, repo_id: str) -> str | None:
@@ -247,11 +262,17 @@ def test_bootstrap_incremental_when_manifest_exists(
         assert "deleted.py" in diff.deleted
         return 10
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
     monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: old_manifest)
-    monkeypatch.setattr(bootstrap, "_save_manifest", lambda repo_id, m: saved_manifests.update({repo_id: m}))
+    monkeypatch.setattr(
+        bootstrap,
+        "_save_manifest",
+        lambda repo_id, m: saved_manifests.update({repo_id: m}),
+    )
     monkeypatch.setattr(bootstrap, "_incremental_reindex", fake_incremental)
 
     results = bootstrap.bootstrap_repositories()
@@ -308,7 +329,9 @@ def test_incremental_reindex_updates_vector_only(
             self.deleted.append((repo_id, file_path))
             return 0
 
-        def build_file_chunks(self, repo_id: str, rel_path: str) -> list[dict[str, str | int | bool]]:
+        def build_file_chunks(
+            self, repo_id: str, rel_path: str
+        ) -> list[dict[str, str | int | bool]]:
             return [
                 {
                     "repo_id": repo_id,
@@ -331,8 +354,11 @@ def test_incremental_reindex_updates_vector_only(
     diff = ManifestDiff(added=["new.py"], changed=["changed.py"], deleted=["gone.py"])
 
     count = bootstrap._incremental_reindex(
-        StubRepoManager(), vector,
-        "repo-a", diff, "rev-123",
+        StubRepoManager(),
+        vector,
+        "repo-a",
+        diff,
+        "rev-123",
     )
 
     assert count == 42
@@ -360,7 +386,9 @@ def test_bootstrap_revision_diff_uses_git_diff_for_incremental_updates(
         def current_revision(self, repo_id: str) -> str:
             return "repo-a-rev-new"
 
-        def diff_revision_files(self, repo_id: str, old_revision: str, new_revision: str) -> RevisionDiff:
+        def diff_revision_files(
+            self, repo_id: str, old_revision: str, new_revision: str
+        ) -> RevisionDiff:
             assert old_revision == "repo-a-rev-old"
             assert new_revision == "repo-a-rev-new"
             return RevisionDiff(
@@ -384,7 +412,9 @@ def test_bootstrap_revision_diff_uses_git_diff_for_incremental_updates(
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.build_calls: list[tuple[str, bool]] = []
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             return "repository revision changed"
 
         def indexed_revision(self, repo_id: str) -> str | None:
@@ -413,7 +443,9 @@ def test_bootstrap_revision_diff_uses_git_diff_for_incremental_updates(
         incremental_diffs.append(diff)
         return 12
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
     monkeypatch.setattr(
@@ -439,7 +471,10 @@ def test_bootstrap_revision_diff_uses_git_diff_for_incremental_updates(
         )
     ]
     assert metadata_updates == [("repo-a", "repo-a-rev-new")]
-    assert saved_manifests["repo-a"] == {"changed.py": "new", "new_name.py": "rename-new"}
+    assert saved_manifests["repo-a"] == {
+        "changed.py": "new",
+        "new_name.py": "rename-new",
+    }
 
 
 def test_bootstrap_revision_diff_updates_metadata_only_when_indexed_files_unchanged(
@@ -460,7 +495,9 @@ def test_bootstrap_revision_diff_updates_metadata_only_when_indexed_files_unchan
         def current_revision(self, repo_id: str) -> str:
             return "repo-a-rev-new"
 
-        def diff_revision_files(self, repo_id: str, old_revision: str, new_revision: str) -> RevisionDiff:
+        def diff_revision_files(
+            self, repo_id: str, old_revision: str, new_revision: str
+        ) -> RevisionDiff:
             return RevisionDiff(added=[], changed=[], deleted=[], renamed=[])
 
         def update_manifest_for_revision_diff(
@@ -476,7 +513,9 @@ def test_bootstrap_revision_diff_updates_metadata_only_when_indexed_files_unchan
         def __init__(self, repo_manager: StubRepoManager) -> None:
             self.repo_manager = repo_manager
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             return "repository revision changed"
 
         def indexed_revision(self, repo_id: str) -> str | None:
@@ -492,10 +531,14 @@ def test_bootstrap_revision_diff_updates_metadata_only_when_indexed_files_unchan
         incremental_called["called"] = True
         return 7
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: {"src/main.py": "hash"})
+    monkeypatch.setattr(
+        bootstrap, "_load_manifest", lambda repo_id: {"src/main.py": "hash"}
+    )
     monkeypatch.setattr(
         bootstrap,
         "_save_manifest",
@@ -529,7 +572,9 @@ def test_bootstrap_falls_back_to_manifest_diff_when_git_diff_fails(
         def current_revision(self, repo_id: str) -> str:
             return "repo-a-rev-new"
 
-        def diff_revision_files(self, repo_id: str, old_revision: str, new_revision: str) -> RevisionDiff:
+        def diff_revision_files(
+            self, repo_id: str, old_revision: str, new_revision: str
+        ) -> RevisionDiff:
             raise RuntimeError("missing base revision")
 
         def build_manifest(self, repo_id: str) -> dict[str, str]:
@@ -540,7 +585,9 @@ def test_bootstrap_falls_back_to_manifest_diff_when_git_diff_fails(
             self.repo_manager = repo_manager
             self.build_calls: list[tuple[str, bool]] = []
 
-        def index_staleness_reason(self, repo_id: str, repo_revision: str) -> str | None:
+        def index_staleness_reason(
+            self, repo_id: str, repo_revision: str
+        ) -> str | None:
             return "repository revision changed"
 
         def indexed_revision(self, repo_id: str) -> str | None:
@@ -569,10 +616,14 @@ def test_bootstrap_falls_back_to_manifest_diff_when_git_diff_fails(
         incremental_diffs.append(diff)
         return 11
 
-    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda config_path=None: configs)
+    monkeypatch.setattr(
+        bootstrap, "load_repo_configs", lambda config_path=None: configs
+    )
     monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
     monkeypatch.setattr(bootstrap, "RepoVectorIndex", StubVectorIndex)
-    monkeypatch.setattr(bootstrap, "_load_manifest", lambda repo_id: {"src/main.py": "old-hash"})
+    monkeypatch.setattr(
+        bootstrap, "_load_manifest", lambda repo_id: {"src/main.py": "old-hash"}
+    )
     monkeypatch.setattr(
         bootstrap,
         "_save_manifest",
@@ -591,4 +642,170 @@ def test_bootstrap_falls_back_to_manifest_diff_when_git_diff_fails(
         )
     ]
     assert metadata_updates == [("repo-a", "repo-a-rev-new")]
-    assert saved_manifests["repo-a"] == {"src/main.py": "new-hash", "src/extra.py": "extra-hash"}
+    assert saved_manifests["repo-a"] == {
+        "src/main.py": "new-hash",
+        "src/extra.py": "extra-hash",
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Surveying repositories -- one broken repository is not nine broken ones
+# --------------------------------------------------------------------------- #
+
+
+class _SurveyManager:
+    """A repository manager whose clones are whatever the test says they are."""
+
+    def __init__(self, cloned: set[str], repo_ids: list[str]) -> None:
+        self._cloned = cloned
+        self.repo_ids = repo_ids
+
+    def has_local_root(self, repo_id: str) -> bool:
+        return repo_id in self._cloned
+
+
+class _SurveyIndex:
+    """A search backend whose counts are whatever the test says they are."""
+
+    def __init__(self, counts: dict[str, int | None], raises: Exception | None = None):
+        self._counts = counts
+        self._raises = raises
+
+    def collection_count_existing(self, repo_id: str) -> int | None:
+        if self._raises is not None:
+            raise self._raises
+        return self._counts.get(repo_id)
+
+
+def test_a_repository_is_searchable_only_when_cloned_and_indexed() -> None:
+    """Both halves: the store answers the search, the clone answers the read after it."""
+    survey = bootstrap.survey_repositories(
+        _SurveyManager({"a", "b"}, ["a", "b"]),
+        _SurveyIndex({"a": 100, "b": 200}),
+    )
+
+    assert survey.searchable == ["a", "b"]
+    assert survey.problems == []
+
+
+def test_one_broken_repository_does_not_disable_the_others() -> None:
+    """The whole point of step 4: `b` has no clone, so `a` and `c` still work."""
+    survey = bootstrap.survey_repositories(
+        _SurveyManager({"a", "c"}, ["a", "b", "c"]),
+        _SurveyIndex({"a": 100, "b": 200, "c": 300}),
+    )
+
+    assert survey.searchable == ["a", "c"]
+    assert survey.any_searchable
+    assert survey.problems == ["repository cache missing for 'b'"]
+
+
+def test_a_repository_in_the_store_but_not_on_disk_is_not_searchable() -> None:
+    """It would answer the search and then fail the file read the model must do."""
+    survey = bootstrap.survey_repositories(
+        _SurveyManager(set(), ["a"]),
+        _SurveyIndex({"a": 100}),
+    )
+
+    assert survey.searchable == []
+    assert not survey.any_searchable
+
+
+def test_a_repository_on_disk_but_empty_in_the_store_is_reported_as_empty() -> None:
+    survey = bootstrap.survey_repositories(
+        _SurveyManager({"a"}, ["a"]),
+        _SurveyIndex({"a": 0}),
+    )
+
+    assert survey.searchable == []
+    assert survey.problems == ["vector index empty for 'a'"]
+
+
+def test_a_repository_absent_from_the_store_is_reported_as_missing() -> None:
+    """None and zero are different answers, and this is the one that says None."""
+    survey = bootstrap.survey_repositories(
+        _SurveyManager({"a"}, ["a"]),
+        _SurveyIndex({}),
+    )
+
+    assert survey.problems == ["vector index missing for 'a'"]
+
+
+def test_an_unreachable_store_keeps_the_tools_and_says_so() -> None:
+    """A network outage must not remove a capability for the life of the process.
+
+    The compiled graph is cached, so a startup that decides "no repository tools"
+    survives the outage that caused it. The tools stay; the failure is reported
+    when a search is actually attempted.
+    """
+    survey = bootstrap.survey_repositories(
+        _SurveyManager({"a", "b"}, ["a", "b"]),
+        _SurveyIndex({}, raises=ConnectionError("cannot reach the juena-rag service")),
+    )
+
+    assert survey.searchable == ["a", "b"]
+    assert survey.any_searchable
+    assert "search backend unreachable" in survey.problems[0]
+
+
+def test_no_repositories_configured_is_its_own_answer() -> None:
+    survey = bootstrap.survey_repositories(_SurveyManager(set(), []), _SurveyIndex({}))
+
+    assert survey.searchable == []
+    assert survey.problems == ["no repositories configured"]
+
+
+def test_cloning_refreshes_every_repository_and_builds_no_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The half this pod still needs once search is remote."""
+    resolved: list[str] = []
+
+    class StubRepoManager:
+        repo_ids: ClassVar[list[str]] = ["a", "b"]
+
+        def __init__(self, _configs: object) -> None:
+            pass
+
+        def resolve_root(self, repo_id: str) -> Path:
+            resolved.append(repo_id)
+            return Path("/tmp") / repo_id
+
+        def current_revision(self, repo_id: str) -> str:
+            return f"{repo_id}-sha"
+
+    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
+    monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
+    monkeypatch.setattr(bootstrap, "RepoVectorIndex", _never_built, raising=False)
+
+    revisions = bootstrap.clone_repositories()
+
+    assert resolved == ["a", "b"]
+    assert revisions == {"a": "a-sha", "b": "b-sha"}
+
+
+def _never_built(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("clone_repositories must not build an index")
+
+
+def test_a_repository_that_will_not_clone_does_not_stop_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StubRepoManager:
+        repo_ids: ClassVar[list[str]] = ["broken", "fine"]
+
+        def __init__(self, _configs: object) -> None:
+            pass
+
+        def resolve_root(self, repo_id: str) -> Path:
+            if repo_id == "broken":
+                raise RuntimeError("git said no")
+            return Path("/tmp") / repo_id
+
+        def current_revision(self, repo_id: str) -> str:
+            return f"{repo_id}-sha"
+
+    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
+    monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
+
+    assert bootstrap.clone_repositories() == {"fine": "fine-sha"}
