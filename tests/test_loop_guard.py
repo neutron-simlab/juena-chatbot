@@ -2,9 +2,10 @@
 
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from juena.agents.loop_guard import RepeatedToolCallMiddleware
+from juena.agents.loop_guard import GUARD_FLAG, REPEAT_ERROR, RepeatedToolCallMiddleware
 
 
 def _call(name: str, args: dict, call_id: str) -> dict:
@@ -100,3 +101,138 @@ def test_the_first_call_of_a_run_is_never_blocked() -> None:
 
     assert seen == ["a"]
     assert result.status != "error"
+
+
+@pytest.mark.asyncio
+async def test_the_async_path_refuses_a_repeat_too() -> None:
+    """The server runs `ainvoke`, so the sync-only tests proved nothing about it."""
+
+    middleware = RepeatedToolCallMiddleware()
+    previous = _call("read_file", {"file_path": "/a.dat"}, "a")
+    repeat = _call("read_file", {"file_path": "/a.dat"}, "b")
+    seen: list[str] = []
+
+    async def handler(request):  # noqa: ANN001, ANN202
+        seen.append(request.tool_call["id"])
+        return ToolMessage("ran", tool_call_id=request.tool_call["id"])
+
+    result = await middleware.awrap_tool_call(_request(repeat, _history(previous)), handler)
+
+    assert seen == []
+    assert result.status == "error"
+
+
+# --------------------------------------------------------------------------- #
+# Ending the run, not just refusing the call
+# --------------------------------------------------------------------------- #
+
+
+def _refusal(name: str, call_id: str) -> ToolMessage:
+    return ToolMessage(
+        REPEAT_ERROR.format(name=name),
+        name=name,
+        tool_call_id=call_id,
+        status="error",
+        additional_kwargs={GUARD_FLAG: True},
+    )
+
+
+def test_one_refusal_is_a_nudge_and_does_not_end_the_run() -> None:
+    """A model that can act on the message deserves the chance to."""
+
+    middleware = RepeatedToolCallMiddleware()
+    call = _call("read_file", {"file_path": "/a.dat"}, "b")
+    messages = [
+        *_history(_call("read_file", {"file_path": "/a.dat"}, "a")),
+        AIMessage(content="", tool_calls=[call]),
+        _refusal("read_file", "b"),
+    ]
+
+    assert middleware.before_model({"messages": messages}, None) is None
+
+
+def test_a_second_refusal_ends_the_run() -> None:
+    """Two ignored refusals are evidence the message is not landing.
+
+    The live failure this replaces: one `read_file` re-issued 60 times after it
+    had already succeeded, each refusal costing a model call and changing
+    nothing. Three identical calls is the new ceiling.
+    """
+    middleware = RepeatedToolCallMiddleware()
+    messages = [*_history(_call("read_file", {"file_path": "/a.dat"}, "a"))]
+    for call_id in ("b", "c"):
+        messages.append(
+            AIMessage(content="", tool_calls=[_call("read_file", {"file_path": "/a.dat"}, call_id)])
+        )
+        messages.append(_refusal("read_file", call_id))
+
+    update = middleware.before_model({"messages": messages}, None)
+
+    assert update is not None
+    assert update["jump_to"] == "end"
+    assert "Stopped after 3 identical calls to `read_file`" in update["messages"][0].text
+
+
+def test_refusals_from_earlier_in_a_healthy_run_do_not_accumulate() -> None:
+    """Only an unbroken tail counts, or a run that recovered twice would be killed."""
+
+    middleware = RepeatedToolCallMiddleware()
+    messages = [
+        *_history(_call("ls", {"path": "/workspace"}, "a")),
+        AIMessage(content="", tool_calls=[_call("ls", {"path": "/workspace"}, "b")]),
+        _refusal("ls", "b"),
+        # the model took the hint, did something else, and got a real result
+        AIMessage(content="", tool_calls=[_call("read_file", {"file_path": "/run.py"}, "c")]),
+        ToolMessage("body", tool_call_id="c"),
+        AIMessage(content="", tool_calls=[_call("read_file", {"file_path": "/run.py"}, "d")]),
+        _refusal("read_file", "d"),
+    ]
+
+    assert middleware.before_model({"messages": messages}, None) is None
+
+
+@pytest.mark.asyncio
+async def test_a_locked_model_is_stopped_rather_than_argued_with() -> None:
+    """End to end, through a real graph, because the parts were never the problem.
+
+    Every unit above passed while the live system burned 59 model calls on one
+    repeated read. What was missing was a test that let a model keep going.
+    """
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.tools import tool as make_tool
+
+    ran: list[str] = []
+
+    @make_tool
+    def read_file(file_path: str) -> str:
+        """Read a file."""
+        ran.append(file_path)
+        return "line 1\nline 2"
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+            return self
+
+    agent = create_agent(
+        model=ToolModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "read_file",
+                        "args": {"file_path": "/a.dat"},
+                        "id": f"call-{index}",
+                        "type": "tool_call",
+                    }],
+                )
+                for index in range(12)
+            ]
+        ),
+        tools=[read_file],
+        middleware=[RepeatedToolCallMiddleware()],
+    )
+    result = await agent.ainvoke({"messages": [("user", "read it")]})
+
+    assert ran == ["/a.dat"], "the tool ran more than once"
+    assert "Stopped after 3 identical calls" in str(result["messages"][-1].content)
