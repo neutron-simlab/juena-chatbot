@@ -6,12 +6,12 @@ import json
 from typing import cast
 
 from juena.indexing.repo_manager import RepoManager
-from juena.indexing.vector_index import RepoVectorIndex
+from juena.indexing.rag_index import RagVectorIndex
 from juena.tools import repo_search
 
 
 class _FanOutStub:
-    """Mirrors ``RepoVectorIndex.search_many`` on top of a stub's own ``search``.
+    """Mirrors ``RagVectorIndex.search_many`` on top of a stub's own ``search``.
 
     The real implementation embeds once and fans out concurrently; the ordering
     and repo_id tagging it guarantees are what these tests exercise.
@@ -56,7 +56,7 @@ def test_search_code_semantic_returns_compact_preview() -> None:
     payload = json.loads(
         repo_search._search_code_semantic(
             cast(RepoManager, StubRepoManager()),
-            cast(RepoVectorIndex, StubVectorIndex()),
+            cast(RagVectorIndex, StubVectorIndex()),
             "repo-a",
             "auth flow",
             n_results=3,
@@ -112,7 +112,7 @@ def test_search_code_semantic_all_repositories_returns_globally_ranked_hits() ->
     payload = json.loads(
         repo_search._search_code_semantic(
             cast(RepoManager, StubRepoManager()),
-            cast(RepoVectorIndex, StubVectorIndex()),
+            cast(RagVectorIndex, StubVectorIndex()),
             "all",
             "instrument control",
             n_results=2,
@@ -137,7 +137,7 @@ def test_search_code_semantic_unknown_repo_id_returns_recoverable_error() -> Non
     payload = json.loads(
         repo_search._search_code_semantic(
             cast(RepoManager, StubRepoManager()),
-            cast(RepoVectorIndex, StubVectorIndex()),
+            cast(RagVectorIndex, StubVectorIndex()),
             "js scatter",
             "structure factor",
         )
@@ -173,7 +173,7 @@ def test_search_code_semantic_normalises_repo_id_labels() -> None:
     payload = json.loads(
         repo_search._search_code_semantic(
             cast(RepoManager, StubRepoManager()),
-            cast(RepoVectorIndex, StubVectorIndex()),
+            cast(RagVectorIndex, StubVectorIndex()),
             "JScatter",
             "structure",
             n_results=1,
@@ -207,7 +207,7 @@ def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
     payload = json.loads(
         repo_search._search_docs_local(
             cast(RepoManager, StubRepoManager()),
-            cast(RepoVectorIndex, StubVectorIndex()),
+            cast(RagVectorIndex, StubVectorIndex()),
             "all",
             "setup",
             max_results=1,
@@ -222,7 +222,7 @@ def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
 def test_code_chat_tools_only_exposes_unique_retrieval_tools() -> None:
     tools = repo_search.build_code_chat_tools(
         cast(RepoManager, object()),
-        cast(RepoVectorIndex, object()),
+        cast(RagVectorIndex, object()),
     )
 
     assert [tool.name for tool in tools] == [

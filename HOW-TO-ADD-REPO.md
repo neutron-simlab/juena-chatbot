@@ -15,15 +15,21 @@ The lifecycle is:
 
 1. `config/repositories.yaml` is loaded into `RepoManager`
 2. `/repositories` shows the configured repo metadata after a full app restart
-3. Startup bootstrap clones the repo into `REPO_CACHE_DIR`, builds its Chroma
-   vector index in `VECTOR_INDEX_DIR`, and exposes it to JüNA's repository
-   research tools before the API becomes healthy
+3. Startup clones the repo into `REPO_CACHE_DIR`, so the model can open a real
+   file and quote real line numbers
+
+**Cloning is not indexing.** This application no longer builds an index at all —
+the vectors live in juena-rag, and an ingestion run there is what makes a
+repository *searchable*. Adding an entry here without a matching entry in
+juena-rag's own repository config gives you a repository JüNA can read file by
+file but cannot search. `list_indexed_repositories` reports what is actually in
+the store, which is the authoritative answer.
 
 That means:
 
 - editing the YAML file alone is not enough
-- `/repositories` confirms the repo is registered
-- the API starts only after every configured repository has synchronized and indexed
+- `/repositories` confirms the repo is registered here
+- the repository must also be ingested into juena-rag before search finds it
 
 ## Step 1: Make Sure the Repo Is Reachable
 
@@ -108,12 +114,19 @@ Each repository entry supports these fields:
 | `description` | no | `""` | Short description shown in metadata |
 | `source.url` | yes | none | Git URL used for cloning |
 | `source.branch` | no | `main` | Branch to clone and track |
-| `include_globs` | no | common text/code globs | Files eligible for indexing |
-| `exclude_globs` | no | common cache/build globs | Files skipped during indexing |
-| `max_file_bytes` | no | `524288` | Skip files larger than 512 KB |
-| `chunk_size` | no | `1500` | Chunk size used for embedding |
-| `chunk_overlap` | no | `200` | Overlap between chunks |
-| `docs_paths` | no | `["README.md", "docs/"]` | Paths treated as documentation |
+| `include_globs` | no | common text/code globs | **Inert here** — see below |
+| `exclude_globs` | no | common cache/build globs | **Inert here** — see below |
+| `max_file_bytes` | no | `524288` | **Inert here** — see below |
+| `chunk_size` | no | `1500` | **Inert here** — see below |
+| `chunk_overlap` | no | `200` | **Inert here** — see below |
+| `docs_paths` | no | `["README.md", "docs/"]` | **Inert here** — see below |
+
+> **The last six fields no longer do anything in this application.** They are
+> still parsed, so an existing config keeps loading, but nothing reads them:
+> this repository clones, and juena-rag chunks and embeds. Editing
+> `include_globs` here will not change what is searchable. The equivalent
+> settings in juena-rag's own repository config are the ones that matter, and a
+> change there takes effect on the next ingestion run.
 
 Default include globs:
 
@@ -175,46 +188,43 @@ curl --cookie "juena_session=<opaque-session>" http://localhost:8080/repositorie
 
 You should see your new repo in the JSON response.
 
-## Step 5: Trigger Clone and Index Build
+## Step 5: Trigger the Clone
 
-Clone and indexing now happen during startup, before Streamlit and FastAPI come
-up. That means the repo should already be ready once the container is healthy.
+Cloning happens during startup, before Streamlit and FastAPI come up, so the
+working tree is on disk once the container is healthy. Nothing is indexed here.
 
-To watch bootstrap and indexing progress in Docker:
+To watch it in Docker:
 
 ```bash
 docker compose logs -f juena-chatbot
 ```
 
-The logs include:
+The logs report each repository's revision as it is cloned or refreshed, then a
+survey line naming any repository that is cloned but **not** in the store — that
+is the one to take to juena-rag.
 
-- bootstrap progress across repositories
-- per-repository indexing progress as percentages
+## Step 6: Ingest It Into juena-rag
 
-Example progress lines:
+Until this runs, the repository is readable file by file and invisible to
+search. Ingestion lives in the juena-rag project, driven by its own repository
+config; add a matching entry there and run its ingest for that source.
 
-```text
-Bootstrap progress: 33% (1/3 repositories completed)
-Indexing progress for repo langgraph: 40% (120/300 files, 980 chunks)
-```
+Confirm it worked by asking JüNA which repositories it can search — that calls
+`list_indexed_repositories`, which reports the store's own catalogue and chunk
+counts rather than what happens to be cloned on disk.
 
 ## Choosing Good Settings
 
-Use these rules of thumb:
+These rules of thumb still hold, but **apply them in juena-rag's repository
+config**, which is where chunking and file selection actually happen:
 
 - Small or medium Python repo: defaults are usually fine
-- Monorepo: narrow `include_globs` to the relevant package or service
-- Large generated trees: expand `exclude_globs`
-- Docs-heavy repo: keep `docs_paths` accurate so `search_docs_local` stays useful
+- Monorepo: narrow the include globs to the relevant package or service
+- Large generated trees: widen the exclude globs
+- Docs-heavy repo: keep the documentation paths accurate so `search_docs_local`
+  stays useful
 
-Examples:
-
-- index only one package:
-  `packages/core/**/*.ts`
-- treat additional docs as documentation:
-  `guides/`
-- skip vendored code:
-  `third_party/**`
+Setting any of these in `config/repositories.yaml` has no effect.
 
 ## Adding Multiple Repositories
 
@@ -247,25 +257,12 @@ There are two different cases:
 
 Case 1 is handled by the normal workflow above.
 
-Case 2 may need a forced rebuild of the vector index, because existing Chroma
-collections are persisted on disk. The simplest reset is:
-
-Local:
-
-```bash
-rm -rf data/vector_index
-uv run python main.py
-```
-
-Docker:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down
-docker volume rm juena-chatbot-vector-index
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
-```
-
-That rebuilds the semantic index from scratch during the next startup.
+Case 2 is entirely juena-rag's business. There is no index on this side to
+delete and no cache to clear: re-ingest the source there, which replaces its
+chunks atomically, and this application sees the new content on its next search
+with no restart. Restarting the chatbot refreshes the *clone*, which is what
+`read_file` and `grep` see — a different thing from what search returns, and
+worth keeping straight when the two disagree.
 
 ## Useful Environment Variables
 
@@ -273,7 +270,7 @@ That rebuilds the semantic index from scratch during the next startup.
 |---|---|---|
 | `REPO_CONFIG_PATH` | `config/repositories.yaml` | Override the repo config file location |
 | `REPO_CACHE_DIR` | `data/repos` locally, `/data/repos` in Docker | Where repos are cloned |
-| `VECTOR_INDEX_DIR` | `data/vector_index` locally, `/data/vector_index` in Docker | Where Chroma persists indices |
+| `JUENA_RAG_URL` | none — required | The juena-rag service that holds the vectors and answers every search |
 
 ## Troubleshooting
 
@@ -282,8 +279,10 @@ That rebuilds the semantic index from scratch during the next startup.
 | New repo does not appear in `/repositories` | App did not restart with updated config | Restart locally, or rebuild with `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d` |
 | `git clone` fails | Bad URL or missing access | Check the URL and ensure the runtime has network/SSH credentials |
 | Wrong branch error | `source.branch` is wrong | Check the repo's default branch and update the config |
-| Service startup is slow | Clone + indexing is happening | Watch bootstrap progress and wait for the health check |
-| Docs search misses files | `docs_paths` does not match the repo layout | Add the correct paths and rebuild the index if needed |
+| Service startup is slow | A large repository is cloning | Watch the bootstrap log and wait for the health check |
+| Repo is listed but search finds nothing | It was never ingested into juena-rag | Add it there and run the ingest; `list_indexed_repositories` confirms |
+| Search is stale but files look right | The clone refreshed; the store did not | Re-ingest in juena-rag — restarting this application will not do it |
+| Docs search misses files | `docs_paths` does not match the repo layout | Fix it in **juena-rag's** config, not this one, then re-ingest |
 
 ## Short Version
 
@@ -293,4 +292,7 @@ If you just want the operator checklist:
 2. Set `id`, `source.url`, and the correct `source.branch`
 3. Fully restart the app
 4. Confirm the repo shows up in `GET /repositories`
-5. Wait for startup bootstrap to finish, then ask JüNA about the repository
+5. Add the same repository to juena-rag's config and run its ingest — **without
+   this the repository can be read but not searched**
+6. Ask JüNA which repositories it can search; the new one should be listed with
+   a non-zero chunk count

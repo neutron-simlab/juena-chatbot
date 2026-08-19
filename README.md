@@ -326,7 +326,7 @@ The stack persists state across restarts.
   for metadata-only reads.
 - per-user `AGENTS.md`: the LangGraph Postgres Store
 - cloned repositories: `data/repos`
-- vector indices: `data/vector_index`
+- vectors: not here. juena-rag holds them, reached over `JUENA_RAG_URL`
 
 Two connection pools serve one database: SQLAlchemy for the application tables,
 and a single psycopg pool (`DATABASE_POOL_MAX_SIZE`, default 20) shared by the

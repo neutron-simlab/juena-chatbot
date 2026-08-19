@@ -1,12 +1,11 @@
-"""The pgvector-backed index, asserted against the shape it has to replace.
+"""The pgvector-backed index, asserted against the shape `repo_search` expects.
 
-`RagVectorIndex` is swapped in for `RepoVectorIndex` by changing a constructor
-line, which only works if the two agree on the two methods `repo_search` calls
-and on the keys of the hits they return. Nothing here needs a network: the store
-is a fake, and the shape checks read signatures.
+The tools were written against a hit dictionary and two method signatures, and
+they still are; this file is what keeps that contract from drifting now that the
+Chroma implementation it was copied from has been deleted. Nothing here needs a
+network: the store is a fake.
 """
 
-import inspect
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +13,6 @@ from typing import Any
 import pytest
 
 from juena.indexing.rag_index import RagVectorIndex, _as_chatbot_hit, _matches
-from juena.indexing.vector_index import RepoVectorIndex
 from juena.tools.repo_search import _serialize_vector_hit
 
 #: What `repo_search` reads out of a hit -- `_serialize_vector_hit` for what the
@@ -90,17 +88,8 @@ def index() -> RagVectorIndex:
 
 
 # --------------------------------------------------------------------------- #
-# The shape -- what makes the swap a constructor line
+# The shape the tools read
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("name", ["search", "search_many"])
-def test_the_two_indexes_take_the_same_arguments(name):
-    chroma = inspect.signature(getattr(RepoVectorIndex, name)).parameters
-    rag = inspect.signature(getattr(RagVectorIndex, name)).parameters
-
-    assert list(chroma) == list(rag)
-    assert [p.default for p in chroma.values()] == [p.default for p in rag.values()]
 
 
 @pytest.mark.parametrize("key", REQUIRED_KEYS)

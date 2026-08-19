@@ -1,18 +1,19 @@
 """
-RepoManager – clones/updates git repos and builds a per-repo file list
-honouring include/exclude globs and size limits.
+RepoManager -- clones and updates the configured git repositories.
+
+It used to walk them too, listing indexable files and hashing them into a
+manifest so an index could be updated incrementally. juena-rag now owns
+ingestion and re-indexes whole sources, so nothing here reads file contents:
+specialists reach the working tree through the read-only ``/repos/`` backend.
 """
 
 from __future__ import annotations
 
-import fnmatch
-import hashlib
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 from juena.core.log import get_logger
 from juena.indexing.repo_config import RepoConfig, load_repo_configs
@@ -32,12 +33,11 @@ def _cache_dir() -> Path:
 
 
 class RepoManager:
-    """Manages git-based repository cloning and file listing."""
+    """Manages git-based repository cloning."""
 
     def __init__(self, configs: list[RepoConfig] | None = None) -> None:
         self._configs: list[RepoConfig] = configs if configs is not None else load_repo_configs()
         self._roots: Dict[str, Path] = {}
-        self._file_cache: Dict[str, List[str]] = {}
 
     @property
     def repo_ids(self) -> list[str]:
@@ -164,281 +164,3 @@ class RepoManager:
             f"reset {dest.name}",
         )
 
-    # ------------------------------------------------------------------
-    # File listing
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _matches_glob(rel_path: str, pattern: str) -> bool:
-        """Match *rel_path* against *pattern*, handling ``**/`` for zero+ dirs."""
-        if fnmatch.fnmatch(rel_path, pattern):
-            return True
-        if pattern.startswith("**/"):
-            return RepoManager._matches_glob(rel_path, pattern[3:])
-        return False
-
-    def _matches_index_rules(self, cfg: RepoConfig, rel_path: str) -> bool:
-        if any(self._matches_glob(rel_path, pat) for pat in cfg.exclude_globs):
-            return False
-        return any(self._matches_glob(rel_path, pat) for pat in cfg.include_globs)
-
-    def _is_indexable_file(self, cfg: RepoConfig, root: Path, rel_path: str) -> bool:
-        if not self._matches_index_rules(cfg, rel_path):
-            return False
-
-        full = (root / rel_path).resolve()
-        if not str(full).startswith(str(root)):
-            return False
-
-        try:
-            if not full.is_file():
-                return False
-            if full.stat().st_size > cfg.max_file_bytes:
-                return False
-        except OSError:
-            return False
-
-        return True
-
-    def list_files(self, repo_id: str, *, force: bool = False) -> list[str]:
-        """Return repo-relative file paths that match include/exclude rules."""
-        if not force and repo_id in self._file_cache:
-            return self._file_cache[repo_id]
-
-        cfg = self.get_config(repo_id)
-        if cfg is None:
-            raise ValueError(f"Unknown repo: {repo_id}")
-
-        root = self.resolve_root(repo_id)
-        matched: list[str] = []
-
-        for dirpath, _dirnames, filenames in os.walk(root):
-            for fname in filenames:
-                abs_path = Path(dirpath) / fname
-                rel = str(abs_path.relative_to(root))
-
-                if not self._is_indexable_file(cfg, root, rel):
-                    continue
-
-                matched.append(rel)
-
-        matched.sort()
-        self._file_cache[repo_id] = matched
-        logger.info("Repo %s: %d files match include/exclude rules", repo_id, len(matched))
-        return matched
-
-    def read_file(self, repo_id: str, rel_path: str) -> str:
-        """Read file content, raising FileNotFoundError if missing."""
-        root = self.resolve_root(repo_id)
-        full = (root / rel_path).resolve()
-        if not str(full).startswith(str(root)):
-            raise ValueError("Path traversal detected")
-        return full.read_text(errors="replace")
-
-    def list_repo_metadata(self) -> list[dict]:
-        """Return lightweight metadata dicts for all configured repos."""
-        return [
-            {
-                "id": c.id,
-                "name": c.name,
-                "description": c.description,
-                "source_url": c.source.url,
-            }
-            for c in self._configs
-        ]
-
-    # ------------------------------------------------------------------
-    # File-hash manifest for incremental indexing
-    # ------------------------------------------------------------------
-
-    def file_hash(self, repo_id: str, rel_path: str) -> str:
-        """Return a SHA-256 content hash for a single file."""
-        root = self.resolve_root(repo_id)
-        full = (root / rel_path).resolve()
-        h = hashlib.sha256()
-        h.update(full.read_bytes())
-        return h.hexdigest()[:16]
-
-    def build_manifest(self, repo_id: str) -> dict[str, str]:
-        """Return ``{rel_path: content_hash}`` for all indexed files."""
-        files = self.list_files(repo_id)
-        manifest: dict[str, str] = {}
-        for rel_path in files:
-            try:
-                manifest[rel_path] = self.file_hash(repo_id, rel_path)
-            except Exception:
-                logger.debug("Skipping manifest entry for %s/%s", repo_id, rel_path)
-        return manifest
-
-    def diff_revision_files(
-        self,
-        repo_id: str,
-        old_revision: str,
-        new_revision: str,
-    ) -> "RevisionDiff":
-        """Return indexed-file changes between two git revisions."""
-        cfg = self.get_config(repo_id)
-        if cfg is None:
-            raise ValueError(f"Unknown repo: {repo_id}")
-
-        root = self.resolve_root(repo_id)
-        result = subprocess.run(
-            [
-                "git", "-C", str(root),
-                "diff", "--name-status", "-z", "--find-renames",
-                old_revision, new_revision,
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="replace").strip()
-            raise RuntimeError(
-                f"git diff failed for {repo_id} ({old_revision[:12]}..{new_revision[:12]}): {stderr}"
-            )
-
-        tokens = result.stdout.split(b"\0")
-        if tokens and tokens[-1] == b"":
-            tokens.pop()
-
-        added: set[str] = set()
-        changed: set[str] = set()
-        deleted: set[str] = set()
-        renamed: list[tuple[str, str]] = []
-        index = 0
-
-        while index < len(tokens):
-            status = tokens[index].decode(errors="replace")
-            index += 1
-            status_code = status[:1]
-
-            if status_code in {"R", "C"}:
-                if index + 1 >= len(tokens):
-                    break
-                old_path = tokens[index].decode(errors="replace")
-                new_path = tokens[index + 1].decode(errors="replace")
-                index += 2
-
-                old_indexed = self._matches_index_rules(cfg, old_path)
-                new_indexed = self._is_indexable_file(cfg, root, new_path)
-
-                if status_code == "C":
-                    if new_indexed:
-                        added.add(new_path)
-                    continue
-
-                if old_indexed and new_indexed:
-                    renamed.append((old_path, new_path))
-                elif old_indexed:
-                    deleted.add(old_path)
-                elif new_indexed:
-                    added.add(new_path)
-                continue
-
-            if index >= len(tokens):
-                break
-            path = tokens[index].decode(errors="replace")
-            index += 1
-
-            if status_code == "D":
-                if self._matches_index_rules(cfg, path):
-                    deleted.add(path)
-                continue
-
-            is_indexable = self._is_indexable_file(cfg, root, path)
-            if status_code == "A":
-                if is_indexable:
-                    added.add(path)
-                continue
-
-            if is_indexable:
-                changed.add(path)
-            elif self._matches_index_rules(cfg, path):
-                # A previously indexed file may have grown beyond the size limit.
-                deleted.add(path)
-
-        return RevisionDiff(
-            added=sorted(added),
-            changed=sorted(changed),
-            deleted=sorted(deleted),
-            renamed=sorted(renamed),
-        )
-
-    def update_manifest_for_revision_diff(
-        self,
-        repo_id: str,
-        manifest: dict[str, str],
-        diff: "RevisionDiff",
-    ) -> dict[str, str]:
-        """Apply a revision diff to an existing manifest without rehashing the full repo."""
-        updated = dict(manifest)
-
-        for rel_path in diff.deleted:
-            updated.pop(rel_path, None)
-        for old_path, _new_path in diff.renamed:
-            updated.pop(old_path, None)
-
-        for rel_path in diff.added + diff.changed + [new for _, new in diff.renamed]:
-            try:
-                updated[rel_path] = self.file_hash(repo_id, rel_path)
-            except Exception:
-                logger.debug("Skipping manifest update for %s/%s", repo_id, rel_path)
-                updated.pop(rel_path, None)
-
-        return updated
-
-
-@dataclass
-class ManifestDiff:
-    """Result of comparing two file-hash manifests."""
-
-    added: list[str]
-    changed: list[str]
-    deleted: list[str]
-
-    @property
-    def has_changes(self) -> bool:
-        return bool(self.added or self.changed or self.deleted)
-
-
-@dataclass
-class RevisionDiff:
-    """Normalized git diff for indexed repository files."""
-
-    added: list[str]
-    changed: list[str]
-    deleted: list[str]
-    renamed: list[tuple[str, str]]
-
-    @property
-    def has_changes(self) -> bool:
-        return bool(self.added or self.changed or self.deleted or self.renamed)
-
-    def as_manifest_diff(self) -> ManifestDiff:
-        added = set(self.added)
-        deleted = set(self.deleted)
-
-        for old_path, new_path in self.renamed:
-            deleted.add(old_path)
-            added.add(new_path)
-
-        return ManifestDiff(
-            added=sorted(added),
-            changed=sorted(self.changed),
-            deleted=sorted(deleted),
-        )
-
-
-def diff_manifests(
-    old: dict[str, str],
-    new: dict[str, str],
-) -> ManifestDiff:
-    """Compare two ``{path: hash}`` manifests and return the diff."""
-    old_keys = set(old)
-    new_keys = set(new)
-    added = sorted(new_keys - old_keys)
-    deleted = sorted(old_keys - new_keys)
-    changed = sorted(
-        p for p in old_keys & new_keys
-        if old[p] != new[p]
-    )
-    return ManifestDiff(added=added, changed=changed, deleted=deleted)

@@ -29,9 +29,6 @@ dependencies = [
     "pysaml2==7.5.4",
     "pyyaml>=6.0",
     "pillow>=10.0",
-    "chromadb>=0.6.0",
-    "langchain-text-splitters>=0.3.0",
-    "chonkie[code]>=1.6.1",
     "podman>=5.8.0",
     # The retrieval store, over HTTP. The `client` extra is httpx only -- no
     # database driver and no embedder, because the service does both.

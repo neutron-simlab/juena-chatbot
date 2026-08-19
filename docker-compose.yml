@@ -49,10 +49,10 @@ services:
     volumes:
       # Mount logs directory for persistence
       - chatbot-logs:/data/logs
-      # Persist cloned repos, vector index, and manifests across restarts
+      # Persist the cloned working trees across restarts. No index volume: the
+      # vectors live in juena-rag, and the clone is only here so the model can
+      # open a real file and quote real line numbers.
       - chatbot-repos:/data/repos
-      - chatbot-vector-index:/data/vector_index
-      - chatbot-manifests:/data/manifests
       - chatbot-saml:/data/saml
       # Generated files live outside the temporary sandbox workspace so chat
       # reloads can retrieve them through the authenticated API.
@@ -141,8 +141,6 @@ services:
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       # Code-chat agent settings
       - REPO_CACHE_DIR=/data/repos
-      - VECTOR_INDEX_DIR=/data/vector_index
-      - INDEX_MANIFEST_DIR=/data/manifests
     ports:
       - "8080:8080"  # FastAPI server
       - "9501:9501"  # Streamlit UI
@@ -194,12 +192,6 @@ volumes:
   chatbot-repos:
     driver: local
     name: juena-chatbot-repos
-  chatbot-vector-index:
-    driver: local
-    name: juena-chatbot-vector-index
-  chatbot-manifests:
-    driver: local
-    name: juena-chatbot-manifests
   chatbot-saml:
     driver: local
     name: juena-chatbot-saml

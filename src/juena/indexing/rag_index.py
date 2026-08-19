@@ -1,10 +1,10 @@
 """Search backed by the juena-rag service. The only search backend there is.
 
 Presents the members `juena.tools.repo_search` uses -- ``search``,
-``search_many`` and the hit dictionary they return -- which is how it replaced
-:class:`~juena.indexing.vector_index.RepoVectorIndex` without the tools noticing.
-That class is retired but still on disk for the benchmark; nothing in the running
-application reaches it. Indexing is not here either: the store is written by an
+``search_many`` and the hit dictionary they return. That shape was inherited
+from the Chroma index this replaced, which is why it is a dictionary of loose
+keys rather than a type; it stays because the tools' JSON is what the model was
+prompted against. Indexing is not here either: the store is written by an
 ingestion job, not by this process.
 """
 
@@ -29,7 +29,7 @@ CANDIDATE_FACTOR = 4
 
 
 class RagVectorIndex:
-    """The read half of juena-rag, shaped like ``RepoVectorIndex``.
+    """The read half of juena-rag.
 
     Holds no embedder and no database driver -- the service does both -- so the
     only configuration it needs is where that service is.
@@ -81,8 +81,7 @@ class RagVectorIndex:
         """The same, across several repositories, ranked together.
 
         One request rather than one per repository: the store already ranks
-        across sources, so the fan-out ``RepoVectorIndex`` needs has nothing to do
-        here.
+        across sources, so there is no fan-out to do here.
         """
         if not repo_ids:
             return []
