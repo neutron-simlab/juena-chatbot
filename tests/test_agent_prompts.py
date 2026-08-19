@@ -33,9 +33,37 @@ def test_supervisor_prompt_enforces_strict_delegation_and_memory_scope() -> None
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
     assert "Delegate every substantive" in prompt
-    assert "Prefer one specialist" in prompt
-    assert "never paste the complete memory file" in prompt
     assert "Never rerun specialist code" in prompt
+
+
+def test_delegation_rules_live_where_they_are_read_rather_than_twice() -> None:
+    """Rules stated in a tool description do not also belong in the system prompt.
+
+    Both copies cost tokens on every model call; only the one attached to the
+    tool is in front of the model at the moment it chooses. "Prefer one
+    specialist" and "self-contained objective" were verbatim in both, and
+    `subagent_type` is validated by the tool schema regardless of what either
+    says.
+    """
+    from juena.agents.juena_agent import SUPERVISOR_TASK_DESCRIPTION
+
+    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+
+    assert "Prefer one specialist" in SUPERVISOR_TASK_DESCRIPTION
+    assert "Prefer one specialist" not in prompt
+    assert "self-contained objective" in SUPERVISOR_TASK_DESCRIPTION
+    assert "Choose from the specialist names" not in prompt
+
+
+def test_the_memory_contract_is_stated_only_in_the_memory_block() -> None:
+    """`MemoryMiddleware` injects it on every call, so the prompt need not repeat it."""
+
+    from juena.agents.backends import JUENA_MEMORY_SYSTEM_PROMPT
+
+    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+
+    assert "Never paste the complete memory file" in JUENA_MEMORY_SYSTEM_PROMPT
+    assert "paste the complete memory file" not in prompt
 
 
 def test_supervisor_prompt_makes_the_server_block_authoritative() -> None:
@@ -59,20 +87,52 @@ def test_supervisor_prompt_makes_the_server_block_authoritative() -> None:
     ],
 )
 def test_prompts_tell_every_agent_when_to_ask_the_user(package: str, filename: str) -> None:
+    """Each prompt names the tool and the cases specific to that agent."""
+
     prompt = load_markdown(package, filename)
 
     assert "`ask_user`" in prompt
-    assert "The user is the domain expert; you are not." in prompt
-    assert "never ask the same question twice" in prompt or "never re-ask" in prompt
 
 
-def test_supervisor_routes_every_sandbox_request_to_the_software_specialist() -> None:
+def test_the_re_asking_rule_has_one_owner_and_covers_rewording() -> None:
+    """The loop guard compares normalized arguments, so meaning is the prompt's job.
+
+    A model that asks "which q-range?" and then "what q-range should I use?" is
+    issuing two byte-different calls; nothing mechanical catches that. The rule
+    lives on the tool all three agents share, rather than in three prompts.
+    """
+    from juena.agents.ask_user import ASK_USER_DESCRIPTION
+
+    # Collapsed, so the assertion does not depend on where the text wraps.
+    description = " ".join(ASK_USER_DESCRIPTION.split())
+
+    assert "never reword an answered question and ask it again" in description
+    assert "already answered" in description
+
+    for package, filename in (
+        ("juena.agents", "SUPERVISOR.md"),
+        ("juena.agents.specialists.software", "AGENT.md"),
+        ("juena.agents.specialists.neutron_research", "AGENT.md"),
+    ):
+        assert "ask the same question twice" not in load_markdown(package, filename)
+
+
+def test_supervisor_routes_execution_without_promising_it() -> None:
+    """`SUPERVISOR.md` is loaded verbatim, with no runtime capability block.
+
+    Both specialists get one -- `build_software_prompt` states truthfully whether
+    the sandbox is there. The supervisor cannot, so it must not claim execution
+    is available: `SANDBOX_ENABLED` defaults to false, and the old wording
+    ("Every authenticated user may request Python or shell execution") was simply
+    untrue in that deployment. Route the request and trust what comes back.
+    """
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
-    assert "Every authenticated user may request Python or shell execution" in prompt
     assert "Delegate requests to run code" in prompt
     assert "`software-specialist`" in prompt
-    assert "Never infer that execution is unavailable" in prompt
+    assert "state that limitation accurately" in prompt
+    assert "Every authenticated user may request" not in prompt
+    assert "Never infer that execution is unavailable" not in prompt
 
 
 @pytest.mark.parametrize(
@@ -108,20 +168,51 @@ def test_prompts_forbid_linking_to_a_file_instead_of_attaching_it(
     assert "Markdown image" in prompt
 
 
-def test_software_prompt_reports_files_that_were_not_delivered() -> None:
+def test_undelivered_files_are_reported_by_the_server_not_by_the_model() -> None:
+    """The prompt asked for something the middleware does unconditionally.
+
+    `SpecialistOutcomeMiddleware` appends every undelivered file to the report's
+    `limitations` whether or not the specialist mentioned it, and lists them in
+    `<verified_by_server>`. Instructing the model as well bought a duplicate that
+    could be ignored.
+    """
+    import inspect
+
+    from juena.agents import specialist_outcome
+
+    source = inspect.getsource(specialist_outcome.SpecialistOutcomeMiddleware)
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
 
-    assert "produced but not delivered" in prompt
-    assert "Never claim the user can see a file the tool did not attach." in prompt
+    assert "was not delivered" in source
+    assert "limitations" in source
+    assert "Produced but NOT delivered" in inspect.getsource(specialist_outcome._verified_block)
+    assert "produced but not delivered" not in prompt
 
 
-def test_software_prompt_explains_virtual_repos_and_safe_script_revision() -> None:
+def test_software_prompt_explains_the_virtual_repos_route() -> None:
+    """This one stays: it changes which tool the model picks, and nothing enforces it.
+
+    A read-only backend refuses a *write* to `/repos`, but nothing stops the
+    model passing `/repos/...` to `execute` as though it were a shell path, where
+    it simply does not exist.
+    """
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
 
     assert "/repos` is a virtual read-tool route" in prompt
     assert "never use it in `execute`" in prompt
-    assert "`write_file` creates a new path and refuses an existing one" in prompt
-    assert "with `edit_file` or choose a new filename" in prompt
+
+
+def test_existing_path_write_behaviour_is_left_to_the_backend() -> None:
+    """`StateBackend.write` returns the instruction itself, at the moment it applies."""
+
+    from deepagents.backends.state import StateBackend
+
+    import inspect
+
+    assert "because it already exists" in inspect.getsource(StateBackend.write)
+    assert "refuses an existing one" not in load_markdown(
+        "juena.agents.specialists.software", "AGENT.md"
+    )
 
 
 def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
@@ -132,22 +223,21 @@ def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
     assert "Do not claim to inspect local repositories" in prompt
 
 
-def test_software_prompt_preserves_model_chosen_lazy_skill_loading() -> None:
+def test_skill_loading_is_owned_by_the_middleware_that_injects_the_skills() -> None:
+    """`SkillsMiddleware` supplies ~270 words of progressive-disclosure guidance.
+
+    The authored prompt restated it in twelve lines of its own, so the model read
+    the same procedure twice on every call, in two different phrasings. The
+    middleware's copy is the one that also carries the actual skill listing.
+    """
+    from deepagents.middleware.skills import SKILLS_SYSTEM_PROMPT
+
     authored_prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
 
-    skill_loading = authored_prompt.index("## Lazy skill loading")
-    repository_workflow = authored_prompt.index("For local repository questions")
-
-    assert skill_loading < repository_workflow
-    assert "dynamically injected **Available Skills** metadata" in authored_prompt
-    assert "Decide from each listed description" in authored_prompt
-    assert "read its exact listed `SKILL.md`" in authored_prompt
-    assert "load only the supporting references" in authored_prompt
-    assert "If no listed skill is relevant, continue directly" in authored_prompt
-    assert "Do not call or report a" in authored_prompt
-    assert "no-skill decision" in authored_prompt
-    assert "They do not block" in authored_prompt
-    assert "skill_decision" not in authored_prompt
+    assert "SKILL.md" in SKILLS_SYSTEM_PROMPT
+    assert "## Lazy skill loading" not in authored_prompt
+    assert "no-skill decision" not in authored_prompt
+    # Still true, and still worth pinning: the authored prompt must stay generic.
     assert "jscatter" not in authored_prompt.lower()
 
 
@@ -190,19 +280,23 @@ def test_neutron_prompt_requires_verifying_tabular_data() -> None:
     assert "are not file paths" in prompt
 
 
-def test_software_prompt_only_names_search_tools_that_exist() -> None:
+def test_the_software_prompt_names_no_search_tool_that_does_not_exist() -> None:
     """The prompt described `hybrid search` for a year after the tool was deleted.
 
-    Derived from `build_code_chat_tools` rather than hard-coded, so deleting a
-    tool fails here instead of leaving the model reaching for it.
+    Inverted from the original: the prompt no longer has to introduce every tool,
+    because each tool's own description does that at the call site. What it must
+    never do is name one that is gone, which is the direction the incident ran.
     """
+    import re
+
     from juena.tools.repo_search import build_code_chat_tools
 
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
     tool_names = {tool.name for tool in build_code_chat_tools(None, None)}
+    mentioned = set(re.findall(r"`([a-z][a-z0-9_]{3,})`", prompt))
+    claimed = {name for name in mentioned if name.startswith(("search_", "list_"))}
 
-    for name in tool_names:
-        assert name in prompt, f"{name} is a real tool the prompt never offers"
+    assert claimed <= tool_names, f"prompt names tools that do not exist: {claimed - tool_names}"
     assert "hybrid" not in prompt.lower()
 
 
@@ -242,8 +336,72 @@ def test_both_specialists_are_told_to_use_the_shared_findings_channel(
     assert "extend it with `edit_file`" in prompt
 
 
-def test_the_supervisor_forwards_findings_paths_rather_than_their_contents() -> None:
-    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+@pytest.mark.parametrize(
+    ("package", "filename"),
+    [
+        ("juena.agents.specialists.software", "AGENT.md"),
+        ("juena.agents.specialists.neutron_research", "AGENT.md"),
+    ],
+)
+def test_writing_a_finding_is_triggered_by_the_objective_not_by_judgement(
+    package: str, filename: str
+) -> None:
+    """Zero findings files had ever been written when this replaced the old wording.
 
-    assert "Specialists leave their evidence in `/findings/`" in prompt
-    assert "the file holds the paths and line numbers" in prompt
+    The first cause was mechanical -- `/findings/` resolved to the sandbox's
+    read-only root, so every write raised `Errno 30`. The second was the prompt:
+    it closed with "skip this only when you established nothing worth another
+    specialist's time", a judgement call beside a report section that specifies
+    every field. A specialist reads only the objective, so the trigger has to
+    come from there.
+    """
+    prompt = load_markdown(package, filename)
+
+    assert "Write one when the objective asks you to" in prompt
+    assert "as binding as the report itself" in prompt
+    assert "When the objective does not ask for one, do not write one" in prompt
+    assert "Skip this only when" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("package", "filename"),
+    [
+        ("juena.agents.specialists.software", "AGENT.md"),
+        ("juena.agents.specialists.neutron_research", "AGENT.md"),
+    ],
+)
+def test_the_finding_field_carries_the_answer_rather_than_a_summary_of_the_work(
+    package: str, filename: str
+) -> None:
+    """"Put the shortest accurate result in `finding`" fed a re-delegation loop.
+
+    For "list eight repositories and describe each", the shortest accurate
+    result is "Eight repositories with their descriptions" -- which compresses
+    the answer out of the report. The supervisor had nothing to reply with, so
+    it delegated again, six times over, each report thinner than the last.
+    """
+    prompt = load_markdown(package, filename)
+
+    assert "the answer, not a description of having found" in prompt
+    assert "reports your activity, not your result" in prompt
+    assert "Put the shortest accurate result" not in prompt
+
+
+def test_the_supervisor_owns_whether_a_finding_gets_written() -> None:
+    """The prompt has to match both the backend and the specialists' trigger.
+
+    `ReadOnlyFindingsStateBackend` opens `/findings/` to the supervisor and keeps
+    it unwritable. And because a specialist writes a finding only when the
+    objective says so, the supervisor must know that an empty folder is the
+    normal case -- an earlier version told it to run `ls /findings/` before
+    answering, which returned `[]` and sent it back to delegate again.
+    """
+    # Collapsed, so an assertion does not depend on where the markdown wraps.
+    prompt = " ".join(load_markdown("juena.agents", "SUPERVISOR.md").split())
+
+    assert "when your objective asks it to" in prompt
+    assert "never evidence that a delegation failed" in prompt
+    assert "Re-delegate at most once on the same subject" in prompt
+    assert "but never write to it" in prompt
+    assert "reconcile them rather than delegating a third time" in prompt
+    assert "you still cannot search repositories or run code" in prompt

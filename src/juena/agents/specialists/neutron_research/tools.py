@@ -16,9 +16,9 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
     "grep": "Search staged user inputs for exact terms or values.",
     "glob": "Find staged files by a precise filename or extension pattern.",
     "write_file": (
-        "Write short disposable scratch notes, or save what you established to "
-        "`/findings/<topic>.md`, which the next specialist can read and nothing else "
-        "carries. `/inputs` is read-only and this release has no execution workspace."
+        "Write to `/findings/<topic>.md` only when the objective asks you to record "
+        "findings; otherwise the report is the result. `/inputs` is read-only and this "
+        "release has no execution workspace."
     ),
     "edit_file": (
         "Edit disposable scratch notes, or extend an existing `/findings/<topic>.md` "

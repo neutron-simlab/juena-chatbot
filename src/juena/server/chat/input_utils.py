@@ -258,8 +258,11 @@ def build_inputs_manifest(
     lines.extend(
         [
             "",
-            "Use `/inputs` as primary evidence for the user's pasted or uploaded materials.",
-            "Correlate them with `/repos` and Context7 only when helpful.",
+            # This block is prepended to the *supervisor's* turn, and the supervisor
+            # has neither `/repos` nor Context7 -- it cannot read `/inputs` either.
+            # So the instruction is about what to put in an objective, not what to do.
+            "The user's pasted or uploaded materials are staged under `/inputs`. Name "
+            "the paths a specialist needs in the objective you send it.",
         ]
     )
     return "\n".join(lines)

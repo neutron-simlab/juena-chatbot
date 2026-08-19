@@ -19,8 +19,10 @@ judgment call where guessing would produce a plausible but wrong answer. Ask
 before spending execution budget on a guess.
 
 Do not ask for anything already stated in the objective or retrievable with a
-tool, and do not ask the same question twice. Give 2-4 concrete `options` when
-you can name the likely choices; the user can always answer freely instead.
+tool. Never ask again for something the user has already answered, and never
+reword an answered question and ask it again -- rephrasing does not make it a
+new question. Give 2-4 concrete `options` when you can name the likely choices;
+the user can always answer freely instead.
 
 Returns the user's answer as a string."""
 

@@ -28,10 +28,9 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "patterns. Do not use it for broad repository discovery."
     ),
     "write_file": (
-        "Create short disposable scratch files at new `/workspace` paths, or save what "
-        "you established to `/findings/<topic>.md`, which the next specialist can read "
-        "and nothing else carries. This tool refuses an existing path; use `edit_file` "
-        "or a new filename for a revision. `/repos` and `/inputs` are read-only tool "
+        "Create short disposable scratch files at new `/workspace` paths. Write to "
+        "`/findings/<topic>.md` only when the objective asks you to record findings; "
+        "otherwise the report is the result. `/repos` and `/inputs` are read-only tool "
         "routes, not execution paths."
     ),
     "edit_file": (
