@@ -188,3 +188,62 @@ def test_neutron_prompt_requires_verifying_tabular_data() -> None:
     assert "never from position alone" in prompt
     assert "σ_coh = 4πb²" in prompt
     assert "are not file paths" in prompt
+
+
+def test_software_prompt_only_names_search_tools_that_exist() -> None:
+    """The prompt described `hybrid search` for a year after the tool was deleted.
+
+    Derived from `build_code_chat_tools` rather than hard-coded, so deleting a
+    tool fails here instead of leaving the model reaching for it.
+    """
+    from juena.tools.repo_search import build_code_chat_tools
+
+    prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
+    tool_names = {tool.name for tool in build_code_chat_tools(None, None)}
+
+    for name in tool_names:
+        assert name in prompt, f"{name} is a real tool the prompt never offers"
+    assert "hybrid" not in prompt.lower()
+
+
+def test_supervisor_is_told_a_specialist_cannot_see_earlier_delegations() -> None:
+    """It re-sent an unchanged objective to a specialist that had already failed.
+
+    A subagent's state arrives with `messages` replaced by the objective alone, so
+    nothing carries across invocations unless the supervisor writes it down.
+    """
+    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+
+    assert "only the `objective` you write" in prompt
+    assert "any earlier delegation" in prompt
+    assert "Delegating again on the same subject" in prompt
+    assert "do not retry" in prompt
+
+
+@pytest.mark.parametrize(
+    ("package", "filename"),
+    [
+        ("juena.agents.specialists.software", "AGENT.md"),
+        ("juena.agents.specialists.neutron_research", "AGENT.md"),
+    ],
+)
+def test_both_specialists_are_told_to_use_the_shared_findings_channel(
+    package: str, filename: str
+) -> None:
+    """A subagent inherits `files` but never `messages`, so this is the only channel.
+
+    Both sides have to know about it: one specialist writing where the other never
+    looks accumulates nothing.
+    """
+    prompt = load_markdown(package, filename)
+
+    assert "ls /findings/" in prompt
+    assert "/findings/<short-topic-slug>.md" in prompt
+    assert "extend it with `edit_file`" in prompt
+
+
+def test_the_supervisor_forwards_findings_paths_rather_than_their_contents() -> None:
+    prompt = load_markdown("juena.agents", "SUPERVISOR.md")
+
+    assert "Specialists leave their evidence in `/findings/`" in prompt
+    assert "the file holds the paths and line numbers" in prompt

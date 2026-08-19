@@ -28,7 +28,10 @@ NEUTRON_RESEARCH_SPECIALIST_NAME = "neutron-research-specialist"
 NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION = (
     "Research neutron science, instruments, methods, experiments, and broader "
     "factual questions within JueNA's scientific scope. Use this specialist for "
-    "scientific explanations, comparisons, calculations, and current external evidence."
+    "scientific explanations, comparisons, calculations, and current external evidence. "
+    "**It has no repository tools.** Questions about JueNA's indexed repositories, "
+    "source code, or configuration go to the software specialist even when they are "
+    "about neutron software -- sending them here produces a web search instead of an answer."
 )
 NEUTRON_RESEARCH_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
 NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.GPT_OSS.value

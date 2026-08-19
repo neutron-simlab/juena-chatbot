@@ -9,9 +9,11 @@ from juena.tools.repo_search import build_code_chat_tools
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
-        "List an absolute directory path. Use `/inputs` for staged user files. "
-        "Use `/repos` only when indexed search cannot identify the repository or "
-        "when the user asks which repositories exist."
+        "List an absolute directory path. Use `/findings` to see what earlier "
+        "specialists established, and `/inputs` for staged user files. "
+        "Use `/repos` only when indexed search cannot identify the repository. "
+        "For which repositories exist, call `list_indexed_repositories` instead: "
+        "`/repos` shows what is cloned on disk, not what is indexed."
     ),
     "read_file": (
         "Read an absolute file path with line numbers. Use it for staged inputs "
@@ -26,13 +28,16 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "patterns. Do not use it for broad repository discovery."
     ),
     "write_file": (
-        "Create only short disposable scratch files at new `/workspace` paths. This "
-        "tool refuses an existing path; use `edit_file` or a new filename for a "
-        "revision. `/repos` and `/inputs` are read-only tool routes, not execution paths."
+        "Create short disposable scratch files at new `/workspace` paths, or save what "
+        "you established to `/findings/<topic>.md`, which the next specialist can read "
+        "and nothing else carries. This tool refuses an existing path; use `edit_file` "
+        "or a new filename for a revision. `/repos` and `/inputs` are read-only tool "
+        "routes, not execution paths."
     ),
     "edit_file": (
-        "Revise an existing disposable scratch file under `/workspace`. `/repos` and "
-        "`/inputs` are read-only."
+        "Revise a scratch file under `/workspace`, or extend an existing "
+        "`/findings/<topic>.md` rather than starting a second file on the same topic. "
+        "`/repos` and `/inputs` are read-only."
     ),
 }
 

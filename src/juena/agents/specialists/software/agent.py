@@ -33,6 +33,9 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "Investigate research software, staged code or errors, indexed JueNA "
     "repositories, and upstream library documentation. Use this specialist for "
     "code reading, repository behavior, configuration, debugging, and software guidance. "
+    "**It owns every question about JueNA's indexed repositories** -- which ones exist, "
+    "what each is for, what is searchable -- including when the question also names "
+    "neutron science, because it holds the only tools that can answer it. "
     "Delegate Python or shell execution, calculations, plots, and generated files here; "
     "when the sandbox is enabled, this specialist can execute them with user approval."
 )

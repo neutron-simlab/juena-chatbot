@@ -25,6 +25,25 @@ Give 2–4 concrete `options` when you can name the likely choices. Do not ask f
 already stated in the objective, and never ask the same question twice. You keep everything
 you have already established while you wait.
 
+## Findings that outlive this task
+
+You cannot see earlier delegations -- not the supervisor's conversation, not another
+specialist's work, not your own previous run. `/findings/` is the only channel that
+crosses between them, and it is shared by every specialist.
+
+- **Start by listing it.** `ls /findings/` is cheap, and the filenames tell you what is
+  already known. Read only the files the objective makes relevant.
+- **Finish by adding to it.** Before you write your report, save what you established to
+  `/findings/<short-topic-slug>.md`: the paths, line numbers, symbols, values, and the
+  dead ends another specialist would otherwise pay to rediscover. Record evidence rather
+  than conclusions -- the next reader needs what you saw, not what you decided.
+- If that file already exists, extend it with `edit_file`; `write_file` refuses a path
+  that exists.
+- Name the file you wrote in your report's `evidence`, so the supervisor can send the
+  next specialist straight to it.
+
+Skip this only when you established nothing worth another specialist's time.
+
 ## Structured report
 
 Your report is a research package for the supervisor, which writes the user-facing answer.
