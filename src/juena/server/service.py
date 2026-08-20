@@ -92,7 +92,6 @@ app = FastAPI(
     openapi_url=None,
 )
 
-# Register routers
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(research_router)

@@ -112,9 +112,7 @@ def process_stream_chunk(
         Tuple of (updated_response_text, updated_complete_flag)
     """
     if isinstance(chunk, ChatMessage):
-        # Complete message received
         content_str = str(chunk.content) if chunk.content is not None else ""
-        # Skip stray 'Start' messages
         if content_str.strip().lower() == "start":
             return response_text, received_complete_message
         
@@ -160,7 +158,6 @@ def process_stream_chunk(
         return response_text, received_complete_message
     
     elif client.is_token_message(chunk):
-        # Token message - accumulate
         if not received_complete_message:
             token_content = client.get_token_content(chunk) or ""
             
@@ -327,7 +324,6 @@ def _stream_and_display_chunks(
             if not waiting_for_user:
                 status.update(label="Done", state="complete", expanded=False)
 
-        # Finalize message display
         if response_text and not received_complete_message:
             custom_data = {"artifacts": pending_artifacts} if pending_artifacts else {}
             if custom_data:
@@ -344,7 +340,6 @@ def _stream_and_display_chunks(
             and not received_complete_message
             and len(st.session_state.messages) > initial_message_count
         ):
-            # If no response text accumulated, check for last message
             last_msg = st.session_state.messages[-1]
             if isinstance(last_msg, ChatMessage) and last_msg.type == "ai":
                 if last_msg.custom_data.get("artifacts"):
@@ -693,12 +688,10 @@ def render_pending_interrupt() -> bool:
 
 def render_chat_interface() -> None:
     """Render the main chat interface including header, message history, and input."""
-    # Render header
     reset_rendered_artifacts()
     render_header_with_logo()
     render_chat_input_styles()
-    
-    # Display chat history (filter out system messages unless debug mode is enabled)
+
     for message in st.session_state.messages:
         render_message(message, show_system=st.session_state.show_system_messages)
 

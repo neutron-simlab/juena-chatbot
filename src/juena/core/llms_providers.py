@@ -29,10 +29,6 @@ from juena.schema.llm_models import (
 _PROVIDERS: tuple[str, ...] = (Provider.OPENAI.value, Provider.BLABLADOR.value)
 
 
-# =============================================================================
-# AVAILABILITY
-# =============================================================================
-
 def _is_available(provider: str) -> bool:
     """Whether a provider has the credentials it needs to be constructed."""
     config = get_config()
@@ -56,10 +52,6 @@ def get_available_providers() -> Dict[str, bool]:
     """
     return {name: _is_available(name) for name in _PROVIDERS}
 
-
-# =============================================================================
-# MODEL CONSTRUCTION
-# =============================================================================
 
 def _model_kwargs(provider: str, model: str, temperature: float, overrides: dict) -> dict:
     """Build the init_chat_model keyword arguments for a provider."""
@@ -149,10 +141,7 @@ def build_chat_model(
     return _build_cached(provider, model, temperature, override_items)
 
 
-# =============================================================================
-# MODEL DISCOVERY (used by the Streamlit sidebar and /agents)
-# =============================================================================
-
+# Model discovery, read by the Streamlit sidebar and the /agents endpoint.
 def get_available_models(provider: str) -> List[str]:
     """
     Get list of available models for a provider based on .env configuration.

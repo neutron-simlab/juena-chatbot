@@ -167,16 +167,13 @@ def render_content(content: Any) -> None:
     Args:
         content: Message content (string, dict, list, or JSON string)
     """
-    # Try to render JSON nicely if possible
     if isinstance(content, (dict, list)):
         st.json(content)
     else:
         try:
-            # Try parsing as JSON string
             parsed = json.loads(str(content))
             st.json(parsed)
         except (json.JSONDecodeError, TypeError):
-            # Render as markdown
             content_str = str(content) if content else ""
             if content_str.strip():
                 st.markdown(normalize_math_markdown(content_str))
@@ -371,13 +368,10 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
         message: ChatMessage to display
         show_system: If True, display system messages. If False, skip them.
     """
-    # Skip system messages unless explicitly enabled
     if message.type == "system" and not show_system:
         return
-    
-    # Render based on message type
+
     if message.type == "human":
-        # User messages - simple display
         with st.chat_message("user"):
             if content_contains_math_markup(message.content):
                 render_content(message.content)
@@ -386,14 +380,12 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
             render_attachment_chips(message.custom_data)
     
     elif message.type == "ai":
-        # AI messages
         with st.chat_message("assistant"):
             if message.content:
                 render_content(sanitize_assistant_content(message.content))
             render_artifacts(message.custom_data)
     
     elif message.type == "tool":
-        # Tool messages
         with st.chat_message("assistant"):
             tool_name = str((message.custom_data or {}).get("tool_name") or "").strip()
             label = f"Tool Result · `{tool_name}`" if tool_name else "Tool Result"
@@ -408,12 +400,10 @@ def render_message(message: ChatMessage, show_system: bool = False) -> None:
                     render_content(message.content)
     
     elif message.type == "system":
-        # System messages - plain text display
         with st.chat_message("assistant"):
             st.text(message.content)
-    
+
     elif message.type == "custom":
-        # Custom messages - render content
         with st.chat_message("assistant"):
             if message.content:
                 render_content(message.content)
@@ -430,5 +420,4 @@ def render_streaming_token(
         response_text: Accumulated response text so far
         message_placeholder: Streamlit placeholder for the message
     """
-    # Display content with cursor
     message_placeholder.markdown(f"{sanitize_assistant_content(response_text)}▌")

@@ -17,17 +17,14 @@ from juena.schema.llm_models import Provider
 from juena.core.config import global_config
 from juena.core.llms_providers import get_available_providers, get_default_model
 
-# Import UI modules
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
 from app.client_setup import initialize_client
 from app.chat_storage import get_chat_storage
 
-# Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
 _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
 
-# Page configuration
 st.set_page_config(
     page_title="JüNA Chatbot",
     page_icon=str(_logo_path) if _logo_path and _logo_path.exists() else None,
@@ -81,7 +78,6 @@ except Exception:
 st.session_state.session_token = session_token
 st.session_state.user = current_user
 
-# Initialize authenticated session state.
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -95,11 +91,9 @@ if "show_system_messages" not in st.session_state:
     st.session_state.show_system_messages = False
 
 if "selected_provider" not in st.session_state:
-    # Initialize provider from available providers
     available_providers = get_available_providers()
     available_provider_list = [p.value for p in Provider if available_providers.get(p.value, False)]
-    
-    # Use global_config.DEFAULT_PROVIDER if available, otherwise use first available
+
     if global_config.DEFAULT_PROVIDER.lower() in available_provider_list:
         st.session_state.selected_provider = global_config.DEFAULT_PROVIDER.lower()
     elif available_provider_list:
@@ -109,7 +103,6 @@ if "selected_provider" not in st.session_state:
         st.session_state.selected_provider = Provider.OPENAI.value
 
 if "selected_model" not in st.session_state:
-    # Initialize model based on selected provider using registry
     st.session_state.selected_model = get_default_model(st.session_state.selected_provider) or "gpt-4o-mini"
 
 # Initialize the remote, user-owned chat storage adapter.
@@ -133,8 +126,5 @@ if "chat_initialized" not in st.session_state:
 if st.query_params.get("thread") != st.session_state.thread_id:
     st.query_params["thread"] = st.session_state.thread_id
 
-# Render sidebar
 render_sidebar()
-
-# Render main chat interface
 render_chat_interface()

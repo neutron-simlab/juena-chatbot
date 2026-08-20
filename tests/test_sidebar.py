@@ -3,8 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from app.chat_storage import Chat
 import app.sidebar as sidebar
+from app.chat_storage import Chat
+from juena.clients.client import AgentAuthenticationError, AgentClientError
 
 
 class _SessionState(dict):
@@ -149,3 +150,66 @@ def test_delete_non_current_chat_leaves_active_session_unchanged(monkeypatch) ->
     assert session_state.thread_id == "thread-1"
     assert session_state.messages == ["current message"]
     assert session_state.welcome_initialized is True
+
+
+def test_research_status_reruns_app_when_session_expired(monkeypatch) -> None:
+    client = Mock()
+    client.list_research.side_effect = AgentAuthenticationError("expired")
+    fake_st = SimpleNamespace(
+        session_state=_make_session_state(client=client),
+        rerun=Mock(),
+        caption=Mock(),
+    )
+    monkeypatch.setattr(sidebar, "st", fake_st)
+
+    sidebar._render_research_status_content()
+
+    client.list_research.assert_called_once_with("thread-1")
+    fake_st.rerun.assert_called_once_with(scope="app")
+    fake_st.caption.assert_not_called()
+
+
+def test_research_status_reports_polling_failure(monkeypatch) -> None:
+    client = Mock()
+    client.list_research.side_effect = AgentClientError("server unavailable")
+    fake_st = SimpleNamespace(
+        session_state=_make_session_state(client=client),
+        rerun=Mock(),
+        caption=Mock(),
+    )
+    monkeypatch.setattr(sidebar, "st", fake_st)
+
+    sidebar._render_research_status_content()
+
+    fake_st.rerun.assert_not_called()
+    fake_st.caption.assert_called_once_with(
+        "⚠️ Background research status unavailable"
+    )
+
+
+def test_research_status_renders_running_and_ready_badges(monkeypatch) -> None:
+    client = Mock()
+    client.list_research.return_value = {
+        "jobs": [],
+        "running": 1,
+        "ready": 2,
+    }
+    fake_st = SimpleNamespace(
+        session_state=_make_session_state(client=client),
+        subheader=Mock(),
+        caption=Mock(),
+        button=Mock(return_value=False),
+        divider=Mock(),
+    )
+    monkeypatch.setattr(sidebar, "st", fake_st)
+
+    sidebar._render_research_status_content()
+
+    fake_st.subheader.assert_called_once_with("Background research")
+    fake_st.caption.assert_called_once_with("⏳ 1 running")
+    fake_st.button.assert_called_once_with(
+        "📥 2 results ready",
+        width="stretch",
+        key="collect-research",
+    )
+    fake_st.divider.assert_called_once_with()

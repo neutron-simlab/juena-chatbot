@@ -17,53 +17,30 @@ def _repo_data_dir(*parts: str) -> Path:
     return repo_root() / "data" / Path(*parts)
 
 
-# Load environment variables from .env file
 # If JUENA_ENV_PATH is set (e.g. in Docker), use it; otherwise use <repo_root>/.env
 # so that "cp env.example .env" in the repo root works without extra configuration.
 path_env = os.getenv("JUENA_ENV_PATH")
 if path_env is None or path_env == "":
     path_env = str(repo_root() / ".env")
-# Note: load_dotenv() by default does NOT override existing environment variables
-# Use override=False to respect system env vars (default behavior)
+# override=False so system environment variables win over the .env file.
 load_dotenv(path_env, override=False)
 
 
 class Config:
     """Essential configuration for JueNA"""
 
-    # =============================================================================
-    # REQUIRED SETTINGS
-    # =============================================================================
-
-    # OpenAI API Key
-    # Check both .env file and system environment
-    # Note: System environment variables take precedence over .env file
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 
-    # =============================================================================
-    # LANGSMITH SETTINGS (Optional but recommended)
-    # =============================================================================
-
-    # LangSmith tracing configuration
     LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     LANGSMITH_ENDPOINT = os.getenv("LANGSMITH_ENDPOINT")
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
     LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT")
 
-    # =============================================================================
-    # LLM PROVIDER CONFIGURATION
-    # =============================================================================
-
-    # Provider selection
     DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "blablador")
     FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "blablador")
 
-    # Provider-specific default models
-    # OpenAI (OpenAI API)
     OPENAI_DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
-    # Optional: Comma-separated list of available OpenAI models to show in UI
-    # If not set, all models from OpenAIModelName enum will be shown
-    # Example: OPENAI_AVAILABLE_MODELS=gpt-4o-mini
+    # Comma-separated. Unset, every model in the OpenAIModelName enum is offered.
     OPENAI_AVAILABLE_MODELS = os.getenv("OPENAI_AVAILABLE_MODELS")
 
     # Blablador (OpenAI-compatible API)
@@ -76,24 +53,19 @@ class Config:
     BLABLADOR_EMBEDDING_MODEL = os.getenv(
         "BLABLADOR_EMBEDDING_MODEL", "alias-qwen3-8b-embeddings"
     )
-    # Optional: Comma-separated list of available Blablador models to show in UI
-    # If not set, all models from BlabladorModelName enum will be shown
+    # Comma-separated. Unset, every model in the BlabladorModelName enum is offered.
     BLABLADOR_AVAILABLE_MODELS = os.getenv("BLABLADOR_AVAILABLE_MODELS")
 
-    # Default model (uses provider-specific default based on DEFAULT_PROVIDER if not explicitly set)
-    # If DEFAULT_MODEL is not set, it will use the provider-specific default (OPENAI_DEFAULT_MODEL or BLABLADOR_DEFAULT_MODEL)
-    # based on DEFAULT_PROVIDER. This allows backward compatibility while supporting provider-specific defaults.
+    # An explicit DEFAULT_MODEL still wins, which is what keeps older .env files working.
     _default_model_explicit = os.getenv("DEFAULT_MODEL")
     if _default_model_explicit:
         DEFAULT_MODEL = _default_model_explicit
     else:
-        # Use provider-specific default based on DEFAULT_PROVIDER
         if DEFAULT_PROVIDER.lower() == "openai":
             DEFAULT_MODEL = OPENAI_DEFAULT_MODEL
         elif DEFAULT_PROVIDER.lower() == "blablador":
             DEFAULT_MODEL = BLABLADOR_DEFAULT_MODEL
         else:
-            # Fallback to OpenAI default for unknown providers
             DEFAULT_MODEL = OPENAI_DEFAULT_MODEL
 
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "10000"))
@@ -151,17 +123,9 @@ class Config:
         os.getenv("SANDBOX_AUDIT_FILE", str(_repo_data_dir("audit", "sandbox.jsonl")))
     )
 
-    # =============================================================================
-    # SERVER CONFIGURATION
-    # =============================================================================
-
     SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
     SERVER_PORT = int(os.getenv("SERVER_PORT", "8080"))
     UI_PORT = int(os.getenv("UI_PORT", "9501"))
-
-    # =============================================================================
-    # ENVIRONMENT
-    # =============================================================================
 
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -289,16 +253,12 @@ class Config:
         """Validate that required environment variables are set"""
         errors = []
 
-        # Get available providers
         available_providers = cls.get_available_providers()
-
-        # Check if DEFAULT_PROVIDER is available
         default_provider_available = available_providers.get(
             cls.DEFAULT_PROVIDER.lower(), False
         )
 
         if not default_provider_available:
-            # Auto-adjust to first available provider
             available_list = [
                 p for p, available in available_providers.items() if available
             ]
@@ -318,7 +278,6 @@ class Config:
                     f"Please configure at least one provider (OpenAI, Blablador, etc.) with valid API keys."
                 )
 
-        # Validate FALLBACK_PROVIDER if set
         if cls.FALLBACK_PROVIDER:
             fallback_available = available_providers.get(
                 cls.FALLBACK_PROVIDER.lower(), False
@@ -415,7 +374,6 @@ class Config:
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
 
-        # Get and display available providers
         available_providers = cls.get_available_providers()
         available_list = [
             p for p, available in available_providers.items() if available
@@ -433,5 +391,4 @@ class Config:
         return cls
 
 
-# Initialize configuration on import
 global_config = Config.initialize()

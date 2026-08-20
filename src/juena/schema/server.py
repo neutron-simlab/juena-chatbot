@@ -7,10 +7,6 @@ from typing_extensions import TypedDict
 from juena.schema.llm_models import Provider
 
 
-# =================
-# REQUEST/RESPONSE MODELS
-# =================
-
 class UserInput(BaseModel):
     """Basic user input for the agent."""
 
@@ -38,12 +34,8 @@ class UserInput(BaseModel):
 
 class StreamInput(UserInput):
     """User input for streaming the agent's response."""
-    pass  # Inherits all fields from UserInput
+    pass
 
-
-# =================
-# MESSAGE MODELS
-# =================
 
 class ToolCall(TypedDict):
     """Represents a request to call a tool."""
@@ -107,10 +99,6 @@ class ChatMessage(BaseModel):
         default=None,
     )
 
-
-# =================
-# HEALTH CHECK MODELS
-# =================
 
 class HealthStatus(BaseModel):
     """Health check response."""

@@ -19,14 +19,9 @@ logger = get_logger(__name__)
 # captures whatever value happened to be current when that module was loaded.
 DEFAULT_AGENT = "juena"
 
-# Type alias for agent instance (can be any type)
 AgentInstance = Any
 
-# Registry storage: agent_id -> (AgentInstance, CompiledStateGraph)
 _agent_registry: dict[str, tuple[AgentInstance, CompiledStateGraph]] = {}
-
-# Agent factory registry: agent_id -> async factory function
-# Factory function signature: async (provider: str, model: str) -> tuple[AgentInstance, CompiledStateGraph]
 _agent_factories: dict[str, Callable[[str, str], Awaitable[tuple[AgentInstance, CompiledStateGraph]]]] = {}
 
 def register_agent_factory(
@@ -72,17 +67,15 @@ def _normalize_provider_model(provider: str | None, model: str | None) -> tuple[
     Returns:
         Tuple of (provider, model)
     """
-    # Determine provider (default to config default)
     if provider is None:
         provider = global_config.DEFAULT_PROVIDER
-    
-    # Determine model (default to provider's default)
+
     if model is None:
         try:
             provider_enum = Provider(provider)
             model = get_default_model_for_provider(provider_enum)
         except ValueError:
-            # Invalid provider, fall back to config default
+            # An unrecognized provider name resets both halves of the pair.
             provider = global_config.DEFAULT_PROVIDER
             model = global_config.DEFAULT_MODEL
     
@@ -113,13 +106,11 @@ async def get_agent(
     Raises:
         AgentNotFoundError: If agent_id is not registered or creation fails
     """
-    # Normalize provider/model for initial creation (if needed)
     provider, model = _normalize_provider_model(provider, model)
 
     logger.info(f"Getting agent: {agent_id} (provider={provider}, model={model} used only for initial creation)")
 
     if agent_id not in _agent_registry:
-        # Check if factory is registered for this agent type
         if agent_id not in _agent_factories:
             logger.error(f"Unknown agent requested: {agent_id}")
             available_agents = list(_agent_factories.keys())
@@ -131,8 +122,7 @@ async def get_agent(
         try:
             factory = _agent_factories[agent_id]
             logger.info(f"Creating new {agent_id} agent with default provider={provider}, model={model}")
-            
-            # Call factory function to create agent (provider/model used for initial LLM setup)
+
             agent_instance, compiled_graph = await factory(provider, model)
             
             _agent_registry[agent_id] = (agent_instance, compiled_graph)
@@ -146,7 +136,6 @@ async def get_agent(
     else:
         logger.info(f"Using existing agent: {agent_id}")
     
-    # Return the CompiledStateGraph (app) from the registry
     return _agent_registry[agent_id][1]
 
 

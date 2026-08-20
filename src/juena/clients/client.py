@@ -17,6 +17,10 @@ class AgentClientError(Exception):
     pass
 
 
+class AgentAuthenticationError(AgentClientError):
+    """The API rejected the client's user session."""
+
+
 def _provider_value(provider: str | Provider | None) -> str | None:
     if provider is None:
         return None
@@ -499,12 +503,10 @@ class AgentClient:
     def list_research(self, thread_id: str) -> dict[str, Any]:
         """Background research on a thread that has not been reported yet.
 
-        Returns ``{"jobs": [...], "running": int, "ready": int}``. A failure to
-        reach the server is reported as "nothing outstanding" rather than
-        raised: this feeds a sidebar badge, and a badge is not worth breaking
-        the page for.
+        Returns ``{"jobs": [...], "running": int, "ready": int}``. Polling
+        failures are raised so the sidebar cannot mistake an expired session or
+        unavailable server for an authoritative "nothing outstanding" result.
         """
-        empty: dict[str, Any] = {"jobs": [], "running": 0, "ready": 0}
         try:
             response = self._client.get(
                 f"{self.base_url}/research",
@@ -514,9 +516,19 @@ class AgentClient:
             )
             response.raise_for_status()
             payload = response.json()
-        except (httpx.HTTPError, ValueError):
-            return empty
-        return payload if isinstance(payload, dict) else empty
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise AgentAuthenticationError(_http_error_message(exc)) from exc
+            raise AgentClientError(_http_error_message(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise AgentClientError(_http_error_message(exc)) from exc
+        except ValueError as exc:
+            raise AgentClientError(
+                "Error: Server returned invalid research status"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise AgentClientError("Error: Server returned invalid research status")
+        return payload
 
     def is_token_message(self, message: ChatMessage | str | dict) -> bool:
         """

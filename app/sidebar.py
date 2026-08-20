@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 import textwrap
 
-from juena.clients.client import AgentClientError
+from juena.clients.client import AgentAuthenticationError, AgentClientError
 from juena.core.config import global_config
 from juena.schema.llm_models import Provider
 from juena.core.llms_providers import (
@@ -21,7 +21,6 @@ from juena.core.llms_providers import (
 from app.chat_storage import Chat, ChatStorage
 
 
-# Paths and assets
 _assets_dir = Path(__file__).parent / "assets"
 _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
 
@@ -124,6 +123,11 @@ def _render_research_status() -> None:
     A fragment rather than a full rerun: this polls on a timer, and reloading the
     whole page every fifteen seconds would interrupt whatever they are typing.
     """
+    _render_research_status_content()
+
+
+def _render_research_status_content() -> None:
+    """Render one status observation without hiding polling failures."""
     client = st.session_state.get("client")
     thread_id = st.session_state.get("thread_id")
     if not client or not thread_id:
@@ -131,7 +135,14 @@ def _render_research_status() -> None:
 
     try:
         status = client.list_research(str(thread_id))
+    except AgentAuthenticationError:
+        # A fragment rerun does not execute streamlit_app.py's authentication
+        # bootstrap. Return to a full run so an expired cookie reaches the
+        # existing sign-in flow instead of looking like an empty job list.
+        st.rerun(scope="app")
+        return
     except AgentClientError:
+        st.caption("⚠️ Background research status unavailable")
         return
 
     running = int(status.get("running") or 0)
@@ -170,19 +181,15 @@ def render_sidebar() -> None:
 
         _render_research_status()
 
-        # 1. LLM Configuration
         st.subheader("LLM Configuration")
-        
-        # Get available providers dynamically
+
         available_providers = get_available_providers()
         provider_options = [p.value for p in Provider if available_providers.get(p.value, False)]
-        
-        # Handle edge case: No providers available
+
         if not provider_options:
             st.error("❌ No LLM providers are configured. Please configure at least one provider (OpenAI, Blablador, etc.) with valid API keys in your .env file.")
             return
-        
-        # Auto-select first available provider if current selection is unavailable
+
         if st.session_state.selected_provider not in provider_options:
             st.session_state.selected_provider = provider_options[0]
             st.session_state.selected_model = get_default_model(st.session_state.selected_provider)
@@ -195,21 +202,17 @@ def render_sidebar() -> None:
             help="Select the LLM provider to use"
         )
         
-        # Handle provider change - use registry to get default model
         if selected_provider != st.session_state.selected_provider:
             st.session_state.selected_provider = selected_provider
             st.session_state.selected_model = get_default_model(selected_provider)
             st.info(f"Switched to **{selected_provider}**. Next message will use the new model.")
-        
-        # Model selector - generic for all providers
+
         model_options = get_available_models(st.session_state.selected_provider)
-        
-        # Ensure selected model is valid for current provider
+
         if st.session_state.selected_model not in model_options:
             default = get_default_model(st.session_state.selected_provider)
             st.session_state.selected_model = default if default in model_options else (model_options[0] if model_options else "")
-        
-        # Create model selector with provider-specific formatting
+
         selected_model = st.selectbox(
             "Model",
             options=model_options,
@@ -218,12 +221,10 @@ def render_sidebar() -> None:
             help="Select the model to use"
         )
         
-        # Update model if changed
         if selected_model != st.session_state.selected_model:
             st.session_state.selected_model = selected_model
             st.info(f"Model changed to **{selected_model}**. Next message will use the new model.")
-        
-        # System messages toggle
+
         show_system = st.checkbox(
             "Show system messages",
             value=st.session_state.show_system_messages,
@@ -235,19 +236,15 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        # 2. Chat History
         st.subheader("Chat History")
         storage = st.session_state.chat_storage
-        
-        # New Chat button
+
         if st.button("➕ New Chat", help="Start a new conversation", use_container_width=True):
             _create_new_chat()
             st.rerun()
-        
-        # List saved chats
+
         chats = storage.list_chats(limit=20)
-        
-        # Rename form (shown when editing_thread_id is set)
+
         editing_thread_id = st.session_state.get("editing_thread_id")
         if editing_thread_id:
             editing_chat = storage.get_chat(editing_thread_id)
@@ -263,14 +260,12 @@ def render_sidebar() -> None:
                 save_col, cancel_col = st.columns(2)
                 with save_col:
                     if st.button("Save", key="save_rename", use_container_width=True):
-                        # Update chat title
                         if new_title.strip():
                             editing_chat.title = new_title.strip()
                         else:
                             editing_chat.title = "New Chat"
                         editing_chat.updated_at = datetime.now()
                         storage.upsert_chat(editing_chat)
-                        # Clear editing state
                         del st.session_state.editing_thread_id
                         st.rerun()
                 with cancel_col:
@@ -282,7 +277,6 @@ def render_sidebar() -> None:
         if chats:
             st.caption("Recent conversations:")
             for chat in chats:
-                # Highlight current chat
                 is_current = chat.thread_id == st.session_state.thread_id
                 
                 display_title, full_title = _format_chat_history_title(chat)
@@ -300,7 +294,6 @@ def render_sidebar() -> None:
                         disabled=is_current,
                         help=full_title,
                     ):
-                        # Switch to selected chat
                         _activate_chat(storage, chat.thread_id)
                         st.rerun()
                 
@@ -337,7 +330,6 @@ def render_sidebar() -> None:
         
         st.divider()
 
-        # 4. Information
         st.subheader("About")
         st.info(
             """

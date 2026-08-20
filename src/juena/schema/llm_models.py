@@ -6,10 +6,6 @@ class Provider(StrEnum):
     """Supported LLM providers in the current system"""
     OPENAI = "openai"
     BLABLADOR = "blablador"
-    # Future providers can be added here
-    # ANTHROPIC = "anthropic"
-    # GOOGLE = "google"
-    # AZURE_OPENAI = "azure_openai"
 
 
 class OpenAIModelName(StrEnum):
@@ -41,7 +37,6 @@ BLABLADOR_MAX_MODEL_LEN: Dict[str, int] = {
 }
 
 
-# Display name shown in UI for Blablador models (model id -> label)
 BLABLADOR_MODEL_DISPLAY_NAMES: Dict[str, str] = {
     BlabladorModelName.GPT_OSS.value: "GPT-OSS-120b",
     BlabladorModelName.MINIMAX_M27.value: "MiniMax-M2.7",
@@ -54,11 +49,9 @@ def get_blablador_model_display_name(model_id: str) -> str:
     return BLABLADOR_MODEL_DISPLAY_NAMES.get(model_id, model_id)
 
 
-# Type alias for all supported models
 AllModelEnum: TypeAlias = OpenAIModelName | BlabladorModelName
 
 
-# Provider to model mapping
 PROVIDER_MODELS: Dict[Provider, List[str]] = {
     Provider.OPENAI: [model.value for model in OpenAIModelName],
     Provider.BLABLADOR: [model.value for model in BlabladorModelName],

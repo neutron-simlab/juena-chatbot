@@ -10,7 +10,6 @@ from typing import Union
 
 from juena.core.config import Config
 
-# Log format constants
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
@@ -54,23 +53,19 @@ def setup_logger(logger: logging.Logger, level: Union[int, str, None] = None) ->
         logger: The logger instance to configure
         level: Log level as int, string, or None to use Config.LOG_LEVEL
     """
-    # Only add handler if logger doesn't have one (avoid duplicates)
     if not logger.handlers:
-        # Create console handler
         handler = logging.StreamHandler()
         handler.setLevel(_get_log_level(level))
-        
-        # Create formatter
+
         formatter = logging.Formatter(
             fmt=LOG_FORMAT,
             datefmt=LOG_DATE_FORMAT
         )
         handler.setFormatter(formatter)
-        
-        # Add handler to logger
+
         logger.addHandler(handler)
         logger.setLevel(_get_log_level(level))
-        
+
         # Prevent propagation to avoid duplicate logs
         logger.propagate = False
 

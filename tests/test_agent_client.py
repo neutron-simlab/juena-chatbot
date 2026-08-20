@@ -122,6 +122,52 @@ def test_session_cookie_replaces_shared_auth_secret(monkeypatch: pytest.MonkeyPa
     assert client._headers == {"Cookie": "juena_session=opaque-session"}
 
 
+def test_list_research_sends_session_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_get(url: str, **kwargs):
+        captured.update(url=url, kwargs=kwargs)
+        return _FakeResponse({"jobs": [], "running": 1, "ready": 0})
+
+    client = client_module.AgentClient(
+        base_url="http://localhost:8080",
+        session_token="opaque-session",
+        timeout=5.0,
+    )
+    monkeypatch.setattr(client._client, "get", fake_get)
+
+    status = client.list_research("thread-1")
+
+    assert status == {"jobs": [], "running": 1, "ready": 0}
+    assert captured == {
+        "url": "http://localhost:8080/research",
+        "kwargs": {
+            "params": {"thread_id": "thread-1"},
+            "headers": {"Cookie": "juena_session=opaque-session"},
+            "timeout": 5.0,
+        },
+    }
+
+
+def test_list_research_does_not_disguise_unauthorized_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("GET", "http://localhost:8080/research")
+    response = httpx.Response(
+        401,
+        request=request,
+        json={"detail": "Invalid or expired session"},
+    )
+    client = client_module.AgentClient(base_url="http://localhost:8080")
+    monkeypatch.setattr(client._client, "get", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(
+        client_module.AgentAuthenticationError,
+        match="Invalid or expired session",
+    ):
+        client.list_research("thread-1")
+
+
 def test_close_closes_reusable_http_client() -> None:
     client = client_module.AgentClient(base_url="http://localhost:8080", agent="juena")
 

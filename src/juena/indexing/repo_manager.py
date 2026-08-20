@@ -122,10 +122,6 @@ class RepoManager:
             )
         return result.stdout.strip()
 
-    # ------------------------------------------------------------------
-    # Git operations
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _run_git(cmd: list[str], label: str) -> None:
         """Run a git command, logging stderr on failure."""

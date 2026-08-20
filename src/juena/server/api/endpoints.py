@@ -225,7 +225,6 @@ async def message_generator(
     """
     agent_id = agent_id or get_default_agent()
 
-    # Extract provider and model from request
     provider = user_input.provider.value if user_input.provider else None
     model = user_input.model
 
@@ -536,7 +535,3 @@ async def get_artifact(
         },
     )
 
-
-# ------------------------------------------------------------------
-# Discovery endpoints
-# ------------------------------------------------------------------
