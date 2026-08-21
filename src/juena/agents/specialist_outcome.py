@@ -18,6 +18,17 @@ REPORT_CLOSE = "</specialist_report>"
 VERIFIED_OPEN = "<verified_by_server>"
 VERIFIED_CLOSE = "</verified_by_server>"
 
+#: The verdict as one boolean on the hand-off message, for callers that must
+#: branch on it rather than read it. The package text is written for a model:
+#: `STATUS: UNVERIFIED` inside a prose block is exactly the kind of thing a
+#: caller ends up matching with a substring search, which is a parser, and a
+#: parser is what this key exists to make unnecessary.
+#:
+#: It rides in `additional_kwargs` rather than in graph state because private
+#: state attributes are stripped from a graph's output in this LangChain
+#: version -- the one place a detached background run has to read it from.
+OUTCOME_VERIFIED_KEY = "juena_outcome_verified"
+
 NO_REPORT = (
     "The specialist returned no structured report. Its run ended early -- most "
     "often because the model-call budget was exhausted -- so nothing it said "
@@ -37,6 +48,17 @@ class SpecialistOutcomeState(AgentState):
     """Specialist-private baseline used to isolate this run's own artifacts."""
 
     specialist_initial_artifact_ids: NotRequired[Annotated[list[str], PrivateStateAttr]]
+
+
+def outcome_verified(message: AIMessage) -> bool:
+    """Did the server verify this hand-off package?
+
+    `True` only when the key is present and exactly `True`. A message that never
+    passed through `SpecialistOutcomeMiddleware` carries no key at all, and the
+    safe reading of "no verdict" is "not verified" -- the caller is deciding
+    whether to treat the run as a result.
+    """
+    return message.additional_kwargs.get(OUTCOME_VERIFIED_KEY) is True
 
 
 def _identity(runtime: Any) -> tuple[str, str] | None:
@@ -213,9 +235,16 @@ class SpecialistOutcomeMiddleware(AgentMiddleware[SpecialistOutcomeState]):
         # Clearing `structured_response` routes the package through Deep Agents'
         # last-AIMessage path, so the supervisor reads prose instead of a JSON
         # envelope that would sit in checkpointed history for every later turn.
+        # The verdict rides alongside as a boolean, because that prose is the
+        # only thing an unattended caller would otherwise have to parse.
         return {
             "structured_response": None,
-            "messages": [AIMessage(content=package)],
+            "messages": [
+                AIMessage(
+                    content=package,
+                    additional_kwargs={OUTCOME_VERIFIED_KEY: not failures},
+                )
+            ],
         }
 
     async def aafter_agent(self, state: Any, runtime: Any) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from deepagents.backends import CompositeBackend
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from juena.agents import specialist_runtime
+from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware, outcome_verified
 from juena.agents.specialists.neutron_research import agent as neutron_agent
 from juena.agents.specialists.software import agent as software_agent
 from juena.research import runner
@@ -71,11 +72,11 @@ def test_the_report_is_the_last_ai_message_with_text() -> None:
         ]
     }
 
-    assert "Status: OK" in runner._report_text(result)
+    assert "Status: OK" in runner._final_package(result).text
 
 
-def test_a_run_that_reported_nothing_says_so_rather_than_returning_empty() -> None:
-    assert runner._report_text({"messages": []}) == runner.NO_REPORT
+def test_a_run_with_no_message_at_all_has_no_package() -> None:
+    assert runner._final_package({"messages": []}) is None
 
 
 def test_only_findings_come_back() -> None:
@@ -608,3 +609,165 @@ async def test_a_terminal_job_already_delivered_is_never_handed_over_twice(
     assert isinstance(result, str)
     assert "already reported" in result
     assert marked == [job.id]
+
+
+# --------------------------------------------------------------------------- #
+# A run that returns is not the same as a run that answered
+# --------------------------------------------------------------------------- #
+
+
+def _runner_harness(monkeypatch: Any, result: dict) -> list[dict]:
+    """Wire `runner._run` to a specialist returning `result`, recording outcomes."""
+    from juena.server.agent import registry
+
+    outcomes: list[dict] = []
+
+    class _Specialist:
+        async def ainvoke(self, _payload: Any, **_kwargs: Any) -> dict:
+            return result
+
+    async def fake_get_agent(_name: str) -> Any:
+        async def aget_state(_config: Any) -> Any:
+            return SimpleNamespace(values={})
+
+        return SimpleNamespace(aget_state=aget_state)
+
+    async def fake_mark_running(_job_id: Any) -> None:
+        return None
+
+    async def fake_finish(job_id: Any, **fields: Any) -> None:
+        outcomes.append({"job_id": job_id, **fields})
+
+    resources = SimpleNamespace(background_specialists={"software-specialist": _Specialist()})
+    monkeypatch.setattr(registry, "get_agent", fake_get_agent)
+    monkeypatch.setattr(registry, "get_agent_resources", lambda _name: resources)
+    monkeypatch.setattr(runner.jobs, "mark_running", fake_mark_running)
+    monkeypatch.setattr(runner.jobs, "finish", fake_finish)
+    return outcomes
+
+
+async def _run_once(monkeypatch: Any, result: dict) -> dict:
+    outcomes = _runner_harness(monkeypatch, result)
+    await runner._run(
+        uuid4(),
+        "survey the fitting code",
+        "t1",
+        uuid4(),
+        "software-specialist",
+        "blablador",
+        "a-model",
+        timeout_seconds=30,
+    )
+    assert len(outcomes) == 1
+    return outcomes[0]
+
+
+def _handoff_package(structured_response: Any) -> AIMessage:
+    """The real hand-off message, composed by the real middleware.
+
+    Not a hand-written fixture. The first version of these tests asserted on a
+    result carrying only a `HumanMessage`, a shape production never produces, and
+    passed while the defect it was written for was untouched:
+    `SpecialistOutcomeMiddleware` *always* emits a non-empty `AIMessage`, so the
+    "no final message" branch it exercised is unreachable in a real run.
+
+    Composing the package through the middleware means the test cannot drift from
+    what the runner will actually be handed.
+    """
+    update = SpecialistOutcomeMiddleware(specialist_name="software-specialist").after_agent(
+        {"structured_response": structured_response},
+        SimpleNamespace(),
+    )
+    return update["messages"][0]
+
+
+def test_the_middleware_states_its_verdict_as_a_boolean() -> None:
+    """The premise both runner tests below rest on.
+
+    Asserted directly so that a change in the middleware fails here, naming the
+    cause, rather than only in the runner tests, which would look like a runner
+    bug.
+    """
+    unverified = _handoff_package(None)
+    verified = _handoff_package(
+        {
+            "status": "completed",
+            "finding": "silx fits with leastsq",
+            "evidence": ["leastsq.py:40"],
+        }
+    )
+
+    assert "None returned." in unverified.text
+    assert "STATUS: UNVERIFIED" in unverified.text
+    assert len(unverified.text) > 400, "the failing package is long prose, not an empty string"
+    assert outcome_verified(unverified) is False
+
+    assert "STATUS: VERIFIED" in verified.text
+    assert outcome_verified(verified) is True
+
+    assert outcome_verified(AIMessage(content="never went through the middleware")) is False
+
+
+@pytest.mark.asyncio
+async def test_an_unverified_package_is_recorded_as_failed(monkeypatch: Any) -> None:
+    """`ainvoke` returning says the graph ended, not that the specialist answered.
+
+    This is the observed failure, not a hypothetical. With the RAG store answering
+    500 to every search, three runs ended normally having found nothing, and each
+    stored `succeeded` — because the check was "is the final message non-empty",
+    and the middleware's `None returned. / STATUS: UNVERIFIED` package is 543
+    bytes of perfectly non-empty prose saying there is no result.
+
+    So this passes the *real* package through, and the assertion is on the stored
+    status. A test built on a message the middleware cannot emit proves nothing.
+    """
+    outcome = await _run_once(
+        monkeypatch,
+        {
+            "messages": [
+                HumanMessage(content="survey the fitting code"),
+                _handoff_package(None),
+            ],
+            "files": {"/findings/half-written.md": {"content": "notes, no conclusion"}},
+        },
+    )
+
+    assert outcome["status"] == "failed"
+    assert outcome["error"] == runner.NO_REPORT
+    assert "findings" not in outcome, (
+        "a run that could not state a conclusion must not write into the "
+        "conversation's findings"
+    )
+    assert "STATUS: UNVERIFIED" in outcome["report"], (
+        "the server's account of why it failed is the thing that made this class "
+        "of failure diagnosable; it is kept on the row"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_verified_package_is_recorded_as_succeeded_with_its_findings(
+    monkeypatch: Any,
+) -> None:
+    """The other half of the branch, so the fix cannot quietly fail every run."""
+    outcome = await _run_once(
+        monkeypatch,
+        {
+            "messages": [
+                HumanMessage(content="survey the fitting code"),
+                _handoff_package(
+                    {
+                        "status": "completed",
+                        "finding": "silx fits with leastsq",
+                        "evidence": ["leastsq.py:40"],
+                    }
+                ),
+            ],
+            "files": {"/findings/fitting.md": {"content": "paths and line numbers"}},
+        },
+    )
+
+    assert outcome["status"] == "succeeded"
+    assert "silx fits with leastsq" in outcome["report"]
+    assert set(outcome["findings"]) == {"/findings/fitting.md"}
+
+

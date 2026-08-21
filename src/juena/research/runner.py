@@ -21,6 +21,7 @@ from uuid import UUID
 from langchain_core.messages import AIMessage, HumanMessage
 
 from juena.agents.findings import FindingsMap, crossing_files, findings_delta, fingerprint
+from juena.agents.specialist_outcome import outcome_verified
 from juena.core.log import get_logger
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
@@ -28,9 +29,11 @@ from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 logger = get_logger(__name__)
 
+#: Why a run that returned normally is still recorded as a failure. Phrased to
+#: read after `check_research`'s "Research job <id> (<specialist>) failed: ".
 NO_REPORT = (
-    "The specialist finished without producing a report. Nothing it did mid-run "
-    "can be treated as a result."
+    "the specialist finished without producing a verified report, so nothing it "
+    "did mid-run can be treated as a result"
 )
 
 #: Tasks are held here for their lifetime. `asyncio.create_task` keeps only a
@@ -59,20 +62,40 @@ def _seed_files(state_values: dict[str, Any]) -> dict[str, Any]:
     return crossing_files(state_values.get("files"))
 
 
-def _report_text(result: dict[str, Any]) -> str:
-    """The specialist's final package: the last AIMessage carrying text.
+def _final_package(result: dict[str, Any]) -> AIMessage | None:
+    """The specialist's hand-off message: the last AIMessage carrying text.
 
     `SpecialistOutcomeMiddleware` composes that message from the structured
     report and the server's own verification, which is exactly what the `task`
     tool forwards to the supervisor. Reading it the same way keeps a collected
     background result indistinguishable from a synchronous one.
+
+    The whole message rather than its text, because the verdict is a key on it.
     """
     for message in reversed(result.get("messages") or []):
         if isinstance(message, AIMessage):
-            text = message.text.rstrip() if message.text else ""
-            if text:
-                return text
-    return NO_REPORT
+            if message.text and message.text.rstrip():
+                return message
+    return None
+
+
+def _is_result(package: AIMessage | None) -> bool:
+    """Did this run produce something that may be treated as a result?
+
+    `ainvoke` returning without raising says only that the graph reached an end.
+    It does not say the specialist answered: with its research tools failing on
+    every call, or its turn budget spent before it wrote a report, a run ends
+    perfectly normally with nothing to show for itself.
+
+    Nor is a non-empty final message the test. `SpecialistOutcomeMiddleware`
+    *always* composes one -- an interrupted run gets `None returned.` under
+    `STATUS: UNVERIFIED`, which is a full 543 bytes of prose saying there is no
+    result. Every such run was stored as `succeeded` until this check existed.
+
+    So the question is put to the one component that knows the answer, and it
+    answers in a boolean rather than in text a caller would have to match on.
+    """
+    return package is not None and outcome_verified(package)
 
 
 def _written_findings(result: dict[str, Any], seed: dict[str, Any]) -> FindingsMap:
@@ -159,10 +182,32 @@ async def _run(
             ),
             timeout=timeout_seconds,
         )
+        package = _final_package(result)
+        if not _is_result(package):
+            # The package is still stored, on a `failed` row. `check_research`
+            # reads only `error` on this path, so the user is told plainly that
+            # it failed -- but the server's own account of *why* is the thing
+            # that made this class of failure diagnosable, and throwing it away
+            # here would be throwing away the next investigation.
+            #
+            # The findings are dropped, though: a run that could not state a
+            # conclusion has not earned a write into the conversation's
+            # `/findings/`, and a half-finished note there is worse than none.
+            logger.warning(
+                "Research job %s produced no verified report (%s)", job_id, specialist
+            )
+            await jobs.finish(
+                job_id,
+                status="failed",
+                report=package.text.rstrip() if package else "",
+                error=NO_REPORT,
+            )
+            return
+
         await jobs.finish(
             job_id,
             status="succeeded",
-            report=_report_text(result),
+            report=package.text.rstrip(),
             findings=_written_findings(result, seed),
             # The revision this run read, so collection can tell "nobody touched
             # it since" from "the conversation moved on while I was working".
