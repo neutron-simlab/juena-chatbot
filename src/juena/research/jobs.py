@@ -21,7 +21,7 @@ from juena.research.constants import (
     ResearchStatus,
 )
 from juena.server.database.connection import get_session_factory
-from juena.server.database.models import ResearchJob
+from juena.server.database.models import ResearchJob, User
 
 logger = get_logger(__name__)
 
@@ -36,11 +36,22 @@ async def create(
 ) -> ResearchJob | None:
     """Admit one job, or return ``None`` when the user is already at the limit.
 
-    The count and the insert share a transaction so two tool calls arriving
-    together cannot both see a free slot.
+    The owner's `users` row is locked for the rest of the transaction before the
+    count runs. Sharing a transaction is not enough on its own: under
+    PostgreSQL's default Read Committed isolation a `COUNT` does not block a
+    concurrent `INSERT`, so two calls arriving together could both see the same
+    free slot and both admit. The row lock is what serializes them, and it is
+    scoped to one user -- two different people starting jobs never wait on each
+    other.
+
+    A `users` row that does not exist takes no lock and the insert below then
+    fails on the foreign key. That is the right loud failure: `user_id` comes
+    from an authenticated context and cannot legitimately be absent.
     """
     factory = get_session_factory()
     async with factory() as session, session.begin():
+        await session.execute(select(User.id).where(User.id == user_id).with_for_update())
+
         active = await session.scalar(
             select(func.count())
             .select_from(ResearchJob)

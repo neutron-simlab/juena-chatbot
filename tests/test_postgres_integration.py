@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from deepagents.backends.utils import create_file_data
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, MessagesState, START, StateGraph
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 
 from juena.agents.findings import validate_findings
 from juena.core.config import global_config
@@ -40,7 +40,7 @@ from juena.server.database.checkpointer import checkpointer_lifespan
 from juena.server.database import database_lifespan, get_session_factory
 from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
 from juena.server.database.store import store_lifespan
-from juena.server.database.models import AuthSession, utc_now
+from juena.server.database.models import AuthSession, User, utc_now
 from juena.research import jobs as research_jobs
 from juena.research.constants import RESTART_MESSAGE as RESEARCH_RESTART_MESSAGE
 from juena.sandbox.jobs import SandboxJobs, hold_worker_lock
@@ -566,6 +566,80 @@ async def test_research_concurrency_is_per_user_and_counts_only_active_jobs(
         assert await research_jobs.create(
             user_id=alice, thread_id=thread, specialist="s", objective="four", concurrency=2
         ) is not None
+
+
+@pytest.mark.asyncio
+async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two starts arriving together must not both see the last free slot.
+
+    Sharing a transaction is not enough. Under PostgreSQL's default Read
+    Committed isolation a `COUNT` does not block a concurrent `INSERT`, so both
+    callers could count the same free slot and both admit. `create` therefore
+    locks the owner's `users` row before counting.
+
+    Asserted by *blocking*, not by racing. A plain `asyncio.gather` of two
+    `create` calls is timing-dependent -- whether both count before either
+    inserts depends on how the driver happens to yield -- so it can pass against
+    an unlocked build by accident, and a test that only sometimes catches the
+    bug reads as proof the bug is gone.
+
+    **The held lock must be `FOR KEY SHARE`, not `FOR UPDATE`.** An earlier
+    version of this test held `FOR UPDATE` and passed against an unlocked build,
+    because inserting a `research_jobs` row takes `FOR KEY SHARE` on the
+    referenced `users` row for the foreign key -- and that conflicts with a held
+    `FOR UPDATE`. Admission blocked either way and the test proved nothing.
+    `FOR KEY SHARE` is compatible with the foreign key's own lock and conflicts
+    only with `FOR UPDATE`, so it blocks the explicit lock and nothing else.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        alice = await _research_user("research-lock-alice")
+        bob = await _research_user("research-lock-bob")
+        thread = f"thread-{uuid4()}"
+
+        factory = get_session_factory()
+        async with factory() as holder:
+            async with holder.begin():
+                # FOR KEY SHARE: conflicts with `create`'s FOR UPDATE, and with
+                # nothing else this transaction does. See the docstring.
+                await holder.execute(
+                    select(User.id)
+                    .where(User.id == alice)
+                    .with_for_update(read=True, key_share=True)
+                )
+
+                admitted = asyncio.create_task(
+                    research_jobs.create(
+                        user_id=alice,
+                        thread_id=thread,
+                        specialist="s",
+                        objective="waits on the owner row",
+                        concurrency=2,
+                    )
+                )
+
+                # Control: a different owner is not blocked. This also proves the
+                # wait below is the row lock rather than an exhausted connection
+                # pool, which would stall every caller equally.
+                assert await asyncio.wait_for(
+                    research_jobs.create(
+                        user_id=bob,
+                        thread_id=thread,
+                        specialist="s",
+                        objective="different owner, never waits",
+                        concurrency=2,
+                    ),
+                    timeout=10.0,
+                ) is not None
+
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(admitted), timeout=1.0)
+            # The holder's transaction commits here, releasing Alice's row.
+
+        job = await asyncio.wait_for(admitted, timeout=10.0)
+        assert job is not None, "admission must proceed once the owner row is free"
 
 
 @pytest.mark.asyncio
