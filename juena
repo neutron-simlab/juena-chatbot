@@ -39,7 +39,8 @@ COMPOSE_PROD=(docker compose -f docker-compose.yml)
 PROD_ENV_FILE="${PROD_ENV_FILE:-/etc/juena/juena.env}"
 
 # Host-side DSN for the integration tests. Matches the development defaults in
-# env.example; override in the environment if you changed them.
+# env.example; override in the environment if you changed them. The integration
+# suite gets its own database on the same server -- see `ensure_test_database`.
 POSTGRES_USER="${POSTGRES_USER:-juena}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-juena-development-only}"
 POSTGRES_DB="${POSTGRES_DB:-juena}"
@@ -80,16 +81,104 @@ environment_value() {
     printf '%s\n' "${value:-$fallback}"
 }
 
+# Accept a known-good shape, reject everything else. Used on any identifier that
+# reaches SQL or a Compose environment, and deliberately not an escaping routine:
+# an embedded double quote would break out of a quoted identifier, and PostgreSQL
+# silently truncates identifiers past 63 bytes, so a long name can resolve to some
+# *other* existing database.
+_valid_pg_identifier() {
+    local value="$1"
+    [ -n "$value" ] || return 1
+    [ "${#value}" -le 63 ] || return 1
+    case "$value" in
+        [A-Za-z_]*) ;;
+        *) return 1 ;;
+    esac
+    case "$value" in
+        *[!A-Za-z0-9_]*) return 1 ;;
+    esac
+    return 0
+}
+
 configure_development_environment() {
     export POSTGRES_USER="$(environment_value POSTGRES_USER juena)"
     export POSTGRES_PASSWORD="$(environment_value POSTGRES_PASSWORD juena-development-only)"
     export POSTGRES_DB="$(environment_value POSTGRES_DB juena)"
     export POSTGRES_PORT="$(environment_value POSTGRES_PORT 5432)"
+
+    # Validated here, before any Compose command can run. These two reach both SQL
+    # and the container environment, and a malformed POSTGRES_DB used to perturb
+    # the running stack -- Compose sees a changed variable and recreates Postgres --
+    # long before the check beside `DROP DATABASE` ever executed.
+    _valid_pg_identifier "$POSTGRES_DB" \
+        || die "POSTGRES_DB '$POSTGRES_DB' is not a plain identifier of 63 bytes or fewer."
+    _valid_pg_identifier "$POSTGRES_USER" \
+        || die "POSTGRES_USER '$POSTGRES_USER' is not a plain identifier of 63 bytes or fewer."
     export SANDBOX_IDENTITY_SECRET="$(environment_value SANDBOX_IDENTITY_SECRET juena-local-sandbox-identity-secret-development)"
     export SANDBOX_WORKSPACE_HOST_ROOT="$(environment_value SANDBOX_WORKSPACE_HOST_ROOT ./.sandbox/workspaces)"
     export SANDBOX_CONCURRENCY="$(environment_value SANDBOX_CONCURRENCY 2)"
     export SANDBOX_WORKER_DATABASE_URL="$(environment_value SANDBOX_WORKER_DATABASE_URL "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}")"
-    TEST_DATABASE_URL="${TEST_DATABASE_URL_OVERRIDE:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}}"
+    if [ -n "$TEST_DATABASE_URL_OVERRIDE" ]; then
+        # Someone else's database. Used as given, never created or dropped.
+        TEST_DATABASE_URL="$TEST_DATABASE_URL_OVERRIDE"
+        TEST_DATABASE_NAME=""
+    else
+        TEST_DATABASE_NAME="${POSTGRES_DB}_test"
+        TEST_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${TEST_DATABASE_NAME}"
+    fi
+}
+
+# The integration suite shares a Postgres server with development, but not a
+# database. Test rows used to land in the development database, where 93 of them
+# sat among four real research jobs and made every operational query about the
+# running system misleading.
+#
+# Dropped and recreated per run rather than truncated: `database_lifespan` calls
+# `create_all` on connect, so an empty database is all the suite needs -- and a
+# fresh one cannot inherit a stale schema, which is the failure mode described in
+# DOCS/OPENSHIFT/SCHEMA-MIGRATION.md.
+#
+# Only the derived database is managed here. A TEST_DATABASE_URL supplied by the
+# caller names a database this script does not own; dropping it would be a
+# destructive surprise.
+#
+# **One run at a time.** Every default invocation owns the same `<db>_test`, and
+# `DROP ... WITH (FORCE)` terminates open connections -- so a second concurrent
+# `juena test-integration` would kill the first one's database mid-suite. Set
+# TEST_DATABASE_URL to a distinct database if you need runs in parallel.
+
+ensure_test_database() {
+    if [ -z "$TEST_DATABASE_NAME" ]; then
+        echo "${DIM}Using TEST_DATABASE_URL from the environment; not creating or resetting it.${RESET}"
+        return 0
+    fi
+
+    # Defence in depth. POSTGRES_DB was already validated at load time, but the
+    # name dropped here is *derived* from it -- a POSTGRES_DB of exactly 63 bytes
+    # passes that check and yields a 68-byte `<db>_test` that PostgreSQL would
+    # silently truncate. The derived name gets its own check for that reason.
+    _valid_pg_identifier "$TEST_DATABASE_NAME" \
+        || die "Refusing to drop '$TEST_DATABASE_NAME': not a plain identifier of 63 bytes or fewer. Check POSTGRES_DB."
+    case "$TEST_DATABASE_NAME" in
+        *_test) ;;
+        *) die "Refusing to drop '$TEST_DATABASE_NAME': the managed test database must end in _test." ;;
+    esac
+    [ "$TEST_DATABASE_NAME" != "$POSTGRES_DB" ] \
+        || die "Refusing to drop '$TEST_DATABASE_NAME': it is the development database."
+
+    local attempt=0
+    until "${COMPOSE_DEV[@]}" exec -T postgres pg_isready -U "$POSTGRES_USER" -q >/dev/null 2>&1; do
+        attempt=$((attempt + 1))
+        [ "$attempt" -lt 30 ] || die "Postgres did not become ready for the test database"
+        sleep 1
+    done
+
+    "${COMPOSE_DEV[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+        -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE IF EXISTS \"$TEST_DATABASE_NAME\" WITH (FORCE)" \
+        -c "CREATE DATABASE \"$TEST_DATABASE_NAME\" OWNER \"$POSTGRES_USER\"" \
+        || die "Could not reset the test database '$TEST_DATABASE_NAME'"
+    echo "${DIM}Integration tests will run against a fresh '${TEST_DATABASE_NAME}'.${RESET}"
 }
 
 # ---------------------------------------------------------------------------
@@ -332,8 +421,9 @@ cmd_test() { ## Run the unit suite
     uv run --extra dev pytest -q --ignore=tests/test_postgres_integration.py "$@"
 }
 
-cmd_test_integration() { ## Run the Postgres-backed tests against dev Postgres
+cmd_test_integration() { ## Run the Postgres-backed tests against a fresh test database
     cmd_postgres_up
+    ensure_test_database
     JUENA_TEST_DATABASE_URL="$TEST_DATABASE_URL" \
         uv run --extra dev pytest tests/test_postgres_integration.py -q "$@"
 }
