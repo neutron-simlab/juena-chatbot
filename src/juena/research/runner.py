@@ -20,19 +20,13 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from juena.agents.backends import FINDINGS_PREFIX
-from juena.agents.findings import FindingsMap, findings_delta, fingerprint
+from juena.agents.findings import FindingsMap, crossing_files, findings_delta, fingerprint
 from juena.core.log import get_logger
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
 from juena.server.agent.runtime_model_middleware import RuntimeModelContext
 
 logger = get_logger(__name__)
-
-#: Paths a background specialist is seeded with. `/findings/` is what earlier
-#: specialists established and `/inputs/` is what the user staged; everything
-#: else in the conversation's state is the supervisor's own working memory.
-SEEDED_PREFIXES = (FINDINGS_PREFIX, "/inputs/")
 
 NO_REPORT = (
     "The specialist finished without producing a report. Nothing it did mid-run "
@@ -56,13 +50,13 @@ def _seed_files(state_values: dict[str, Any]) -> dict[str, Any]:
     A subagent invoked through `task` inherits the parent's whole `files` state
     for free. This one is invoked standalone, so what it starts with is decided
     here rather than by LangGraph.
+
+    The rule itself lives in `crossing_files`, not here. Both delegation paths
+    must admit exactly the same namespaces, and this module previously kept its
+    own prefix tuple and its own comprehension saying so -- two statements of one
+    rule, with nothing to catch a drift between them.
     """
-    files = state_values.get("files") or {}
-    return {
-        path: data
-        for path, data in files.items()
-        if path.startswith(SEEDED_PREFIXES)
-    }
+    return crossing_files(state_values.get("files"))
 
 
 def _report_text(result: dict[str, Any]) -> str:
