@@ -710,6 +710,51 @@ async def test_a_collected_result_is_never_reported_twice(
 
 
 @pytest.mark.asyncio
+async def test_bulk_acknowledgement_stamps_once_and_leaves_other_jobs_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`mark_collected_many` runs at the end of every supervisor turn.
+
+    It is handed the whole delivery marker each time, which grows for the life of
+    the conversation, so it has to be idempotent -- re-stamping an already
+    collected job would move `collected_at` forward on every turn -- and it must
+    touch nothing outside the ids it was given.
+    """
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    async with database_lifespan():
+        user = await _research_user("research-bulk-collect")
+        thread = f"thread-{uuid4()}"
+
+        async def _finished(objective: str):  # noqa: ANN202
+            job = await research_jobs.create(
+                user_id=user,
+                thread_id=thread,
+                specialist="s",
+                objective=objective,
+                concurrency=4,
+            )
+            assert job is not None
+            await research_jobs.finish(job.id, status="succeeded", report="done")
+            return job
+
+        delivered = await _finished("the one the conversation received")
+        untouched = await _finished("still waiting to be collected")
+
+        assert await research_jobs.mark_collected_many([delivered.id]) == 1
+
+        first_stamp = (await research_jobs.get(delivered.id, user)).collected_at
+        assert first_stamp is not None
+
+        # The next turn passes the same marker again. Nothing left to do, and the
+        # original timestamp must survive.
+        assert await research_jobs.mark_collected_many([delivered.id]) == 0
+        assert (await research_jobs.get(delivered.id, user)).collected_at == first_stamp
+
+        assert (await research_jobs.get(untouched.id, user)).collected_at is None
+        assert [j.id for j in await research_jobs.for_thread(thread, user)] == [untouched.id]
+
+
+@pytest.mark.asyncio
 async def test_findings_survive_postgres_with_their_full_file_data_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

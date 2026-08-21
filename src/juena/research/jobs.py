@@ -8,6 +8,7 @@ table is ordinary application data like `Chat`.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -154,6 +155,34 @@ async def mark_collected(job_id: UUID) -> None:
             .where(ResearchJob.id == job_id, ResearchJob.collected_at.is_(None))
             .values(collected_at=datetime.now(UTC))
         )
+
+
+async def mark_collected_many(job_ids: Collection[UUID]) -> int:
+    """Stamp all of these collected, skipping any already stamped.
+
+    One statement rather than one call per id, because the caller is
+    `ResearchDeliveryMiddleware` at the end of every supervisor turn and the list
+    it passes grows for the life of the conversation. That makes it **one
+    round trip** regardless of length -- not constant work: the `IN` list and the
+    index probes behind it are still linear in the number of ids. Round trips are
+    what was worth removing; a few hundred uuids in one predicate is not.
+
+    Returns how many rows this actually changed, which is how the caller can log
+    a real reconciliation without logging the no-op that every other turn is.
+    """
+    if not job_ids:
+        return 0
+    factory = get_session_factory()
+    async with factory() as session, session.begin():
+        result = await session.execute(
+            update(ResearchJob)
+            .where(
+                ResearchJob.id.in_(list(job_ids)),
+                ResearchJob.collected_at.is_(None),
+            )
+            .values(collected_at=datetime.now(UTC))
+        )
+    return result.rowcount or 0
 
 
 async def fail_orphans() -> int:

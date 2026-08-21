@@ -7,11 +7,17 @@ no "afterwards" to hook: a tool returns before the graph commits.
 
 So delivery is acknowledged by the same atomic write that performs it. The
 `Command` that carries the outcome also stamps the job id into a private,
-checkpointed state field, and the *next* call reconciles the database against
-that stamp:
+checkpointed state field, and a later step reconciles the database against that
+stamp:
 
 * stamp present -> the conversation has it; mark the row collected and say so;
 * stamp absent  -> the write never landed; hand the identical `Command` back.
+
+`ResearchDeliveryMiddleware.aafter_agent` is what performs that reconciliation,
+once per turn on every path out of the graph. It used to depend on the model
+calling `list_research` first, which is a prompt rule rather than a guarantee --
+and the model does not reliably follow it, leaving a delivered job advertised as
+still waiting in the sidebar for the rest of the conversation.
 
 Both windows are covered, and replaying is safe because the conflict paths are
 deterministic. The marker is deliberately not inferred from message history:
@@ -40,6 +46,10 @@ from juena.agents.findings import (
     conflict_path,
     validate_findings,
 )
+from juena.core.log import get_logger
+from juena.research import jobs
+
+logger = get_logger(__name__)
 
 #: Absent from `base_findings` is not the same as empty: a path the job never
 #: read, which the conversation has since created, is a conflict rather than a
@@ -58,19 +68,50 @@ class ResearchDeliveryState(AgentState):
 
 
 class ResearchDeliveryMiddleware(AgentMiddleware[ResearchDeliveryState]):
-    """Declares the delivery marker. Private, so it never crosses to a specialist.
+    """Owns the delivery marker, and reconciles the database against it.
 
-    No hooks: the field exists so `check_research` can write it inside the same
-    `Command` that delivers a report, and read it back on a later turn.
+    The marker is private, so it never crosses to a specialist. `check_research`
+    writes it inside the same `Command` that delivers a result, which is the only
+    way the two can be made atomic -- but that write has no "afterwards" of its
+    own to stamp `collected_at` in, because a tool returns before the graph
+    commits.
+
+    `aafter_agent` is that afterwards. It runs in a later superstep than the tool
+    node, so the delivering write is already checkpointed by the time this reads
+    the marker, and it runs once on every path out of the graph -- including the
+    paths where the model calls no research tool at all.
     """
 
     state_schema = ResearchDeliveryState
+
+    async def aafter_agent(self, state: Any, runtime: Any) -> None:
+        """Stamp every job this conversation is holding a marker for."""
+        reconciled = await jobs.mark_collected_many(delivered_uuids(state))
+        if reconciled:
+            logger.info("Acknowledged %d delivered research job(s)", reconciled)
+        return None
 
 
 def delivered_ids(state: Any) -> set[str]:
     """Job ids this conversation has durably received."""
     values = state if isinstance(state, dict) else {}
     return {str(item) for item in (values.get(DELIVERED_KEY) or [])}
+
+
+def delivered_uuids(state: Any) -> list[UUID]:
+    """The same ids as `UUID`s, dropping anything unparseable.
+
+    Nothing should ever write a non-id here, and a malformed one is not worth
+    ending a turn over: the cost of skipping it is one row that stays
+    uncollected, which the next turn tries again.
+    """
+    parsed: list[UUID] = []
+    for item in delivered_ids(state):
+        try:
+            parsed.append(UUID(item))
+        except ValueError:
+            logger.warning("Ignoring malformed research job id in delivery marker: %r", item)
+    return parsed
 
 
 def current_findings(state: Any) -> dict[str, Any]:

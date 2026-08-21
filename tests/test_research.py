@@ -771,3 +771,71 @@ async def test_a_verified_package_is_recorded_as_succeeded_with_its_findings(
     assert set(outcome["findings"]) == {"/findings/fitting.md"}
 
 
+# --------------------------------------------------------------------------- #
+# Acknowledgement does not wait on the model
+# --------------------------------------------------------------------------- #
+
+
+def test_the_delivery_middleware_registers_an_after_agent_hook() -> None:
+    """The same check `create_agent` makes when it decides to build the node.
+
+    Renaming or dropping `aafter_agent` would not fail anything else: the
+    middleware would still compile, still declare the marker, and quietly stop
+    reconciling -- which is the state this fix was written to leave.
+    """
+    from langchain.agents.middleware import AgentMiddleware
+
+    from juena.research.delivery import ResearchDeliveryMiddleware
+
+    assert ResearchDeliveryMiddleware.aafter_agent is not AgentMiddleware.aafter_agent
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_job_is_acknowledged_without_the_model_asking(
+    monkeypatch: Any,
+) -> None:
+    """Reconciliation used to need `list_research`, and the model skips it.
+
+    Observed directly: a job was delivered, read aloud, and edited by a later
+    specialist, and the next turn called no research tool at all. The row kept
+    `collected_at` null, so `GET /research` went on reporting `ready: 1` for a
+    result the user already had.
+    """
+    from juena.research import delivery
+
+    stamped: list = []
+
+    async def fake_mark_collected_many(job_ids: Any) -> int:
+        stamped.extend(job_ids)
+        return len(stamped)
+
+    monkeypatch.setattr(delivery.jobs, "mark_collected_many", fake_mark_collected_many)
+
+    job_id = uuid4()
+    await delivery.ResearchDeliveryMiddleware().aafter_agent(
+        {"delivered_research_job_ids": [str(job_id)], "messages": []},
+        SimpleNamespace(),
+    )
+
+    assert stamped == [job_id]
+
+
+def test_a_malformed_marker_is_skipped_rather_than_ending_the_turn() -> None:
+    from juena.research.delivery import delivered_uuids
+
+    job_id = uuid4()
+
+    assert delivered_uuids({"delivered_research_job_ids": [str(job_id), "not-an-id"]}) == [job_id]
+    assert delivered_uuids({}) == []
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_delivered_nothing_opens_no_transaction() -> None:
+    """The hook runs on every turn, so the common case must cost nothing.
+
+    There is no database configured here: reaching the session factory at all
+    would raise rather than return 0.
+    """
+    from juena.research import jobs
+
+    assert await jobs.mark_collected_many([]) == 0
