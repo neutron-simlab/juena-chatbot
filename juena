@@ -51,9 +51,30 @@ API_PORT="${API_PORT:-8080}"
 UI_PORT="${UI_PORT:-9501}"
 
 POSTGRES_VOLUME="juena-chatbot-postgres"
+
+# Where this script keeps the pids and logs of the processes it starts on the
+# host rather than in Compose. Named `.sandbox` because the sandbox worker was
+# the first of them; juena-rag is the second.
 SANDBOX_RUNTIME_DIR="${SANDBOX_RUNTIME_DIR:-$REPO_ROOT/.sandbox}"
 SANDBOX_WORKER_PID_FILE="$SANDBOX_RUNTIME_DIR/worker.pid"
 SANDBOX_WORKER_LOG_FILE="$SANDBOX_RUNTIME_DIR/worker.log"
+RAG_PID_FILE="$SANDBOX_RUNTIME_DIR/juena-rag.pid"
+RAG_LOG_FILE="$SANDBOX_RUNTIME_DIR/juena-rag.log"
+
+# juena-rag is a separate repository holding the vectors, and it runs on the
+# *host* -- not in this stack -- which is why JUENA_RAG_URL names
+# `host.docker.internal` and not a Compose service. Assumed to sit beside this
+# repository; set JUENA_RAG_REPO if you keep it somewhere else.
+JUENA_RAG_REPO="${JUENA_RAG_REPO:-$(cd -- "$REPO_ROOT/.." && pwd)/juena-rag}"
+
+# Which address the service listens on. Loopback by default: it is an
+# unauthenticated search API over the whole corpus and does not belong on the
+# office network. Docker Desktop forwards `host.docker.internal` to the host's
+# loopback, so containers reach it anyway; a Linux host routes through the
+# bridge instead and needs JUENA_RAG_BIND=0.0.0.0. `juena rag-up` checks which
+# of the two you have rather than leaving you to find out from a chat that
+# returns no sources.
+JUENA_RAG_BIND="${JUENA_RAG_BIND:-127.0.0.1}"
 
 if [ -t 1 ]; then CYAN=$'\033[36m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 else CYAN=""; DIM=""; RESET=""; fi
@@ -256,12 +277,38 @@ configure_sandbox() {
     chmod 2770 "$SANDBOX_WORKSPACE_ROOT"
 }
 
-worker_is_running() {
-    [ -f "$SANDBOX_WORKER_PID_FILE" ] || return 1
+# Both host-side processes are tracked the same way, so the "is it alive" and
+# "stop it" rules live here once. A pid file naming a process that has since
+# exited reads as stopped, which is what makes a machine that was rebooted
+# mid-run recover by simply starting it again.
+pid_file_is_running() {
+    local pid_file="$1"
+    [ -f "$pid_file" ] || return 1
     local pid
-    read -r pid < "$SANDBOX_WORKER_PID_FILE" || return 1
+    read -r pid < "$pid_file" || return 1
     [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
+
+stop_pid_file() {
+    local pid_file="$1"
+    local name="$2"
+    if ! pid_file_is_running "$pid_file"; then
+        rm -f "$pid_file"
+        return
+    fi
+    local pid
+    read -r pid < "$pid_file"
+    kill "$pid"
+    local attempt
+    for attempt in {1..50}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -0 "$pid" 2>/dev/null && die "$name did not stop (pid $pid)"
+    rm -f "$pid_file"
+}
+
+worker_is_running() { pid_file_is_running "$SANDBOX_WORKER_PID_FILE"; }
 
 start_sandbox_worker() {
     mkdir -p "$SANDBOX_RUNTIME_DIR"
@@ -288,20 +335,7 @@ start_sandbox_worker() {
 }
 
 stop_sandbox_worker() {
-    if ! worker_is_running; then
-        rm -f "$SANDBOX_WORKER_PID_FILE"
-        return
-    fi
-    local pid
-    read -r pid < "$SANDBOX_WORKER_PID_FILE"
-    kill "$pid"
-    local attempt
-    for attempt in {1..50}; do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.1
-    done
-    kill -0 "$pid" 2>/dev/null && die "sandbox worker did not stop (pid $pid)"
-    rm -f "$SANDBOX_WORKER_PID_FILE"
+    stop_pid_file "$SANDBOX_WORKER_PID_FILE" "sandbox worker"
 }
 
 prepare_sandbox() {
@@ -366,23 +400,209 @@ cmd_postgres_reset() { ## DESTROYS development Postgres data. Needs --confirm
 }
 
 # ---------------------------------------------------------------------------
+# juena-rag, the search backend
+# ---------------------------------------------------------------------------
+#
+# Repository search is served by juena-rag and by nothing else -- the local
+# Chroma index was deleted in the cutover, so there is no fallback and a stack
+# started without this answers every repository question with no sources. It is
+# started here, before the stack, so the chatbot's startup survey finds it.
+
+# One source of truth for the port: the URL the containers are already told to
+# use. Only the port is reused -- the host part of that URL is
+# `host.docker.internal`, which means nothing outside a container.
+rag_port() {
+    local url port
+    url="$(environment_value JUENA_RAG_URL "")"
+    url="${url%/}"
+    port="${url##*:}"
+    case "$port" in
+        ''|*[!0-9]*) printf '8100\n' ;;
+        *) printf '%s\n' "$port" ;;
+    esac
+}
+
+rag_is_running() { pid_file_is_running "$RAG_PID_FILE"; }
+
+# Anything that runs inside the juena-rag repository goes through here, because
+# of one trap: `configure_development_environment` exports this repository's
+# POSTGRES_* values, and juena-rag builds its own DSN out of variables by those
+# same names. Inherited, they would aim the service at the chatbot's database on
+# :5432 instead of the corpus on :5433 -- and start a second pgvector on a port
+# already taken. VIRTUAL_ENV goes for the same reason: uv warns and ignores it,
+# but the warning is the only sign anything was wrong.
+rag_repo_env() {
+    cd "$JUENA_RAG_REPO"
+    unset POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_PORT VIRTUAL_ENV
+    # Sourced rather than read key-by-key: juena-rag's DSN is written in terms of
+    # ${POSTGRES_USER} and friends and has to be expanded, not copied literally.
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+}
+
+require_rag_repo() {
+    [ -d "$JUENA_RAG_REPO" ] \
+        || die "juena-rag is not at $JUENA_RAG_REPO. Clone it beside this repository, or set JUENA_RAG_REPO."
+    [ -f "$JUENA_RAG_REPO/.env" ] \
+        || die "$JUENA_RAG_REPO/.env is missing. Copy .env.example there -- the service needs JUENA_RAG_DSN and a Blablador key."
+}
+
+start_rag_service() {
+    local port="$1"
+    mkdir -p "$SANDBOX_RUNTIME_DIR"
+    rm -f "$RAG_PID_FILE"
+    (
+        rag_repo_env
+        nohup uv run juena-rag serve --host "$JUENA_RAG_BIND" --port "$port" \
+            >"$RAG_LOG_FILE" 2>&1 &
+        echo "$!" > "$RAG_PID_FILE"
+    )
+}
+
+# Generous, because startup is not just a socket opening: the service embeds one
+# probe string against Blablador to check the configured vector width is real,
+# and that is a round trip to Jülich before it will listen.
+wait_for_rag() {
+    local port="$1"
+    local attempt
+    for attempt in {1..60}; do
+        if curl -fsS -m 3 "http://127.0.0.1:${port}/v1/health" >/dev/null 2>&1; then
+            return
+        fi
+        rag_is_running || break
+        sleep 1
+    done
+    tail -n 30 "$RAG_LOG_FILE" >&2 || true
+    die "juena-rag did not become healthy; see $RAG_LOG_FILE"
+}
+
+# The check that actually matters, and the one whose absence hid a broken stack:
+# the chatbot reaches juena-rag from inside a container over JUENA_RAG_URL, not
+# over loopback. A service bound to 127.0.0.1 answers `wait_for_rag` on a Linux
+# host and is still unreachable from the container.
+#
+# Safe to call whenever: it says nothing unless there is really a service on the
+# host and a container running to reach it, so both `rag-up` (where the stack may
+# be down) and `up` (where it has just come up) can call it unconditionally.
+report_rag_reachability() {
+    local url
+    url="$(environment_value JUENA_RAG_URL "")"
+    [ -n "$url" ] || return 0
+    curl -fsS -m 3 "http://127.0.0.1:$(rag_port)/v1/health" >/dev/null 2>&1 || return 0
+    "${COMPOSE_DEV[@]}" ps --status running --services 2>/dev/null \
+        | grep -qx juena-chatbot || return 0
+
+    if "${COMPOSE_DEV[@]}" exec -T juena-chatbot \
+        curl -fsS -m 5 "${url%/}/v1/health" >/dev/null 2>&1; then
+        echo "${DIM}The stack reaches juena-rag at ${url}.${RESET}"
+    else
+        echo "warning: juena-rag answers on the host, but the juena-chatbot" >&2
+        echo "         container cannot reach $url -- repository search will" >&2
+        echo "         return no sources. If this is a Linux host, bind past" >&2
+        echo "         loopback:  JUENA_RAG_BIND=0.0.0.0 juena rag-up" >&2
+    fi
+}
+
+cmd_rag_up() { ## Start juena-rag and its pgvector database on the host
+    require_env
+    require_rag_repo
+    local port
+    port="$(rag_port)"
+
+    # The database first: the service opens its connection pool during startup
+    # and exits if pgvector is not there yet.
+    ( rag_repo_env && docker compose up -d --wait pgvector ) \
+        || die "juena-rag's pgvector did not start; check $JUENA_RAG_REPO/.env"
+
+    if rag_is_running; then
+        echo "juena-rag already running (pid $(<"$RAG_PID_FILE")) on :${port}"
+    elif curl -fsS -m 3 "http://127.0.0.1:${port}/v1/health" >/dev/null 2>&1; then
+        # Someone started it by hand. Left alone rather than started a second
+        # time: the new process would lose the bind and exit, while the health
+        # check below went on passing against the one already there.
+        echo "juena-rag is already serving :${port}, started outside this script."
+        echo "${DIM}'juena rag-down' will not find it; stop that process yourself.${RESET}"
+    else
+        start_rag_service "$port"
+        wait_for_rag "$port"
+        echo "juena-rag on http://127.0.0.1:${port} (pid $(<"$RAG_PID_FILE"))"
+        echo "${DIM}Log: $RAG_LOG_FILE${RESET}"
+    fi
+    report_rag_reachability
+}
+
+# `rag-up` starts the service and its database together, so stopping puts both
+# back. The container is stopped rather than removed, and the corpus lives in a
+# named volume either way -- nothing here loses the ingested chunks.
+stop_rag_stack() {
+    stop_pid_file "$RAG_PID_FILE" "juena-rag"
+    [ -d "$JUENA_RAG_REPO" ] && [ -f "$JUENA_RAG_REPO/.env" ] || return 0
+    ( rag_repo_env && docker compose stop pgvector ) \
+        || echo "warning: could not stop juena-rag's pgvector; stop it in $JUENA_RAG_REPO" >&2
+}
+
+cmd_rag_down() { ## Stop juena-rag and its pgvector database
+    stop_rag_stack
+    echo "juena-rag stopped. The corpus is kept in its volume."
+}
+
+cmd_rag_logs() { ## Follow the juena-rag service log
+    [ -f "$RAG_LOG_FILE" ] || die "no juena-rag log yet at $RAG_LOG_FILE. Run 'juena rag-up' first."
+    tail -f "$RAG_LOG_FILE"
+}
+
+# `juena up` must not fail because a sibling repository is missing or its key has
+# expired. The chatbot already degrades in exactly this case -- it keeps the
+# tools attached and reports the outage per request -- so the stack comes up and
+# says what is missing rather than refusing to start.
+start_rag_if_available() {
+    if [ ! -d "$JUENA_RAG_REPO" ]; then
+        echo "warning: juena-rag is not at $JUENA_RAG_REPO, so the stack starts" >&2
+        echo "         without repository search. Clone it beside this" >&2
+        echo "         repository, or set JUENA_RAG_REPO." >&2
+        return 0
+    fi
+    # A subshell so that a `die` inside stops juena-rag, not `juena up`.
+    ( cmd_rag_up ) || {
+        echo "warning: juena-rag did not start -- the stack is coming up without" >&2
+        echo "         repository search. See $RAG_LOG_FILE, then 'juena rag-up'." >&2
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Development stack
 # ---------------------------------------------------------------------------
 
 cmd_up() { ## Start the full development stack (build if needed)
     require_env
     prepare_sandbox
+    # Before the stack, not after: the chatbot surveys the corpus as it builds
+    # the agent, and a juena-rag that arrives late means a startup logged as
+    # degraded.
+    start_rag_if_available
     "${COMPOSE_DEV[@]}" up --build -d --remove-orphans "$@"
     wait_for_sandbox_stack
     start_sandbox_worker
+    # Only now is there a container to test from -- `start_rag_if_available` ran
+    # before the stack existed, so this is the first point the real path can be
+    # checked end to end.
+    report_rag_reachability
     echo "UI      http://localhost:${UI_PORT}"
     echo "API     http://localhost:${API_PORT}"
+    echo "Search  http://127.0.0.1:$(rag_port) (juena-rag)"
     echo "Worker  $SANDBOX_WORKER_LOG_FILE"
 }
 
 cmd_down() { ## Stop the development stack, keeping volumes
     require_env
     stop_sandbox_worker
+    # juena-rag comes down with the stack, database included: `up` started it,
+    # so `down` is what puts it back. Anything that wants the corpus on its own
+    # -- an ingestion run, juena-rag's own test suite -- starts it from that
+    # repository and is not this script's business.
+    stop_rag_stack
     "${COMPOSE_DEV[@]}" down "$@"
 }
 
@@ -408,6 +628,11 @@ cmd_ps() { ## Show development stack status
         echo "sandbox-worker: running (pid $(<"$SANDBOX_WORKER_PID_FILE"))"
     else
         echo "sandbox-worker: stopped"
+    fi
+    if rag_is_running; then
+        echo "juena-rag:      running (pid $(<"$RAG_PID_FILE")) on :$(rag_port)"
+    else
+        echo "juena-rag:      stopped -- repository search returns no sources"
     fi
 }
 
