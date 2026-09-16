@@ -26,14 +26,45 @@ def test_wheel_packages_the_complete_juena_source_tree() -> None:
 
 
 def test_container_context_keeps_prompts_and_future_specialist_skills() -> None:
-    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    """The build reads `Dockerfile.dockerignore`, and it excludes no Markdown.
 
-    assert "COPY src/ ./src/" in dockerfile
+    Since the cutover the build context is the *parent* directory, so the
+    Dockerfile can copy the sibling juena-core source. Docker then looks for an
+    ignore file named after the Dockerfile and only falls back to one at the
+    context root -- which is the parent, and has none. This repository's
+    `.dockerignore` is therefore not consulted by any build, and asserting
+    against it would guard nothing.
+
+    The old file kept the prompts through four `!` exceptions to a blanket
+    `*.md` exclusion; a fifth prompt file in a new place would have been
+    dropped silently. The replacement excludes no Markdown at all, which is
+    what this asserts.
+    """
+
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    ignore = (ROOT / "Dockerfile.dockerignore").read_text(encoding="utf-8")
+    patterns = [
+        line.strip()
+        for line in ignore.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    assert "context: .." in compose
+    assert "dockerfile: juena-chatbot/Dockerfile" in compose
+
+    # Source paths are relative to the parent directory now.
+    assert "COPY juena-chatbot/src/ ./src/" in dockerfile
+    assert "COPY juena-core/ /juena-core/" in dockerfile
     assert "COPY skills/ ./skills/" not in dockerfile
-    assert "!src/**/SUPERVISOR.md" in dockerignore
-    assert "!src/**/AGENT.md" in dockerignore
-    assert "!src/**/skills/**/*.md" in dockerignore
+
+    # Deny everything, then re-admit exactly the two repositories the build reads.
+    assert patterns[0] == "*"
+    assert "!juena-chatbot" in patterns
+    assert "!juena-core" in patterns
+    assert not [item for item in patterns if item.startswith("!")][2:]
+
+    assert not [item for item in patterns if item.lstrip("!").endswith(".md")]
 
 
 def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
