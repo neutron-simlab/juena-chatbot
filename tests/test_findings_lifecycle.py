@@ -1,10 +1,14 @@
-"""The `/findings/` hand-off contract: what crosses, what merges, what conflicts.
+"""What a background research job merges back into a conversation.
 
-Each test below stands for a way the serial happy path -- one specialist writes,
-the next one reads -- stops being the only case: a second delegation carrying the
-supervisor's private state, a background job returning a snapshot it never
-touched, two writers reaching the same path, or a crash on either side of the
-checkpoint that records delivery.
+Each test below stands for a way the serial happy path -- one specialist
+writes, the next one reads -- stops being the only case: a job returning a
+snapshot it never touched, two writers reaching the same path, or a crash on
+either side of the checkpoint that records delivery.
+
+The delegation boundary itself -- what state crosses into a specialist and what
+comes back -- moved to juena-core's `test_findings_and_delegation.py` in plan
+02/step 3, along with the reasoning those tests carried. `SpecialistDelegate`
+is core's; a background job is this application's.
 """
 
 from __future__ import annotations
@@ -12,10 +16,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.runnables import Runnable
 
-from juena_core.agents.delegation import SpecialistDelegate, with_delegation_boundary
 from juena_core.agents.findings import (
     conflict_path,
     findings_delta,
@@ -29,117 +30,6 @@ JOB = UUID("9ac5d3f2-0000-4000-8000-000000000001")
 
 def _file(content: str) -> dict:
     return {"content": content, "encoding": "utf-8"}
-
-
-class _Recorder(Runnable):
-    """Stands in for a compiled specialist and records what it was handed."""
-
-    def __init__(self, produces: dict | None = None) -> None:
-        self.received: dict | None = None
-        self._produces = produces or {}
-
-    def invoke(self, input, config=None, **kwargs):  # noqa: A002, ANN001, ANN003
-        self.received = input
-        return {
-            "messages": [AIMessage(content="<specialist_report>…</specialist_report>")],
-            "files": {**input.get("files", {}), **self._produces},
-            "sandbox_execution_events": [{"leaked": True}],
-        }
-
-    async def ainvoke(self, input, config=None, **kwargs):  # noqa: A002, ANN001, ANN003
-        return self.invoke(input, config, **kwargs)
-
-
-# --------------------------------------------------------------------------- #
-# What crosses into a specialist
-# --------------------------------------------------------------------------- #
-
-
-def test_the_supervisors_private_working_memory_does_not_reach_a_specialist() -> None:
-    """A specialist is told it cannot see the conversation. It could.
-
-    `SubAgentMiddleware` copies the parent's whole state in, and the supervisor
-    keeps evicted conversation turns under `/conversation_history/` in the same
-    `files` channel that carries findings. So the part of the conversation the
-    supervisor had already thrown away was being handed to the one agent whose
-    prompt promises it has no access to any of it.
-    """
-    inner = _Recorder()
-    delegate = SpecialistDelegate(inner, name="software-specialist")
-
-    delegate.invoke(
-        {
-            "messages": [HumanMessage("summarise the fitting code")],
-            "files": {
-                "/findings/earlier.md": _file("what the last specialist found"),
-                "/inputs/uploaded.csv": _file("q,I\n0.1,42"),
-                "/conversation_history/thread-1.md": _file("the evicted transcript"),
-                "/memories/AGENTS.md": _file("the user's saved preferences"),
-                "/scratch.txt": _file("an unmatched top-level path"),
-            },
-        }
-    )
-
-    assert set(inner.received["files"]) == {
-        "/findings/earlier.md",
-        "/inputs/uploaded.csv",
-    }
-
-
-def test_a_state_field_nobody_allowlisted_does_not_cross_either() -> None:
-    """Built from scratch rather than filtered, so new keys are absent by default.
-
-    A denylist would have to be revisited on every upstream release that adds a
-    state field; this way the next one simply does not cross until someone
-    decides it should.
-    """
-    inner = _Recorder()
-
-    SpecialistDelegate(inner, name="x").invoke(
-        {
-            "messages": [HumanMessage("go")],
-            "files": {},
-            "delivered_research_job_ids": ["a-job-id"],
-            "some_future_field": {"invented": "later"},
-        }
-    )
-
-    assert set(inner.received) == {"messages", "files"}
-
-
-def test_only_the_report_and_new_findings_come_back() -> None:
-    """The return trip is an allowlist too.
-
-    Deep Agents copies the subagent's whole state back except `messages`, so a
-    scratch file, a sandbox event, or a finding the run merely inherited all
-    reach the conversation.
-    """
-    inner = _Recorder(
-        produces={
-            "/findings/new.md": _file("what this run established"),
-            "/workspace/scratch.py": _file("disposable"),
-        }
-    )
-
-    result = SpecialistDelegate(inner, name="x").invoke(
-        {
-            "messages": [HumanMessage("go")],
-            "files": {"/findings/earlier.md": _file("inherited, untouched")},
-        }
-    )
-
-    assert set(result["files"]) == {"/findings/new.md"}
-    assert "sandbox_execution_events" not in result
-    assert result["messages"][-1].text.startswith("<specialist_report>")
-
-
-def test_registration_wraps_every_specialist() -> None:
-    wrapped = with_delegation_boundary(
-        [{"name": "a", "description": "d", "runnable": _Recorder()}]
-    )
-
-    assert isinstance(wrapped[0]["runnable"], SpecialistDelegate)
-    assert wrapped[0]["name"] == "a"
 
 
 # --------------------------------------------------------------------------- #
