@@ -46,6 +46,32 @@ shasum -a 256 uv.lock
 
 ---
 
+## 2026-09-16 — the runtime proof, with the subagent execution fix
+
+The image the four step-4 conversations were proved against. Same build shape as
+the entry below; what changed is core.
+
+| | |
+|---|---|
+| **Image ID** | `sha256:19434757dcfd3440d7e36e432a892c808819816d3273fda48082cc5347adca0b` |
+| **juena-chatbot** | `0767d3913a57f6e92807338a6179f68cfe9d3dc3`, tree clean |
+| **juena-core** | `a64c978a7d5cb03c3dfebeabddfb29ae7f10dbb3`, tree clean |
+| **juena-rag** | `b7b72954477e781c1bda0828e24c4ecf0ffbccd0`, pinned by `uv.lock` |
+| **Resolved set** | 160 packages; `uv.lock` sha256 `71b114dce71a2dfcb3234afe17078a8e30da6ee7020c276503188549511c6a7d` — unchanged from the previous entry |
+| **Credentials used** | none |
+
+Core carries one fix relative to the previous entry: sandbox `execute` was
+raising `RuntimeError: Sandbox execution requires a graph run_id` for every
+command, because the id it looked for does not exist inside a subagent — which
+is the only place that tool is ever bound. See the plan's step-4 record.
+
+The application source is identical between the two images; the commits after
+the first entry changed `./juena`, `tests/` and `src/juena/research/runner.py`,
+and only the last of those is copied in. Rebuilding from the clean commit above
+reproduced this exact image ID.
+
+---
+
 ## 2026-09-16 — the juena-core cutover, first parent-context build
 
 The first image built after juena-chatbot stopped carrying the shared
