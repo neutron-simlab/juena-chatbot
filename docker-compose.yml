@@ -42,8 +42,16 @@ services:
 
   juena-chatbot:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # The parent directory, not this one. juena-core is a sibling path
+      # dependency and a build context cannot reach outside itself, so the
+      # context has to contain both repositories.
+      #
+      # The consequence is worth knowing where the build is configured: Docker
+      # reads `juena-chatbot/Dockerfile.dockerignore` for a build whose
+      # Dockerfile is named here, and this repository's own `.dockerignore` is
+      # not consulted at all.
+      context: ..
+      dockerfile: juena-chatbot/Dockerfile
     image: juena-chatbot:latest
     container_name: juena-chatbot
     volumes:

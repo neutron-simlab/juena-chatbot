@@ -18,23 +18,38 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
+# The build context is the PARENT of this repository, not this repository, so
+# every source path below is prefixed with a repository name. It has to be:
+# juena-core is a sibling path dependency, and a build context cannot reach
+# outside itself. See docker-compose.yml's `context: ..`.
+#
+# Because the context root is the parent, Docker reads `Dockerfile.dockerignore`
+# beside this file and ignores the repository's own `.dockerignore` entirely.
+
 # Copy lockfile and project metadata first for better layer caching.
-COPY pyproject.toml uv.lock README.md ./
+COPY juena-chatbot/pyproject.toml juena-chatbot/uv.lock juena-chatbot/README.md ./
+
+# juena-core, the sibling source this application now consumes. `[tool.uv.sources]`
+# declares it as `{ path = "../juena-core" }`, and uv resolves that relative to the
+# project directory -- which is /app here, so core must land at /juena-core for the
+# sync below to find it. uv builds a wheel from this tree; nothing imports it from
+# here at runtime.
+COPY juena-core/ /juena-core/
 
 # Install locked third-party dependencies into /app/.venv.
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source code and config
-COPY src/ ./src/
-COPY app/ ./app/
-COPY config/ ./config/
+COPY juena-chatbot/src/ ./src/
+COPY juena-chatbot/app/ ./app/
+COPY juena-chatbot/config/ ./config/
 # The Streamlit theme. Resolved relative to the working directory, which is
 # where the entrypoint runs `streamlit run`, so it must land at /app/.streamlit.
-COPY .streamlit/ ./.streamlit/
-COPY main.py ./
+COPY juena-chatbot/.streamlit/ ./.streamlit/
+COPY juena-chatbot/main.py ./
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh ./
+COPY juena-chatbot/docker-entrypoint.sh ./
 
 # If the repo was checked out on Windows, make sure we don't have CRLF.
 RUN sed -i 's/\r$//' docker-entrypoint.sh

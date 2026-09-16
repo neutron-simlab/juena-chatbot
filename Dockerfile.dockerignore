@@ -1,0 +1,83 @@
+# Build-context filter for the PARENT-context build (docker-compose.yml sets
+# `context: ..` so the Dockerfile can COPY the sibling juena-core source).
+#
+# Docker looks for `<dockerfile>.dockerignore` first and only falls back to a
+# `.dockerignore` at the context root. The context root here is the parent
+# directory, which has no `.dockerignore` -- so this file is the ONLY filter in
+# effect and this repository's own `.dockerignore` is never consulted. Anything
+# missing here is sent to the daemon.
+#
+# That parent directory holds roughly nine gigabytes across a dozen unrelated
+# repositories, several of which contain real credentials in their own `.env`.
+# So the rule is deny-by-default: exclude every top-level entry, re-admit only
+# the two repositories this image is built from, then prune inside them.
+
+# 1. Everything in the parent, including unrelated repositories, loose data
+#    files and notebooks.
+*
+
+# 2. The two repositories the build reads, and nothing else.
+!juena-chatbot
+!juena-core
+
+# 3. Prune inside them. Order matters: these follow the re-admissions above, and
+#    for any given path the last matching pattern wins.
+
+# Credentials. The application reads .env at runtime from a read-only mount
+# (docker-compose.dev.yml), never from the image.
+**/.env
+**/.env.*
+**/.streamlit/secrets.toml
+**/*.pem
+**/*.key
+**/*.crt
+
+# Version control and virtual environments. The two .venv directories are about
+# half a gigabyte each and are rebuilt inside the image by `uv sync`.
+**/.git
+**/.gitignore
+**/.gitattributes
+**/.venv
+**/venv
+**/node_modules
+
+# Python build, test and tool output.
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+**/.claude
+**/.ruff_cache
+**/.mypy_cache
+**/.ipynb_checkpoints
+**/build
+**/dist
+
+# Tests. The Dockerfile copies neither repository's suite; excluding them keeps
+# the context small and keeps this honest about what ships.
+juena-chatbot/tests
+juena-core/tests
+juena-core/examples
+juena-core/scripts
+
+# Runtime state and local data. `data/` alone is the largest single directory in
+# either repository -- cloned repositories, artifacts and audit logs, all of
+# which are Docker volumes at runtime.
+juena-chatbot/data
+juena-chatbot/.sandbox
+juena-chatbot/benchmarks
+**/*.db
+**/*.sqlite
+**/*.log
+**/logs
+
+# Internal development notes. Untracked on purpose and not for distribution.
+juena-chatbot/DOCS
+
+# Editor and OS noise.
+**/.DS_Store
+**/.vscode
+**/.idea
+**/*.swp
