@@ -694,9 +694,7 @@ JUENA_CORE_REPO="${JUENA_CORE_REPO:-$REPO_ROOT/../juena-core}"
 
 cmd_check_imports() { ## Fail if juena-core reached back into an application
     if [ ! -x "$JUENA_CORE_REPO/scripts/check-imports.sh" ]; then
-        echo "warning: juena-core is not at $JUENA_CORE_REPO, so the import" >&2
-        echo "         direction was not checked. Set JUENA_CORE_REPO." >&2
-        return 0
+        die "juena-core is not at $JUENA_CORE_REPO; cannot check the import direction. Set JUENA_CORE_REPO."
     fi
     ( cd "$JUENA_CORE_REPO" && ./scripts/check-imports.sh )
 }

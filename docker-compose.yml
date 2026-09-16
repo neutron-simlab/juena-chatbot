@@ -129,6 +129,11 @@ services:
       
       # Environment settings
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      # Keep the documented one-shot SAML check executable:
+      # `AUTH_DEV_BYPASS=false ./juena up`. Compose interpolation gives an
+      # explicit shell value precedence over `.env`, and Config's dotenv load
+      # then leaves this container environment value untouched.
+      - AUTH_DEV_BYPASS=${AUTH_DEV_BYPASS:-false}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/data/logs
       - RELOAD=${RELOAD:-false}

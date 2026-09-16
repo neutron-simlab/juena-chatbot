@@ -46,10 +46,12 @@ shasum -a 256 uv.lock
 
 ---
 
-## 2026-09-16 — the runtime proof, with the subagent execution fix
+## 2026-09-16 — the client/API runtime proof, with the subagent execution fix
 
-The image the four step-4 conversations were proved against. Same build shape as
-the entry below; what changed is core.
+The image the client/API portion of the four step-4 conversations was proved
+against. Same build shape as the entry below; what changed is core. This record
+does not claim the browser-only rendering checks: those remain an acceptance
+gate in plan 02.
 
 | | |
 |---|---|
@@ -60,15 +62,14 @@ the entry below; what changed is core.
 | **Resolved set** | 160 packages; `uv.lock` sha256 `71b114dce71a2dfcb3234afe17078a8e30da6ee7020c276503188549511c6a7d` — unchanged from the previous entry |
 | **Credentials used** | none |
 
-Core carries one fix relative to the previous entry: sandbox `execute` was
-raising `RuntimeError: Sandbox execution requires a graph run_id` for every
-command, because the id it looked for does not exist inside a subagent — which
-is the only place that tool is ever bound. See the plan's step-4 record.
-
-The application source is identical between the two images; the commits after
-the first entry changed `./juena`, `tests/` and `src/juena/research/runner.py`,
-and only the last of those is copied in. Rebuilding from the clean commit above
-reproduced this exact image ID.
+Two shipped sources changed relative to the previous entry. Core fixes sandbox
+`execute`, which raised `RuntimeError: Sandbox execution requires a graph
+run_id` because the id it looked for does not exist inside a subagent — the only
+place that tool is bound. The application changes
+`src/juena/research/runner.py` so a background run supplies its own invocation
+id. The intervening `./juena` and `tests/` changes do not ship in the image.
+See the plan's Step-4 record. Rebuilding from the clean commits above reproduced
+this exact image ID.
 
 ---
 

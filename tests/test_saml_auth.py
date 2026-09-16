@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,9 @@ from juena.server.auth.saml import (
     SamlIdentity,
     SamlService,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Response:
@@ -36,6 +40,20 @@ def _service_with_client(client) -> SamlService:  # noqa: ANN001
     service.client = client
     service.config = object()
     return service
+
+
+def test_compose_forwards_the_auth_bypass_override_to_the_container() -> None:
+    """The plan's one-shot bypass-off command must beat the mounted dotenv.
+
+    Without this Compose entry, ``AUTH_DEV_BYPASS=false ./juena up`` changes
+    only the launcher's environment. The application container still reads the
+    value from ``/app/.env``, so the documented SAML gate can unknowingly run
+    with the development bypass enabled.
+    """
+
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "AUTH_DEV_BYPASS=${AUTH_DEV_BYPASS:-false}" in compose
 
 
 def test_saml_response_requires_persistent_name_id() -> None:
