@@ -10,11 +10,12 @@ requires-python = ">=3.11, <4.0"
 dependencies = [
     # The shared infrastructure: server, agent kit, persistence, client, the
     # Streamlit shell and the optional Podman sandbox. It also owns the
-    # LangChain-family version set validated together in juena-core's CP0b.
+    # LangChain-family version bounds validated together in juena-core's CP0b.
     "juena-core[ui,mcp,sandbox]",
     # Imported directly by the modules that stay in this application. Declared
-    # without bounds on purpose: core pins the set they belong to, and a second
-    # bound here could only duplicate it or contradict it. The pre-cutover
+    # without duplicate bounds on purpose: core constrains the shared framework
+    # family and this application's uv.lock pins the whole resolved set. A
+    # second framework bound here could contradict core; the pre-cutover
     # `deepagents==0.6.12` was exactly that contradiction -- unsatisfiable
     # against core's `>=0.7.13,<0.8`.
     "deepagents",

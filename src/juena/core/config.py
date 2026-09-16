@@ -119,6 +119,18 @@ class Config:
         os.getenv("SANDBOX_EXECUTION_TIMEOUT_SECONDS", "600")
     )
     SANDBOX_MAX_OUTPUT_BYTES = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "100000"))
+    # These four values are repeated by the host worker. The API uses them for
+    # the approval card and workspace admission/cleanup, so reading the same
+    # environment is what keeps what the user approves equal to what Podman
+    # actually enforces.
+    SANDBOX_CPU_LIMIT = os.getenv("SANDBOX_CPU_LIMIT", "2")
+    SANDBOX_MEMORY_LIMIT = os.getenv("SANDBOX_MEMORY_LIMIT", "4g")
+    SANDBOX_WORKSPACE_LIMIT_BYTES = int(
+        os.getenv("SANDBOX_WORKSPACE_LIMIT_BYTES", str(5 * 1024**3))
+    )
+    SANDBOX_IDLE_TTL_SECONDS = int(
+        os.getenv("SANDBOX_IDLE_TTL_SECONDS", str(24 * 3600))
+    )
     SANDBOX_ARTIFACT_ROOT = Path(
         os.getenv("SANDBOX_ARTIFACT_ROOT", str(_repo_data_dir("artifacts")))
     )
@@ -316,6 +328,17 @@ class Config:
                 errors.append("SANDBOX_EXECUTION_TIMEOUT_SECONDS must be positive")
             if cls.SANDBOX_MAX_OUTPUT_BYTES <= 0:
                 errors.append("SANDBOX_MAX_OUTPUT_BYTES must be positive")
+            if cls.SANDBOX_WORKSPACE_LIMIT_BYTES <= 0:
+                errors.append("SANDBOX_WORKSPACE_LIMIT_BYTES must be positive")
+            if cls.SANDBOX_IDLE_TTL_SECONDS <= 0:
+                errors.append("SANDBOX_IDLE_TTL_SECONDS must be positive")
+            try:
+                if float(cls.SANDBOX_CPU_LIMIT) <= 0:
+                    raise ValueError
+            except ValueError:
+                errors.append("SANDBOX_CPU_LIMIT must be a positive number")
+            if not cls.SANDBOX_MEMORY_LIMIT.strip():
+                errors.append("SANDBOX_MEMORY_LIMIT must not be empty")
 
         if (
             not cls._development
@@ -460,6 +483,10 @@ def _configure_core() -> None:
             concurrency=Config.SANDBOX_CONCURRENCY,
             execution_timeout_seconds=Config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
             max_output_bytes=Config.SANDBOX_MAX_OUTPUT_BYTES,
+            workspace_limit_bytes=Config.SANDBOX_WORKSPACE_LIMIT_BYTES,
+            idle_ttl_seconds=Config.SANDBOX_IDLE_TTL_SECONDS,
+            cpu_limit=Config.SANDBOX_CPU_LIMIT,
+            memory_limit=Config.SANDBOX_MEMORY_LIMIT,
         )
     )
 

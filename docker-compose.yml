@@ -104,6 +104,12 @@ services:
       - SANDBOX_CONCURRENCY=${SANDBOX_CONCURRENCY:-4}
       - SANDBOX_EXECUTION_TIMEOUT_SECONDS=${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-600}
       - SANDBOX_MAX_OUTPUT_BYTES=${SANDBOX_MAX_OUTPUT_BYTES:-100000}
+      # The API puts these values in the approval card and uses the workspace
+      # bounds locally; the host worker must receive the same environment.
+      - SANDBOX_CPU_LIMIT=${SANDBOX_CPU_LIMIT:-2}
+      - SANDBOX_MEMORY_LIMIT=${SANDBOX_MEMORY_LIMIT:-4g}
+      - SANDBOX_WORKSPACE_LIMIT_BYTES=${SANDBOX_WORKSPACE_LIMIT_BYTES:-5368709120}
+      - SANDBOX_IDLE_TTL_SECONDS=${SANDBOX_IDLE_TTL_SECONDS:-86400}
       - SANDBOX_ARTIFACT_ROOT=/data/artifacts
       - SANDBOX_AUDIT_FILE=/data/audit/sandbox.jsonl
       

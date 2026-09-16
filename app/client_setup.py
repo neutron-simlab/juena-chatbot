@@ -1,10 +1,10 @@
 """Client construction for the JüNA Streamlit UI.
 
-Core ships `juena_core.ui.client_setup.initialize_client`, and this application
-cannot use it: it builds a `BaseAgentClient`, while every page here also calls
-`/auth/me` and `/research`, which live on this application's subclass (00,
-decision 10). What core's version *does* settle is the two arguments it refuses
-to guess — the agent id and the timeout — and both of those answers are here.
+Core ships `juena_core.ui.client_setup.initialize_client`; this wrapper supplies
+this application's subclass because every page also calls `/auth/me` and
+`/research` (00, decision 10). The shared factory settles construction while
+the application still supplies the three things core refuses to guess: client
+class, agent id and timeout.
 
 `JUENA_AGENT_ID` stays in this application deliberately: a shared package must
 not smuggle one application's identity into another. `GET /agents` reports the
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from juena.clients.client import AgentClient
 from juena.core.config import global_config
+from juena_core.ui.client_setup import initialize_client as initialize_core_client
 
 __all__ = ["JUENA_AGENT_ID", "initialize_client"]
 
@@ -29,9 +30,10 @@ def initialize_client(
     session_token: str | None = None,
 ) -> AgentClient:
     """Initialize the JüNA client against the private API URL."""
-    return AgentClient(
-        base_url=internal_api_url,
-        agent=agent_id,
+    return initialize_core_client(
+        internal_api_url,
+        agent_id,
         session_token=session_token,
         timeout=float(global_config.TIMEOUT_SECONDS),
+        client_class=AgentClient,
     )

@@ -268,8 +268,13 @@ configure_sandbox() {
         *) export SANDBOX_WORKSPACE_ROOT="$REPO_ROOT/$workspace_root" ;;
     esac
     export DATABASE_URL="${SANDBOX_WORKER_DATABASE_URL:-$(dotenv_value SANDBOX_WORKER_DATABASE_URL)}"
-    export SANDBOX_CPU_LIMIT="${SANDBOX_CPU_LIMIT:-1}"
-    export SANDBOX_MEMORY_LIMIT="${SANDBOX_MEMORY_LIMIT:-2g}"
+    # Export one set for both consumers: Compose passes these to the API, and
+    # the host worker inherits them below. An approval card must describe the
+    # limits the worker will actually enforce.
+    export SANDBOX_CPU_LIMIT="$(environment_value SANDBOX_CPU_LIMIT 1)"
+    export SANDBOX_MEMORY_LIMIT="$(environment_value SANDBOX_MEMORY_LIMIT 2g)"
+    export SANDBOX_WORKSPACE_LIMIT_BYTES="$(environment_value SANDBOX_WORKSPACE_LIMIT_BYTES 5368709120)"
+    export SANDBOX_IDLE_TTL_SECONDS="$(environment_value SANDBOX_IDLE_TTL_SECONDS 86400)"
     [ -n "$DATABASE_URL" ] || die "SANDBOX_WORKER_DATABASE_URL is missing from .env"
     mkdir -p "$SANDBOX_WORKSPACE_ROOT"
     # setgid so that files JüNA writes as root still inherit the worker's group,
@@ -341,6 +346,32 @@ stop_sandbox_worker() {
 prepare_sandbox() {
     configure_sandbox
     podman build -t "$SANDBOX_IMAGE" -f deploy/sandbox/Dockerfile .
+}
+
+verify_sandbox_limits_agree() {
+    # The API puts these numbers on the approval card and admits jobs against
+    # them; the host worker is what Podman actually enforces. They are one
+    # exported set, so a difference here means a value stopped being passed
+    # through -- which is exactly how the card came to promise 2 vCPU / 4 GB
+    # while the worker ran 1 vCPU / 2 GB, silently, for as long as nobody
+    # compared them.
+    local key api worker mismatch=0
+    for key in SANDBOX_CPU_LIMIT SANDBOX_MEMORY_LIMIT \
+               SANDBOX_WORKSPACE_LIMIT_BYTES SANDBOX_IDLE_TTL_SECONDS; do
+        # `exec` into a restarting container prints nothing and still exits 0,
+        # so an empty answer is reported as unreadable rather than as a value.
+        # Both being empty must never read as agreement.
+        api="$("${COMPOSE_DEV[@]}" exec -T juena-chatbot printenv "$key" 2>/dev/null | tr -d '\r')"
+        worker="${!key:-}"
+        if [ -z "$api" ]; then
+            echo "  $key: unreadable in the API container (is it running?), worker '$worker'" >&2
+            mismatch=1
+        elif [ "$api" != "$worker" ]; then
+            echo "  $key: API '$api', worker '$worker'" >&2
+            mismatch=1
+        fi
+    done
+    [ "$mismatch" -eq 0 ] || die "sandbox limits disagree between the API and the worker (see above). The API takes them from docker-compose.yml, the worker from this script's exports; both read the same variables."
 }
 
 wait_for_sandbox_stack() {
@@ -585,6 +616,9 @@ cmd_up() { ## Start the full development stack (build if needed)
     "${COMPOSE_DEV[@]}" up --build -d --remove-orphans "$@"
     wait_for_sandbox_stack
     start_sandbox_worker
+    # After both exist, because it compares them: what the user is asked to
+    # approve against what the sandbox will enforce.
+    verify_sandbox_limits_agree
     # Only now is there a container to test from -- `start_rag_if_available` ran
     # before the stack existed, so this is the first point the real path can be
     # checked end to end.

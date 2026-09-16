@@ -46,6 +46,9 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
 import json
 from pathlib import Path
 from juena.core.config import global_config
+from juena_core.sandbox.config import sandbox_settings
+
+sandbox = sandbox_settings()
 
 print("JSON::" + json.dumps({
     "database_url": global_config.DATABASE_URL,
@@ -57,6 +60,10 @@ print("JSON::" + json.dumps({
     "public_url": global_config.JUENA_PUBLIC_URL,
     "ui_public_url": global_config.UI_PUBLIC_URL,
     "cookie_secure": global_config.SESSION_COOKIE_SECURE,
+    "sandbox_cpu_limit": sandbox.cpu_limit,
+    "sandbox_memory_limit": sandbox.memory_limit,
+    "sandbox_workspace_limit_bytes": sandbox.workspace_limit_bytes,
+    "sandbox_idle_ttl_seconds": sandbox.idle_ttl_seconds,
 }))
 """
     result = subprocess.run(
@@ -105,6 +112,22 @@ def test_development_url_and_cookie_defaults_remain_local() -> None:
     assert snapshot["public_url"] == "http://localhost:8080"
     assert snapshot["ui_public_url"] == "http://localhost:9501"
     assert snapshot["cookie_secure"] is False
+
+
+def test_sandbox_api_uses_the_worker_limit_environment() -> None:
+    snapshot = _load_config_snapshot(
+        {
+            "SANDBOX_CPU_LIMIT": "1.5",
+            "SANDBOX_MEMORY_LIMIT": "3g",
+            "SANDBOX_WORKSPACE_LIMIT_BYTES": "123456",
+            "SANDBOX_IDLE_TTL_SECONDS": "789",
+        }
+    )
+
+    assert snapshot["sandbox_cpu_limit"] == "1.5"
+    assert snapshot["sandbox_memory_limit"] == "3g"
+    assert snapshot["sandbox_workspace_limit_bytes"] == 123456
+    assert snapshot["sandbox_idle_ttl_seconds"] == 789
 
 
 def test_production_requires_public_https_configuration() -> None:

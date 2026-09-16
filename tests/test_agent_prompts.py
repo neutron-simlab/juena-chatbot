@@ -202,34 +202,38 @@ def test_software_prompt_explains_the_virtual_repos_route() -> None:
     assert "never use it in `execute`" in prompt
 
 
-def test_existing_path_write_overwrites_and_only_the_prompt_says_otherwise() -> None:
-    """Deep Agents 0.7 overwrites an existing path; 0.6.12 refused it.
+def test_findings_keep_create_and_edit_apart_whatever_deep_agents_does() -> None:
+    """The refusal is the backend's again, not a sentence in a prompt.
 
-    Found by the plan-02 cutover, which moved this application from
-    `deepagents==0.6.12` to the `>=0.7.13` set juena-core validated. In 0.6.12
-    `StateBackend.write` returned "... because it already exists" and told the
-    model to use `edit_file` instead, so the prompt did not have to. In 0.7.14
-    it calls `update_file_data` and returns a plain `WriteResult`.
+    Deep Agents 0.6.12 refused a `write_file` to an existing path with "...
+    because it already exists" and sent the model to `edit_file`; 0.7 made the
+    same call an upsert. The plan-02 cutover moved this application onto 0.7,
+    and `/findings/<slug>.md` accumulates across turns -- so for a short while a
+    second `write` silently replaced a finished report, with only the AGENT.md
+    sentence below standing between the model and lost evidence.
 
-    Nothing else changed, and nothing else guards it: `/findings/<slug>.md` is
-    written across turns, so a second `write` to the same path now replaces a
-    report instead of being refused. The AGENT.md sentence below is what keeps
-    that from happening, and it is load-bearing where it used to be a courtesy.
+    juena-core restored the contract where it belongs, in
+    `FindingsStateBackend.write`, so prompt text is a courtesy again rather than
+    the guard. Both halves are asserted here because the pair is the point: the
+    prompt tells the model what to do, and the backend is what makes it true.
     """
 
     import inspect
 
     from deepagents.backends.state import StateBackend
+    from juena_core.agents.backends import FindingsStateBackend
 
-    source = inspect.getsource(StateBackend.write)
-    assert "because it already exists" not in source
-    assert "update_file_data" in source
+    # Upstream still upserts -- this test is not waiting for that to change.
+    upstream = inspect.getsource(StateBackend.write)
+    assert "because it already exists" not in upstream
+    assert "update_file_data" in upstream
+
+    guarded = inspect.getsource(FindingsStateBackend.write)
+    assert "already exists" in guarded
+    assert "edit_file" in guarded
 
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
     assert "extend it with `edit_file`" in prompt
-    # Still false, and now false in the other direction: the backend does not
-    # refuse anything, so a prompt claiming it does would misdescribe the tool.
-    assert "refuses an existing one" not in prompt
 
 
 def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
