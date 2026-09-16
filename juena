@@ -688,9 +688,29 @@ cmd_ps() { ## Show development stack status
 # Tests
 # ---------------------------------------------------------------------------
 
+# Where juena-core is checked out. A sibling by default, matching the path
+# source in pyproject.toml; override if you keep it elsewhere.
+JUENA_CORE_REPO="${JUENA_CORE_REPO:-$REPO_ROOT/../juena-core}"
+
+cmd_check_imports() { ## Fail if juena-core reached back into an application
+    if [ ! -x "$JUENA_CORE_REPO/scripts/check-imports.sh" ]; then
+        echo "warning: juena-core is not at $JUENA_CORE_REPO, so the import" >&2
+        echo "         direction was not checked. Set JUENA_CORE_REPO." >&2
+        return 0
+    fi
+    ( cd "$JUENA_CORE_REPO" && ./scripts/check-imports.sh )
+}
+
 # `--extra dev` because the test tooling is an optional extra: a bare
 # `uv sync` uninstalls pytest, and without this the suite fails to start.
+#
+# The import check runs first, and deliberately from here rather than only from
+# `test-all`: it is the rule that is cheapest to keep and most expensive to have
+# broken, and nothing else enforces it. A core that imports an application still
+# passes every test in both repositories -- it just cannot be used by the second
+# one, which is discovered much later and much more expensively.
 cmd_test() { ## Run the unit suite
+    cmd_check_imports
     uv run --extra dev pytest -q --ignore=tests/test_postgres_integration.py "$@"
 }
 
