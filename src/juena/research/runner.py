@@ -135,6 +135,10 @@ async def _invoke(
             model=model,
             thread_id=thread_id,
             user_id=str(user_id),
+            # This invocation's identity, which execution evidence is scoped
+            # to. A background job has no server-built run context, so without
+            # it every specialist here would look like the same invocation.
+            run_id=f"research:{job_id}",
         ),
     )
 
