@@ -60,6 +60,7 @@ print("JSON::" + json.dumps({
     "public_url": global_config.JUENA_PUBLIC_URL,
     "ui_public_url": global_config.UI_PUBLIC_URL,
     "cookie_secure": global_config.SESSION_COOKIE_SECURE,
+    "sandbox_concurrency": sandbox.concurrency,
     "sandbox_cpu_limit": sandbox.cpu_limit,
     "sandbox_memory_limit": sandbox.memory_limit,
     "sandbox_workspace_limit_bytes": sandbox.workspace_limit_bytes,
@@ -117,6 +118,7 @@ def test_development_url_and_cookie_defaults_remain_local() -> None:
 def test_sandbox_api_uses_the_worker_limit_environment() -> None:
     snapshot = _load_config_snapshot(
         {
+            "SANDBOX_CONCURRENCY": "7",
             "SANDBOX_CPU_LIMIT": "1.5",
             "SANDBOX_MEMORY_LIMIT": "3g",
             "SANDBOX_WORKSPACE_LIMIT_BYTES": "123456",
@@ -124,6 +126,7 @@ def test_sandbox_api_uses_the_worker_limit_environment() -> None:
         }
     )
 
+    assert snapshot["sandbox_concurrency"] == 7
     assert snapshot["sandbox_cpu_limit"] == "1.5"
     assert snapshot["sandbox_memory_limit"] == "3g"
     assert snapshot["sandbox_workspace_limit_bytes"] == 123456

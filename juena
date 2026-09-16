@@ -58,6 +58,7 @@ POSTGRES_VOLUME="juena-chatbot-postgres"
 SANDBOX_RUNTIME_DIR="${SANDBOX_RUNTIME_DIR:-$REPO_ROOT/.sandbox}"
 SANDBOX_WORKER_PID_FILE="$SANDBOX_RUNTIME_DIR/worker.pid"
 SANDBOX_WORKER_LOG_FILE="$SANDBOX_RUNTIME_DIR/worker.log"
+SANDBOX_WORKER_LIMITS_FILE="$SANDBOX_RUNTIME_DIR/worker-limits.env"
 RAG_PID_FILE="$SANDBOX_RUNTIME_DIR/juena-rag.pid"
 RAG_LOG_FILE="$SANDBOX_RUNTIME_DIR/juena-rag.log"
 
@@ -331,6 +332,15 @@ start_sandbox_worker() {
         if worker_is_running; then
             sleep 1
             worker_is_running || break
+            # Record only non-secret limits. A later `juena up` may find this
+            # worker already alive; comparing against the current shell would
+            # then prove what a *new* worker would inherit, not what this one
+            # actually started with.
+            : > "$SANDBOX_WORKER_LIMITS_FILE"
+            for key in SANDBOX_CONCURRENCY SANDBOX_CPU_LIMIT SANDBOX_MEMORY_LIMIT \
+                       SANDBOX_WORKSPACE_LIMIT_BYTES SANDBOX_IDLE_TTL_SECONDS; do
+                printf '%s=%s\n' "$key" "${!key:-}" >> "$SANDBOX_WORKER_LIMITS_FILE"
+            done
             return
         fi
         sleep 0.1
@@ -341,6 +351,7 @@ start_sandbox_worker() {
 
 stop_sandbox_worker() {
     stop_pid_file "$SANDBOX_WORKER_PID_FILE" "sandbox worker"
+    rm -f "$SANDBOX_WORKER_LIMITS_FILE"
 }
 
 prepare_sandbox() {
@@ -356,22 +367,25 @@ verify_sandbox_limits_agree() {
     # while the worker ran 1 vCPU / 2 GB, silently, for as long as nobody
     # compared them.
     local key api worker mismatch=0
-    for key in SANDBOX_CPU_LIMIT SANDBOX_MEMORY_LIMIT \
+    for key in SANDBOX_CONCURRENCY SANDBOX_CPU_LIMIT SANDBOX_MEMORY_LIMIT \
                SANDBOX_WORKSPACE_LIMIT_BYTES SANDBOX_IDLE_TTL_SECONDS; do
         # `exec` into a restarting container prints nothing and still exits 0,
         # so an empty answer is reported as unreadable rather than as a value.
         # Both being empty must never read as agreement.
         api="$("${COMPOSE_DEV[@]}" exec -T juena-chatbot printenv "$key" 2>/dev/null | tr -d '\r')"
-        worker="${!key:-}"
+        worker="$(awk -v key="$key" 'index($0, key "=") == 1 {sub(/^[^=]*=/, ""); print; exit}' "$SANDBOX_WORKER_LIMITS_FILE" 2>/dev/null || true)"
         if [ -z "$api" ]; then
             echo "  $key: unreadable in the API container (is it running?), worker '$worker'" >&2
+            mismatch=1
+        elif [ -z "$worker" ]; then
+            echo "  $key: API '$api', unreadable for the running worker" >&2
             mismatch=1
         elif [ "$api" != "$worker" ]; then
             echo "  $key: API '$api', worker '$worker'" >&2
             mismatch=1
         fi
     done
-    [ "$mismatch" -eq 0 ] || die "sandbox limits disagree between the API and the worker (see above). The API takes them from docker-compose.yml, the worker from this script's exports; both read the same variables."
+    [ "$mismatch" -eq 0 ] || die "sandbox limits disagree between the API and the running worker (see above). Stop the old worker with 'juena sandbox-stop', then run 'juena up' again after correcting the environment."
 }
 
 wait_for_sandbox_stack() {
