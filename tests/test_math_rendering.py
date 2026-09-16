@@ -1,6 +1,6 @@
 """Tests for equation-markup detection and normalization helpers."""
 
-import app.math_rendering as math_rendering
+import juena_core.ui.math_rendering as math_rendering
 
 
 def test_normalize_math_markdown_rewrites_inline_alias() -> None:

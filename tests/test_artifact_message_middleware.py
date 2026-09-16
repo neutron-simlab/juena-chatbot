@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from juena.agents.loop_guard import RepeatedToolCallMiddleware
-from juena.sandbox.artifacts import (
+from juena_core.agents.loop_guard import RepeatedToolCallMiddleware
+from juena_core.artifacts import (
     ARTIFACT_MESSAGE_KEY,
     ArtifactStore,
     set_artifact_store_for_tests,
 )
-from juena.sandbox.middleware import ArtifactMessageMiddleware
+from juena_core.sandbox.middleware import ArtifactMessageMiddleware
 
 
 def _png() -> bytes:

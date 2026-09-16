@@ -7,17 +7,17 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 
-from juena.sandbox.artifacts import (
+from juena_core.artifacts import (
     MAX_UNDELIVERED_NOTICES_PER_TURN,
     ArtifactStore,
     set_artifact_store_for_tests,
 )
-from juena.sandbox.constants import (
+from juena_core.sandbox.constants import (
     MAX_IMAGE_ARTIFACTS_PER_TURN,
     MAX_RECORD_ARTIFACTS_PER_TURN,
 )
-from juena.server.api.endpoints import get_artifact
-from juena.server.auth import AuthenticatedUser
+from juena_core.server.api.endpoints import get_artifact
+from juena.server.auth import Principal
 
 
 def _png() -> bytes:
@@ -127,7 +127,7 @@ def test_image_budget_reports_its_reason(tmp_path) -> None:
 
 def test_byte_budget_rejects_an_oversized_turn(tmp_path, monkeypatch) -> None:
     """Bytes are the backstop now that downloadable files are not counted."""
-    monkeypatch.setattr("juena.sandbox.artifacts.MAX_ARTIFACT_BYTES_PER_TURN", 10)
+    monkeypatch.setattr("juena_core.artifacts.MAX_ARTIFACT_BYTES_PER_TURN", 10)
     store = _store(tmp_path)
     store.register_artifact(
         user_id="user-a",
@@ -292,8 +292,8 @@ async def test_artifact_endpoint_enforces_authenticated_owner(tmp_path) -> None:
         filename="analysis.py",
         content=b"print('ok')\n",
     )
-    owner = AuthenticatedUser(owner_id, "owner", None, None)
-    other = AuthenticatedUser(other_id, "other", None, None)
+    owner = Principal(owner_id, "owner", None, None)
+    other = Principal(other_id, "other", None, None)
 
     try:
         response = await get_artifact(ref.artifact_id, user=owner)

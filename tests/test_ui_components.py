@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from PIL import Image
 
-from juena.schema.server import ChatMessage
+from juena_core.schema.server import ChatMessage
 
 import app.ui_components as ui_components
 

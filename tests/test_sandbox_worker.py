@@ -6,9 +6,9 @@ import threading
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from juena.sandbox.executor import ContainerCleanupError, ExecutionOutcome
-from juena.sandbox.jobs import SandboxJobRecord
-from juena.sandbox.worker import RESTART_MESSAGE, SandboxWorker
+from juena_core.sandbox.executor import ContainerCleanupError, ExecutionOutcome
+from juena_core.sandbox.jobs import SandboxJobRecord
+from juena_core.sandbox.worker import RESTART_MESSAGE, SandboxWorker
 
 
 def _job(status: str = "running") -> SandboxJobRecord:

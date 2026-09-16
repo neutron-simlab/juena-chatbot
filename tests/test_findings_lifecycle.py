@@ -15,8 +15,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import Runnable
 
-from juena.agents.delegation import SpecialistDelegate, with_delegation_boundary
-from juena.agents.findings import (
+from juena_core.agents.delegation import SpecialistDelegate, with_delegation_boundary
+from juena_core.agents.findings import (
     conflict_path,
     findings_delta,
     fingerprint,

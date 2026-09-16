@@ -12,7 +12,7 @@ from typing import List
 
 import yaml
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.core.paths import repo_root
 
 logger = get_logger(__name__)

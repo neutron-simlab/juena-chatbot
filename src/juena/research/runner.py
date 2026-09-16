@@ -20,12 +20,12 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from juena.agents.findings import FindingsMap, crossing_files, findings_delta, fingerprint
-from juena.agents.specialist_outcome import outcome_verified
-from juena.core.log import get_logger
+from juena_core.agents.findings import FindingsMap, crossing_files, findings_delta, fingerprint
+from juena_core.agents.specialist_outcome import outcome_verified
+from juena_core.log import get_logger
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 
 logger = get_logger(__name__)
 
@@ -151,7 +151,7 @@ async def _run(
 ) -> None:
     """One job, from `queued` to a terminal row. Never raises."""
     try:
-        from juena.server.agent.registry import get_agent, get_agent_resources
+        from juena_core.server.agent.registry import get_agent, get_agent_resources
 
         await jobs.mark_running(job_id)
 

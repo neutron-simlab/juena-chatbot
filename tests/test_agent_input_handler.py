@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from juena.server.agent.input_handler import AgentInputHandler
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.server.agent.input_handler import AgentInputHandler
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 
 
 def test_build_run_context_puts_identity_in_config_and_context() -> None:

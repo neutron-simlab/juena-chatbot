@@ -4,7 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.messages import ChatMessage as LangchainChatMessage
 
-from juena.server.utils import langchain_to_chat_message
+from juena_core.server.utils import langchain_to_chat_message
 
 
 def test_tool_message_conversion_adds_default_tool_ui_metadata() -> None:

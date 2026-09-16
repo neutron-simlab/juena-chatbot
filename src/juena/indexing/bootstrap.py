@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.indexing.repo_config import load_repo_configs
 from juena.indexing.repo_manager import RepoManager
 

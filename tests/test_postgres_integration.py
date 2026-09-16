@@ -16,41 +16,91 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, MessagesState, START, StateGraph
 from sqlalchemy import inspect, select
 
-from juena.agents.findings import validate_findings
+from juena_core.agents.findings import validate_findings
+import dataclasses
+
+import juena_core
+import juena_core.config
+from juena_core.sandbox import config as sandbox_config
+
+# Imported for its side effect, and only here: `sandbox_jobs` joins
+# `Base.metadata` when an application enables the sandbox, which is what keeps
+# the table out of a deployment that runs no worker. Half of this module
+# exercises that queue against a real database, so it needs the table.
+import juena_core.sandbox.models  # noqa: F401  attaches sandbox_jobs
+
+from juena.agents.juena_agent import JUENA_AGENT_ID
 from juena.core.config import global_config
 from fastapi import HTTPException
 from juena.server.auth import (
-    AuthenticatedUser,
+    Principal,
     create_auth_session,
-    get_current_user,
+    session_principal,
     hash_session_token,
     revoke_auth_session,
     upsert_saml_user,
 )
-from juena.server.chat.repository import (
+from juena_core.server.chat.repository import (
     ChatNotFoundError,
     ensure_owned_chat,
     get_owned_chat,
     list_owned_chats,
     load_thread_messages,
 )
-from juena.server.api.endpoints import _authorize_thread, router as api_router
-from juena.server.chat.endpoints import router as chat_router
-from juena.server.database.checkpointer import checkpointer_lifespan
-from juena.server.database import database_lifespan, get_session_factory
+from juena_core.server.api.endpoints import build_api_router
+from juena_core.server.chat.endpoints import build_chat_router
+from juena_core.server.database.checkpointer import checkpointer_lifespan
+from juena_core.server.database.connection import database_lifespan, get_session_factory
 from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
-from juena.server.database.store import store_lifespan
-from juena.server.database.models import AuthSession, User, utc_now
+from juena_core.server.database.store import store_lifespan
+from juena_core.server.database.models import AuthSession, User, utc_now
 from juena.research import jobs as research_jobs
 from juena.research.constants import RESTART_MESSAGE as RESEARCH_RESTART_MESSAGE
-from juena.sandbox.jobs import SandboxJobs, hold_worker_lock
-from juena.sandbox.worker import RESTART_MESSAGE
+from juena_core.sandbox.jobs import SandboxJobs, hold_worker_lock
+from juena_core.sandbox.worker import RESTART_MESSAGE
 
 TEST_DATABASE_URL = os.getenv("JUENA_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
     reason="set JUENA_TEST_DATABASE_URL to run Postgres integration tests",
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_test_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point *both* configurations at the throwaway database.
+
+    There are two of them since the cutover: this application's `Config`, which
+    its own modules read, and juena_core's frozen `CoreSettings`, which is what
+    `connection.py` actually opens a pool against. Core does not read
+    `global_config` and never will -- that is the whole point of decision 1 --
+    so patching only the application's would put this suite back on the
+    developer's database, the exact regression commit `40c846b` fixed.
+
+    Autouse, because the failure is silent: the tests still pass, against the
+    wrong database, destroying rows someone was using.
+    """
+
+    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
+    monkeypatch.setattr(
+        juena_core.config,
+        "_settings",
+        dataclasses.replace(juena_core.settings(), DATABASE_URL=TEST_DATABASE_URL),
+    )
+    assert juena_core.settings().DATABASE_URL == TEST_DATABASE_URL
+
+    # The sandbox is opt-in core now, and `conftest.py` turns it off for the
+    # unit suite. This module is one of the places that turns it back on
+    # explicitly: half of it exercises the job queue.
+    monkeypatch.setattr(
+        sandbox_config,
+        "_sandbox_settings",
+        dataclasses.replace(
+            sandbox_config.sandbox_settings(),
+            enabled=True,
+            identity_secret="integration-test-secret-of-sufficient-length",
+        ),
+    )
 
 
 class _CounterState(TypedDict):
@@ -67,7 +117,6 @@ def _counter_graph(checkpointer):  # noqa: ANN001
 
 @pytest.mark.asyncio
 async def test_clean_schema_and_user_owned_chats(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan() as engine:
         async with engine.connect() as connection:
             table_names = await connection.run_sync(
@@ -105,41 +154,47 @@ async def test_clean_schema_and_user_owned_chats(monkeypatch: pytest.MonkeyPatch
                     in_response_to="request-bob",
                 ),
             )
-            chat = await ensure_owned_chat(session, alice.id, f"thread-{uuid4()}")
+            chat = await ensure_owned_chat(session, alice.id, f"thread-{uuid4()}", JUENA_AGENT_ID)
             await session.commit()
 
-            assert (await get_owned_chat(session, alice.id, chat.thread_id)).user_id == alice.id
+            assert (
+                await get_owned_chat(
+                    session, alice.id, chat.thread_id, agent_id=JUENA_AGENT_ID
+                )
+            ).user_id == alice.id
             with pytest.raises(ChatNotFoundError):
-                await get_owned_chat(session, bob.id, chat.thread_id)
+                await get_owned_chat(
+                    session, bob.id, chat.thread_id, agent_id=JUENA_AGENT_ID
+                )
 
             newer_chat = await ensure_owned_chat(
                 session,
                 alice.id,
                 f"thread-{uuid4()}",
+                JUENA_AGENT_ID,
             )
             chat.updated_at = utc_now() - timedelta(days=2)
             newer_chat.updated_at = utc_now() - timedelta(days=1)
             await session.commit()
             assert (await list_owned_chats(session, alice.id))[0].thread_id == newer_chat.thread_id
 
-            await _authorize_thread(
-                session,
-                AuthenticatedUser(alice.id, alice.saml_subject, None, None),
-                chat.thread_id,
-            )
-            assert (await list_owned_chats(session, alice.id))[0].thread_id == chat.thread_id
+            # The recency half of this test moved to juena-core, where
+            # `_authorize_thread` now lives as a closure inside
+            # `build_api_router` rather than a module-level function this could
+            # call. Core asserts it through the real route, against a real
+            # database, in `test_server_routes_postgres.py`.
 
             token = await create_auth_session(session, alice)
             await session.commit()
             stored_session = await session.get(AuthSession, hash_session_token(token))
             assert stored_session is not None
             assert stored_session.token_hash != token
-            assert (await get_current_user(session_token=token, session=session)).id == alice.id
+            assert (await session_principal(session_token=token, session=session)).id == alice.id
 
             await revoke_auth_session(session, token)
             await session.commit()
             with pytest.raises(HTTPException) as revoked:
-                await get_current_user(session_token=token, session=session)
+                await session_principal(session_token=token, session=session)
             assert revoked.value.status_code == 401
 
             expired_token = await create_auth_session(session, alice)
@@ -151,7 +206,7 @@ async def test_clean_schema_and_user_owned_chats(monkeypatch: pytest.MonkeyPatch
             expired_session.expires_at = utc_now() - timedelta(seconds=1)
             await session.commit()
             with pytest.raises(HTTPException) as expired:
-                await get_current_user(session_token=expired_token, session=session)
+                await session_principal(session_token=expired_token, session=session)
             assert expired.value.status_code == 401
 
 
@@ -166,7 +221,6 @@ def _clear_sandbox_jobs(jobs: "SandboxJobs") -> None:
 async def test_sandbox_admission_is_exact_tenant_scoped_and_leaves_no_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         jobs = SandboxJobs(TEST_DATABASE_URL, concurrency=4)
         await asyncio.to_thread(jobs.open)
@@ -217,7 +271,6 @@ async def test_sandbox_admission_is_exact_tenant_scoped_and_leaves_no_row(
 async def test_concurrent_claims_never_select_the_same_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         jobs = SandboxJobs(TEST_DATABASE_URL, concurrency=4)
         await asyncio.to_thread(jobs.open)
@@ -256,7 +309,6 @@ async def test_concurrent_claims_never_select_the_same_job(
 async def test_workspace_guard_prevents_job_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         jobs = SandboxJobs(TEST_DATABASE_URL, concurrency=4)
         await asyncio.to_thread(jobs.open)
@@ -281,7 +333,6 @@ async def test_workspace_guard_prevents_job_admission(
 async def test_stale_jobs_are_not_claimed_and_restart_fails_all_active_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         jobs = SandboxJobs(TEST_DATABASE_URL, concurrency=4)
         await asyncio.to_thread(jobs.open)
@@ -334,7 +385,6 @@ async def test_stale_jobs_are_not_claimed_and_restart_fails_all_active_rows(
 async def test_worker_lock_is_exclusive_and_visible_to_the_application(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         jobs = SandboxJobs(TEST_DATABASE_URL, concurrency=4)
         await asyncio.to_thread(jobs.open)
@@ -363,7 +413,6 @@ async def test_worker_lock_is_exclusive_and_visible_to_the_application(
 async def test_chat_and_agent_endpoints_enforce_thread_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         factory = get_session_factory()
         async with factory() as session:
@@ -388,24 +437,34 @@ async def test_chat_and_agent_endpoints_enforce_thread_ownership(
             await session.commit()
 
         users = {
-            "alice": AuthenticatedUser(alice_model.id, alice_model.saml_subject, None, None),
-            "bob": AuthenticatedUser(bob_model.id, bob_model.saml_subject, None, None),
+            "alice": alice_model,
+            "bob": bob_model,
         }
         active = {"name": "alice"}
 
-        async def authenticated_user() -> AuthenticatedUser:
+        async def authenticated_user() -> Principal:
             return users[active["name"]]
 
+        # Core's routers are factories over the identity dependency now, so
+        # the dependency is visible in the signature rather than assumed. The
+        # override still keys on the same callable object.
         app = FastAPI()
-        app.include_router(chat_router)
-        app.include_router(api_router)
-        app.dependency_overrides[get_current_user] = authenticated_user
+        app.include_router(build_chat_router(session_principal))
+        app.include_router(build_api_router(session_principal))
+        app.dependency_overrides[session_principal] = authenticated_user
         transport = httpx.ASGITransport(app=app)
         thread_id = f"owned-{uuid4()}"
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             created = await client.post(
                 "/chats",
-                json={"thread_id": thread_id, "title": "Alice chat"},
+                # `agent_id` is required on the wire now: a conversation that
+                # does not know its own graph is the bug decision 13 exists to
+                # prevent, and this application has exactly one answer.
+                json={
+                    "thread_id": thread_id,
+                    "agent_id": JUENA_AGENT_ID,
+                    "title": "Alice chat",
+                },
             )
             assert created.status_code == 201
 
@@ -430,7 +489,6 @@ async def test_chat_history_is_served_from_the_checkpointer(
 ) -> None:
     """`/chats/{id}` reads the checkpointer, so no second message store is needed."""
 
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     thread_id = f"history-{uuid4()}"
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -460,7 +518,7 @@ async def test_chat_history_is_served_from_the_checkpointer(
                         in_response_to="request-history",
                     ),
                 )
-                await ensure_owned_chat(session, owner.id, thread_id)
+                await ensure_owned_chat(session, owner.id, thread_id, JUENA_AGENT_ID)
                 await session.commit()
 
             messages = await load_thread_messages(thread_id)
@@ -475,7 +533,6 @@ async def test_chat_history_is_served_from_the_checkpointer(
 async def test_checkpoint_and_agents_file_survive_resource_recreation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     thread_id = f"thread-{uuid4()}"
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -538,7 +595,6 @@ async def test_research_concurrency_is_per_user_and_counts_only_active_jobs(
     Each background job is a full specialist loop against the model provider, so
     an agent that can start them freely can also spend freely.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         alice = await _research_user("research-alice")
         bob = await _research_user("research-bob")
@@ -593,7 +649,6 @@ async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
     `FOR KEY SHARE` is compatible with the foreign key's own lock and conflicts
     only with `FOR UPDATE`, so it blocks the explicit lock and nothing else.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         alice = await _research_user("research-lock-alice")
         bob = await _research_user("research-lock-bob")
@@ -651,7 +706,6 @@ async def test_a_job_left_running_by_a_dead_process_is_failed_not_left_hanging(
     A row still reading `running` would make `check_research` say "still working"
     forever, which is the one answer that is never true.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         user = await _research_user("research-orphan")
         thread = f"thread-{uuid4()}"
@@ -680,7 +734,6 @@ async def test_a_collected_result_is_never_reported_twice(
     Without `collected_at` the supervisor would re-report the same finished job
     on every following turn.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         user = await _research_user("research-collect")
         thread = f"thread-{uuid4()}"
@@ -720,7 +773,6 @@ async def test_bulk_acknowledgement_stamps_once_and_leaves_other_jobs_alone(
     collected job would move `collected_at` forward on every turn -- and it must
     touch nothing outside the ids it was given.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         user = await _research_user("research-bulk-collect")
         thread = f"thread-{uuid4()}"
@@ -768,7 +820,6 @@ async def test_findings_survive_postgres_with_their_full_file_data_shape(
     alongside it, because a conflict cannot be detected without the revision the
     job read.
     """
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         user = await _research_user("research-shape")
         thread = f"thread-{uuid4()}"
@@ -805,7 +856,6 @@ async def test_findings_survive_postgres_with_their_full_file_data_shape(
 async def test_one_users_research_is_invisible_to_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(global_config, "DATABASE_URL", TEST_DATABASE_URL)
     async with database_lifespan():
         alice = await _research_user("research-owner")
         bob = await _research_user("research-intruder")

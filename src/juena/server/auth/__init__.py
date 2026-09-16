@@ -1,23 +1,27 @@
-"""Authentication, session, and SAML integration."""
+"""Authentication, session, and SAML integration.
 
-from juena.server.auth.session import (
+The session store and the `Principal` are core's; the SAML service provider and
+the translation into a principal are this application's. See `auth/principal.py`.
+"""
+
+from juena.server.auth.principal import (
     SESSION_COOKIE_NAME,
-    AuthenticatedUser,
+    Principal,
     create_auth_session,
-    get_current_user,
     hash_session_token,
     revoke_auth_session,
     revoke_sessions_for_subject,
+    session_principal,
     upsert_saml_user,
 )
 
 __all__ = [
     "SESSION_COOKIE_NAME",
-    "AuthenticatedUser",
+    "Principal",
     "create_auth_session",
-    "get_current_user",
     "hash_session_token",
     "revoke_auth_session",
     "revoke_sessions_for_subject",
+    "session_principal",
     "upsert_saml_user",
 ]

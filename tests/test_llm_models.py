@@ -1,6 +1,6 @@
 """Tests for supported LLM model catalogs."""
 
-from juena.schema.llm_models import (
+from juena_core.schema.llm_models import (
     BlabladorModelName,
     Provider,
     get_blablador_model_display_name,

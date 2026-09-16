@@ -3,10 +3,13 @@ from pathlib import Path
 from typing import Dict
 from dotenv import load_dotenv
 
+import juena_core
+from juena_core.sandbox.config import SandboxRuntimeSettings, configure_sandbox
+
 from juena.core.paths import repo_root
 
 
-from juena.schema.llm_models import BlabladorModelName as _BlabladorModelName
+from juena_core.schema.llm_models import BlabladorModelName as _BlabladorModelName
 
 # Keep the built-in default in step with the enum the UI filters against.
 _BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.GPT_OSS.value
@@ -237,7 +240,7 @@ class Config:
         Returns:
             Dict mapping provider names to availability status
         """
-        from juena.schema.llm_models import Provider
+        from juena_core.schema.llm_models import Provider
 
         return {p.value: cls._check_provider_available(p.value) for p in Provider}
 
@@ -392,3 +395,73 @@ class Config:
 
 
 global_config = Config.initialize()
+
+
+def _configure_core() -> None:
+    """Hand the validated values to juena_core, once, at import time.
+
+    **After `initialize()`, never before.** `validate_required()` may still
+    move `DEFAULT_PROVIDER`, `DEFAULT_MODEL` and `FALLBACK_PROVIDER` when the
+    configured provider has no credentials; configuring core first would cache
+    models built from the values it rejected.
+
+    This is the whole of 00-BOUNDARY.md decision 1 in practice: `Config` keeps
+    its `os.getenv` calls and its `validate_required()`, which knows about
+    SAML, production HTTPS and this deployment's sandbox, and core is handed a
+    frozen value object instead of being taught to read an environment.
+    """
+
+    juena_core.configure(
+        juena_core.CoreSettings(
+            OPENAI_API_KEY=Config.OPENAI_API_KEY,
+            BLABLADOR_API_KEY=Config.BLABLADOR_API_KEY,
+            BLABLADOR_BASE_URL=Config.BLABLADOR_BASE_URL,
+            MAX_TOKENS=Config.MAX_TOKENS,
+            TIMEOUT_SECONDS=Config.TIMEOUT_SECONDS,
+            MAX_RETRIES=Config.MAX_RETRIES,
+            DEFAULT_PROVIDER=Config.DEFAULT_PROVIDER,
+            DEFAULT_MODEL=Config.DEFAULT_MODEL,
+            OPENAI_AVAILABLE_MODELS=Config.OPENAI_AVAILABLE_MODELS,
+            BLABLADOR_AVAILABLE_MODELS=Config.BLABLADOR_AVAILABLE_MODELS,
+            OPENAI_DEFAULT_MODEL=Config.OPENAI_DEFAULT_MODEL,
+            BLABLADOR_DEFAULT_MODEL=Config.BLABLADOR_DEFAULT_MODEL,
+            STREAM_TOOL_PAYLOADS=Config.STREAM_TOOL_PAYLOADS,
+            DATABASE_URL=Config.DATABASE_URL,
+            DATABASE_POOL_MAX_SIZE=Config.DATABASE_POOL_MAX_SIZE,
+            SESSION_TTL_HOURS=Config.SESSION_TTL_HOURS,
+            SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE,
+            FALLBACK_PROVIDER=Config.FALLBACK_PROVIDER,
+            # Core names this after what it times, not after where it runs:
+            # a specialist's execution tool, whichever backend serves it.
+            EXECUTE_TIMEOUT_SECONDS=Config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
+            ARTIFACT_ROOT=Config.SANDBOX_ARTIFACT_ROOT,
+            AUDIT_FILE=Config.SANDBOX_AUDIT_FILE,
+            LOG_LEVEL=Config.LOG_LEVEL,
+            LOG_DIR=Path(Config.LOG_DIR),
+            # Both are facts about this deployment, and both are true: the API
+            # binds SERVER_HOST and Compose publishes 8080. They exist so core
+            # can refuse to pair a fixed, unauthenticated principal with a
+            # reachable API -- which is not this application, since every route
+            # here authenticates a real SAML session.
+            BIND_HOST=Config.SERVER_HOST,
+            API_PUBLISHED=True,
+        )
+    )
+
+    # Separate object, separate call: the sandbox is an optional core feature,
+    # and its settings must not become fields every consumer of core carries.
+    # Importing the `sandbox_jobs` model -- and so creating the table -- happens
+    # inside this call, and only when it is enabled.
+    configure_sandbox(
+        SandboxRuntimeSettings(
+            enabled=Config.SANDBOX_ENABLED,
+            identity_secret=Config.SANDBOX_IDENTITY_SECRET,
+            workspace_root=Config.SANDBOX_WORKSPACE_ROOT,
+            concurrency=Config.SANDBOX_CONCURRENCY,
+            execution_timeout_seconds=Config.SANDBOX_EXECUTION_TIMEOUT_SECONDS,
+            max_output_bytes=Config.SANDBOX_MAX_OUTPUT_BYTES,
+        )
+    )
+
+
+_configure_core()

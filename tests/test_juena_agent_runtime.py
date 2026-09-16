@@ -20,8 +20,9 @@ from langgraph.store.memory import InMemoryStore
 
 from juena.agents import juena_agent
 from juena.indexing.bootstrap import RepositorySurvey
-from juena.agents import specialist_runtime
-from juena.agents.loop_guard import RepeatedToolCallMiddleware
+from juena_core.agents import specialist_runtime
+import juena_core
+from juena_core.agents.loop_guard import RepeatedToolCallMiddleware
 from juena.agents.specialists.neutron_research.agent import (
     NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION,
     NEUTRON_RESEARCH_SPECIALIST_NAME,
@@ -30,8 +31,22 @@ from juena.agents.specialists.software.agent import (
     SOFTWARE_SPECIALIST_DESCRIPTION,
     SOFTWARE_SPECIALIST_NAME,
 )
-from juena.server.agent import registry as agent_registry
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
+from juena_core.server.agent import registry as agent_registry
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext, RuntimeModelMiddleware
+
+
+def _override_fallback_provider(monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+    """Point core's `settings().FALLBACK_PROVIDER` at *provider* for one test.
+
+    `build_fallback_models` reads core settings rather than this application's
+    `global_config`, and `CoreSettings` is frozen and configured once per
+    process, so the seam to patch is the accessor the module actually calls.
+    """
+
+    import dataclasses
+
+    patched = dataclasses.replace(juena_core.settings(), FALLBACK_PROVIDER=provider)
+    monkeypatch.setattr(specialist_runtime, "settings", lambda: patched)
 
 
 def test_fallback_models_do_not_depend_on_request_model(
@@ -40,7 +55,7 @@ def test_fallback_models_do_not_depend_on_request_model(
     built: list[dict[str, str]] = []
     sentinel = object()
 
-    monkeypatch.setattr(specialist_runtime.global_config, "FALLBACK_PROVIDER", "openai")
+    _override_fallback_provider(monkeypatch, "openai")
     monkeypatch.setattr(specialist_runtime, "get_available_providers", lambda: {"openai": True})
     monkeypatch.setattr(specialist_runtime, "get_default_model", lambda _provider: "gpt-test")
     monkeypatch.setattr(
@@ -56,7 +71,7 @@ def test_fallback_models_do_not_depend_on_request_model(
 def test_fallback_models_are_skipped_when_provider_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(specialist_runtime.global_config, "FALLBACK_PROVIDER", "openai")
+    _override_fallback_provider(monkeypatch, "openai")
     monkeypatch.setattr(specialist_runtime, "get_available_providers", lambda: {"openai": False})
 
     assert specialist_runtime.build_fallback_models() == []
@@ -309,7 +324,9 @@ async def test_supervisor_assembly_registers_both_specialists(
         "build_neutron_research_specialist",
         fake_build_neutron_specialist,
     )
-    monkeypatch.setattr(juena_agent, "create_summarization_middleware", lambda *_args: object())
+    monkeypatch.setattr(
+        specialist_runtime, "create_summarization_middleware", lambda *_args: object()
+    )
     monkeypatch.setattr(juena_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(juena_agent, "get_checkpointer", lambda: object())
     monkeypatch.setattr(juena_agent, "get_store", lambda: store)
@@ -427,7 +444,9 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
     monkeypatch.setattr(juena_agent, "build_fallback_models", lambda: [])
     monkeypatch.setattr(juena_agent, "build_software_specialist", build_software)
     monkeypatch.setattr(juena_agent, "build_neutron_research_specialist", build_neutron)
-    monkeypatch.setattr(juena_agent, "create_summarization_middleware", lambda *_args: object())
+    monkeypatch.setattr(
+        specialist_runtime, "create_summarization_middleware", lambda *_args: object()
+    )
     monkeypatch.setattr(juena_agent, "create_agent", lambda **_kwargs: FakeGraph())
     monkeypatch.setattr(juena_agent, "get_checkpointer", lambda: object())
     monkeypatch.setattr(juena_agent, "get_store", InMemoryStore)
@@ -444,19 +463,30 @@ def test_only_the_juena_agent_is_registered() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shutdown_agents_closes_cached_context7_clients() -> None:
-    closed: list[bool] = []
+async def test_shutdown_closes_an_instance_that_asks_to_be_closed() -> None:
+    """Core's shutdown contract is one method on the instance object.
 
-    class FakeClient:
+    It used to reach for `instance.context7_runtime.client` by name, which only
+    ever made sense for this application. The replacement is generic: if the
+    object an agent factory returned exposes `aclose()` or `close()`, shutdown
+    calls it.
+
+    JüNA's own `JuenaAgentResources` exposes neither, and that is now correct
+    rather than an omission -- `juena_core.mcp` hands back tools that reopen
+    their own connection per call, so Context7 has no client whose lifetime
+    must match the agent's. The retired adapter had no `close`/`aclose` either,
+    so this shutdown was already doing nothing for it.
+    """
+
+    closed: list[str] = []
+
+    class ResourcesThatHoldSomething:
         async def aclose(self) -> None:
-            closed.append(True)
+            closed.append("closed")
 
     existing = dict(agent_registry._agent_registry)
     agent_registry._agent_registry.clear()
-    agent_registry._agent_registry["test-agent"] = (
-        SimpleNamespace(context7_runtime=SimpleNamespace(client=FakeClient())),
-        object(),
-    )
+    agent_registry._agent_registry["test-agent"] = (ResourcesThatHoldSomething(), object())
 
     try:
         await agent_registry.shutdown_agents()
@@ -464,4 +494,5 @@ async def test_shutdown_agents_closes_cached_context7_clients() -> None:
         agent_registry._agent_registry.clear()
         agent_registry._agent_registry.update(existing)
 
-    assert closed == [True]
+    assert closed == ["closed"]
+    assert not hasattr(juena_agent.JuenaAgentResources, "aclose")

@@ -5,47 +5,30 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.memory import MemoryMiddleware
-from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-from deepagents.middleware.subagents import SubAgentMiddleware
-from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
 from langgraph.graph.state import CompiledStateGraph
 
-from juena.agents.ask_user import build_ask_user_tool
-from juena.agents.backends import (
-    JUENA_MEMORY_SYSTEM_PROMPT,
-    MEMORY_SOURCES,
-    SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS,
-    build_supervisor_backend,
-)
-from juena.agents.delegation import with_delegation_boundary
+from juena_core.agents.ask_user import build_ask_user_tool
+from juena_core.agents.backends import build_supervisor_backend
+from juena_core.agents.specialist_outcome import ArtifactMessageMiddleware
 from juena.research.delivery import ResearchDeliveryMiddleware
-from juena.agents.loop_guard import RepeatedToolCallMiddleware
-from juena.agents.specialist_runtime import (
-    SUPERVISOR_MODEL_CALL_LIMIT,
-    SUPERVISOR_TOOL_CALL_LIMIT,
+from juena_core.agents.specialist_runtime import (
     build_fallback_models,
+    build_supervisor_middleware,
     load_markdown,
-    resilience_middleware,
 )
 from juena.agents.specialists.neutron_research import build_neutron_research_specialist
 from juena.agents.specialists.software import build_software_specialist
-from juena.core.llms_providers import build_chat_model
-from juena.core.log import get_logger
+from juena_core.llms_providers import build_chat_model
+from juena_core.log import get_logger
 from juena.indexing.bootstrap import survey_repositories
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.rag_index import build_search_index
-from juena.schema.llm_models import BlabladorModelName, Provider
-from juena.server.agent.registry import register_agent_factory
-from juena.server.agent.runtime_model_middleware import (
-    RuntimeModelContext,
-    RuntimeModelMiddleware,
-)
-from juena.sandbox.middleware import ArtifactMessageMiddleware
-from juena.server.database.checkpointer import get_checkpointer
-from juena.server.database.store import get_store
+from juena_core.schema.llm_models import BlabladorModelName, Provider
+from juena_core.server.agent.registry import register_agent_factory
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.server.database.checkpointer import get_checkpointer
+from juena_core.server.database.store import get_store
 from juena.tools.context7 import Context7Runtime, load_optional_context7_tools
 from juena.tools.research import build_research_tools
 from juena.tools.tavily import load_optional_tavily_tool
@@ -149,43 +132,33 @@ async def create_juena_agent(
 
     store = get_store()
     supervisor_backend = build_supervisor_backend(store)
-    middleware = [
-        # No TodoListMiddleware: the supervisor delegates, synthesizes, and asks.
-        # A todo list adds no evidence and is the tool models most readily loop on.
-        RepeatedToolCallMiddleware(),
-        FilesystemMiddleware(
-            backend=supervisor_backend,
-            custom_tool_descriptions=SUPERVISOR_FILESYSTEM_TOOL_DESCRIPTIONS,
-        ),
-        MemoryMiddleware(
-            backend=supervisor_backend,
-            sources=MEMORY_SOURCES,
-            system_prompt=JUENA_MEMORY_SYSTEM_PROMPT,
-        ),
+    # The stack, its order and the no-TodoListMiddleware decision are core's --
+    # middleware order is nesting order, and a core test asserts these class
+    # names in sequence. `extra` is its one splice point, between
+    # PatchToolCallsMiddleware and RuntimeModelMiddleware, which is exactly
+    # where these two used to sit.
+    middleware = build_supervisor_middleware(
+        backend=supervisor_backend,
+        summarizer_model=summarizer_model,
+        fallback_models=fallback_models,
+        # Raw specialists: `build_supervisor_middleware` applies the delegation
+        # boundary itself. See `juena_core.agents.delegation` for what may cross
+        # into a specialist and what comes back.
+        subagents=specialists,
         # SUPERVISOR.md owns delegation policy. The task tool itself still carries
-        # the authoritative specialist names and descriptions.
-        SubAgentMiddleware(
-            backend=supervisor_backend,
-            # Not the compiled graphs directly: see `juena.agents.delegation` for
-            # what may cross into a specialist and what comes back.
-            subagents=with_delegation_boundary(specialists),
-            system_prompt=None,
-            task_description=SUPERVISOR_TASK_DESCRIPTION,
+        # the authoritative specialist names and descriptions. Passed explicitly
+        # because core's default says "execution evidence" where this one says
+        # "sandbox exit codes", and prompt text does not change in this cutover.
+        task_description=SUPERVISOR_TASK_DESCRIPTION,
+        extra=(
+            ArtifactMessageMiddleware(),
+            # Declares the private, checkpointed marker `check_research` stamps
+            # when it delivers a background result, which is what makes
+            # collection idempotent across a crash on either side of the
+            # checkpoint. Research is this application's, not core's.
+            ResearchDeliveryMiddleware(),
         ),
-        create_summarization_middleware(summarizer_model, supervisor_backend),
-        PatchToolCallsMiddleware(),
-        ArtifactMessageMiddleware(),
-        # Declares the private, checkpointed marker `check_research` stamps when
-        # it delivers a background result, which is what makes collection
-        # idempotent across a crash on either side of the checkpoint.
-        ResearchDeliveryMiddleware(),
-        RuntimeModelMiddleware(),
-        *resilience_middleware(
-            fallback_models,
-            model_call_limit=SUPERVISOR_MODEL_CALL_LIMIT,
-            tool_call_limit=SUPERVISOR_TOOL_CALL_LIMIT,
-        ),
-    ]
+    )
 
     agent = create_agent(
         model=supervisor_model,

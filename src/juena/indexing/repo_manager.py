@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.indexing.repo_config import RepoConfig, load_repo_configs
 from juena.core.paths import repo_root
 

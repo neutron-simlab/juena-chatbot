@@ -8,13 +8,13 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.types import Interrupt, Overwrite
 
-from juena.server.streaming import events
-from juena.server.streaming.handlers import (
+from juena_core.server.streaming import events
+from juena_core.server.streaming.handlers import (
     extract_update_messages,
     is_subagent_namespace,
     token_text,
 )
-from juena.server.streaming.processor import StreamEventProcessor
+from juena_core.server.streaming.processor import StreamEventProcessor
 
 
 def _processor(**kwargs: Any) -> StreamEventProcessor:

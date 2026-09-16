@@ -14,15 +14,16 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
-from juena.agents.findings import FindingsMap
-from juena.core.log import get_logger
+from juena_core.agents.findings import FindingsMap
+from juena_core.log import get_logger
 from juena.research.constants import (
     ACTIVE_STATUSES,
     RESTART_MESSAGE,
     ResearchStatus,
 )
-from juena.server.database.connection import get_session_factory
-from juena.server.database.models import ResearchJob, User
+from juena_core.server.database.connection import get_session_factory
+from juena_core.server.database.models import User
+from juena.server.database.models import ResearchJob
 
 logger = get_logger(__name__)
 

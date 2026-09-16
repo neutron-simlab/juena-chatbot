@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from juena.sandbox.workspace import (
+from juena_core.sandbox.workspace import (
     DIRECTORY_MODE,
     WorkspaceOwnershipError,
     WorkspaceStore,

@@ -1,8 +1,14 @@
-"""Tests for optional Context7 MCP tool loading."""
+"""Tests for optional Context7 MCP tool loading.
+
+The transport moved to `juena_core.mcp` during the plan-02 cutover, so what is
+this application's -- and what these tests cover -- is the *config it builds*
+and the policy that a missing key or an unreachable server costs a capability
+rather than raising. The `MCPAdapter` lifecycle itself is measured in core's
+`tests/cp0b/` against a real FastMCP server.
+"""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -32,64 +38,59 @@ async def test_load_optional_context7_tools_loads_remote_tools(
 ) -> None:
     tool_a = object()
     tool_b = object()
-    created: dict[str, Any] = {}
+    discovered: dict[str, Any] = {}
 
     class StubConfig:
         CONTEXT7_API_KEY = "ctx-key"
         CONTEXT7_MCP_URL = "https://example.com/mcp"
         CONTEXT7_TIMEOUT_SECONDS = 45
 
-    class FakeMultiServerMCPClient:
-        def __init__(self, config: dict[str, Any]) -> None:
-            created["config"] = config
-
-        async def get_tools(self) -> list[object]:
-            return [tool_a, tool_b]
+    async def fake_discover(target: Any, *, label: str) -> list[object]:
+        discovered["target"] = target
+        discovered["label"] = label
+        return [tool_a, tool_b]
 
     monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
-    monkeypatch.setattr(context7_module, "_get_mcp_client_class", lambda: FakeMultiServerMCPClient)
+    monkeypatch.setattr(context7_module, "discover_optional_tools", fake_discover)
 
     runtime = await context7_module.load_optional_context7_tools()
 
     assert runtime is not None
     assert runtime.tools == [tool_a, tool_b]
-    assert isinstance(runtime.client, FakeMultiServerMCPClient)
-    assert created["config"] == {
-        "context7": {
-            "transport": "streamable_http",
-            "url": "https://example.com/mcp",
-            "headers": {"CONTEXT7_API_KEY": "ctx-key"},
-            "timeout": timedelta(seconds=45),
+    assert discovered["label"] == "Context7"
+    # FastMCP's `MCPConfig`: servers under `mcpServers`, the transport inferred
+    # from the entry rather than named, and a plain number of seconds.
+    assert discovered["target"] == {
+        "mcpServers": {
+            "context7": {
+                "url": "https://example.com/mcp",
+                "headers": {"CONTEXT7_API_KEY": "ctx-key"},
+                "timeout": 45,
+            }
         }
     }
 
 
 @pytest.mark.asyncio
-async def test_load_optional_context7_tools_logs_warning_and_returns_none_on_failure(
+async def test_an_unreachable_context7_costs_a_capability_not_a_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    warnings: list[str] = []
+    """The optional-integration policy, which is this application's choice.
+
+    Core offers both: `discover_tools` raises for an integration that *is* the
+    product, `discover_optional_tools` returns None for one that is not.
+    Context7 is the second, so the supervisor is built with one tool fewer.
+    """
 
     class StubConfig:
         CONTEXT7_API_KEY = "ctx-key"
         CONTEXT7_MCP_URL = "https://example.com/mcp"
         CONTEXT7_TIMEOUT_SECONDS = 30
 
-    class FakeMultiServerMCPClient:
-        def __init__(self, config: dict[str, Any]) -> None:
-            self.config = config
-
-        async def get_tools(self) -> list[object]:
-            raise RuntimeError("boom")
-
-    def fake_warning(message: str, *args: Any) -> None:
-        warnings.append(message % args if args else message)
+    async def unreachable(target: Any, *, label: str) -> None:
+        return None
 
     monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
-    monkeypatch.setattr(context7_module, "_get_mcp_client_class", lambda: FakeMultiServerMCPClient)
-    monkeypatch.setattr(context7_module.logger, "warning", fake_warning)
+    monkeypatch.setattr(context7_module, "discover_optional_tools", unreachable)
 
-    runtime = await context7_module.load_optional_context7_tools()
-
-    assert runtime is None
-    assert warnings == ["Failed to load Context7 MCP tools: boom"]
+    assert await context7_module.load_optional_context7_tools() is None

@@ -13,15 +13,15 @@ from uuid import uuid4
 import pytest
 from requests.exceptions import RequestException
 
-from juena.sandbox.executor import (
+from juena_core.sandbox.executor import (
     ContainerCleanupError,
     JOB_ID_LABEL,
     MANAGED_LABEL,
     PodmanExecutor,
     SandboxSettings,
 )
-from juena.sandbox.jobs import SandboxJobRecord
-from juena.sandbox.workspace import WorkspaceStore
+from juena_core.sandbox.jobs import SandboxJobRecord
+from juena_core.sandbox.workspace import WorkspaceStore
 
 
 def _executor(tmp_path) -> PodmanExecutor:
@@ -206,7 +206,7 @@ def test_worker_reports_every_kind_of_filtered_output(tmp_path, monkeypatch) -> 
     executor = _executor(tmp_path)
     job = _job()
     output_dir = executor.workspaces.workspace_dir(job.workspace_id) / "outputs"
-    monkeypatch.setattr("juena.sandbox.workspace.MAX_FILE_ARTIFACT_BYTES", 4)
+    monkeypatch.setattr("juena_core.sandbox.workspace.MAX_FILE_ARTIFACT_BYTES", 4)
 
     class ArtifactContainer(_Container):
         def start(self) -> None:

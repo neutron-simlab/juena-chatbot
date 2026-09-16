@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from juena.research import jobs
-from juena.server.auth import AuthenticatedUser, get_current_user
-from juena.server.chat.repository import ChatNotFoundError, get_owned_chat
-from juena.server.database import get_db_session
+from juena.server.auth import Principal, session_principal
+from juena_core.server.chat.repository import ChatNotFoundError, get_owned_chat
+from juena_core.server.database.connection import get_db_session
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/research", tags=["research"])
 @router.get("")
 async def list_research(
     thread_id: str = Query(..., description="The conversation to report on"),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: Principal = Depends(session_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     """Uncollected research on one thread, plus how many are ready.
@@ -30,7 +30,10 @@ async def list_research(
     the user does not own must 404 whether or not any research exists on it.
     """
     try:
-        await get_owned_chat(session, user.id, thread_id)
+        # `agent_id=None` deliberately: this route is addressed by thread, it
+        # runs no graph, and core makes the argument mandatory-but-nullable so
+        # that a route which *does* run one cannot skip the check by omission.
+        await get_owned_chat(session, user.id, thread_id, agent_id=None)
     except ChatNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Chat not found") from exc
 

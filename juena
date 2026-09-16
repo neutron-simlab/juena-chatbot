@@ -317,7 +317,7 @@ start_sandbox_worker() {
     fi
     rm -f "$SANDBOX_WORKER_PID_FILE"
 
-    PYTHONDONTWRITEBYTECODE=1 nohup uv run python -m juena.sandbox.worker \
+    PYTHONDONTWRITEBYTECODE=1 nohup uv run python -m juena_core.sandbox.worker \
         >"$SANDBOX_WORKER_LOG_FILE" 2>&1 &
     echo "$!" > "$SANDBOX_WORKER_PID_FILE"
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from juena.server.agent import runtime_model_middleware as middleware_module
+from juena_core.server.agent import runtime_model_middleware as middleware_module
 
 
 class _FakeRequest:

@@ -16,6 +16,17 @@ os.environ["SANDBOX_ENABLED"] = "false"
 os.environ["SANDBOX_STARTER_PREVIEW"] = "false"
 os.environ["LANGSMITH_TRACING"] = "false"
 
+# Configure juena_core once, for the whole suite, after the overrides above.
+#
+# Before the cutover this happened by accident: `juena.core.log` imported
+# `Config` at module scope and `get_logger` was imported nearly everywhere, so
+# importing almost any juena module read `.env`. Core deliberately does not do
+# that -- `import juena_core` must work on a laptop with no environment at all
+# -- so configuration is now an explicit act, performed by whoever starts a
+# process. `main.py`, `juena.server.service` and `app/streamlit_app.py` each
+# import this module; the test suite is the fourth entry point and says so here.
+import juena.core.config  # noqa: E402,F401  calls juena_core.configure()
+
 
 @pytest.fixture()
 def tmp_repo(tmp_path: Path):

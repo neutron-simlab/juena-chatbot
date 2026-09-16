@@ -41,12 +41,12 @@ from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from juena.agents.findings import (
+from juena_core.agents.findings import (
     FindingsMap,
     conflict_path,
     validate_findings,
 )
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.research import jobs
 
 logger = get_logger(__name__)

@@ -8,28 +8,34 @@ description = "A general-purpose chatbot template for building LangGraph-based c
 readme = "README.md"
 requires-python = ">=3.11, <4.0"
 dependencies = [
-    "langchain[openai]>=1.0.0",
-    "langchain-openai>=1.0.0",
-    "langchain-tavily",
-    "langchain-mcp-adapters>=0.1.9",
-    "langgraph>=1.0.0",
-    "deepagents==0.6.12",
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "httpx>=0.25.0",
-    "httpx-sse>=0.4.0",
-    "sse-starlette>=2.0.0",
-    # 1.53 is the floor for `st.chat_input(max_upload_size=...)`, used by the composer.
+    # The shared infrastructure: server, agent kit, persistence, client, the
+    # Streamlit shell and the optional Podman sandbox. It also owns the
+    # LangChain-family version set validated together in juena-core's CP0b.
+    "juena-core[ui,mcp,sandbox]",
+    # Imported directly by the modules that stay in this application. Declared
+    # without bounds on purpose: core pins the set they belong to, and a second
+    # bound here could only duplicate it or contradict it. The pre-cutover
+    # `deepagents==0.6.12` was exactly that contradiction -- unsatisfiable
+    # against core's `>=0.7.13,<0.8`.
+    "deepagents",
+    "langchain",
+    "langchain-core",
+    "langgraph",
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "httpx-sse",
+    "sqlalchemy[asyncio]",
+    "pydantic",
+    "pyyaml",
+    "pillow",
+    # 1.53 is the floor for `st.chat_input(max_upload_size=...)`, used by the
+    # composer. This application's own floor, not core's.
     "streamlit>=1.53.0",
-    "pydantic[all]>=2.11.2,<3.0.0",
+    # Neither of these is core's: web search and SAML are JüNA's alone.
+    "langchain-tavily",
     "python-dotenv>=1.0.0",
-    "langgraph-checkpoint-postgres==3.1.0",
-    "psycopg[binary,pool]==3.3.4",
-    "sqlalchemy[asyncio]==2.0.48",
     "pysaml2==7.5.4",
-    "pyyaml>=6.0",
-    "pillow>=10.0",
-    "podman>=5.8.0",
     # The retrieval store, over HTTP. The `client` extra is httpx only -- no
     # database driver and no embedder, because the service does both.
     "juena-rag[client] @ git+https://github.com/neutron-simlab/juena-rag.git",
@@ -45,6 +51,12 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# A sibling directory, not a remote (D7). The lock fixes the third-party set;
+# it cannot hash a path dependency, so which core bytes are installed is
+# recorded instead -- a clean core tree and its commit SHA in the build record.
+[tool.uv.sources]
+juena-core = { path = "../juena-core" }
 
 [tool.hatch.metadata]
 # juena-rag is installed straight from git -- it is not on PyPI, and hatchling

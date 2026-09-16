@@ -1,31 +1,33 @@
-"""
-FastAPI service for Chatbot Template.
+"""The JüNA FastAPI application: core's factory, plus what is JüNA's alone.
 
-This module sets up the FastAPI application and registers all endpoint routers.
+The routes, the streaming vocabulary, the lifespans and the identity seam are
+`juena_core.server.service.create_app`'s. What is passed in here is everything
+core cannot know: SAML, background research, the Podman sandbox, and the one
+paragraph of prompt text that closes a staged-input manifest.
 """
 
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
 from langchain_core._api import LangChainBetaWarning
 
+from juena_core.log import get_logger
+from juena_core.sandbox.approvals import SandboxResumeInput, register_sandbox_interrupt
+from juena_core.sandbox.runtime import (
+    delete_runtime_workspace,
+    sandbox_lifespan,
+    stage_runtime_inputs,
+)
+from juena_core.server.service import StreamPolicy, ThreadWorkspace, create_app
+
 from juena.core.config import global_config
-from juena.core.log import get_logger
 from juena.research import jobs as research_jobs
 from juena.research import runner as research_runner
-from juena.schema.server import HealthStatus
-from juena.server.agent.registry import shutdown_agents
-from juena.server.api.endpoints import router as api_router
 from juena.server.auth.endpoints import router as auth_router
-from juena.server.chat.endpoints import router as chat_router
-from juena.server.research.endpoints import router as research_router
-from juena.server.database.checkpointer import checkpointer_lifespan
-from juena.server.database import database_lifespan
+from juena.server.auth.principal import session_principal
 from juena.server.auth.saml import saml_lifespan
-from juena.server.database.store import store_lifespan
-from juena.sandbox.runtime import close_sandbox_jobs
+from juena.server.research.endpoints import router as research_router
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API
@@ -35,9 +37,18 @@ from juena.sandbox.runtime import close_sandbox_jobs
 # so every invocation would 404.
 import juena.agents.juena_agent  # noqa: F401  register the JüNA supervisor
 
+# The same trap, one layer down: a model class nobody imports is never created
+# by `create_all`, and that fails at the first write rather than at startup.
+import juena.server.database.models  # noqa: F401  add this app's two tables
+
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)
 logger.info("Service logging initialized")
+
+# Rendering an approval card and resuming from one have a single owner and a
+# single lifetime, so they register together -- and before the app is built,
+# because an unregistered kind can neither be shown nor answered.
+register_sandbox_interrupt()
 
 
 @asynccontextmanager
@@ -59,48 +70,52 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """
-    Initialize Postgres, the LangGraph checkpointer, and SAML metadata.
-    """
-    # No index to warm any more: Chroma loaded HNSW segments lazily and needed a
-    # head start, and juena-rag opens its own pool at its own startup.
-    async with database_lifespan():
-        async with checkpointer_lifespan():
-            async with store_lifespan():
-                async with _optional_saml_lifespan():
-                    # Background research runs in this process's event loop, so
-                    # any row still marked active belongs to a process that is
-                    # gone. Sweep before anything can create a new one.
-                    await research_jobs.fail_orphans()
-                    try:
-                        yield
-                    finally:
-                        # In-flight research first: it holds the database and
-                        # the model clients the steps below are about to close.
-                        await research_runner.shutdown()
-                        # Agents hold network clients (Context7 MCP) for the
-                        # process lifetime; close them before the pools go.
-                        await shutdown_agents()
-                        close_sandbox_jobs()
+async def _research_lifespan() -> AsyncGenerator[None, None]:
+    """Sweep abandoned research at startup; stop in-flight research at shutdown."""
+
+    # Background research runs in this process's event loop, so any row still
+    # marked active belongs to a process that is gone. Sweep before anything
+    # can create a new one.
+    await research_jobs.fail_orphans()
+    try:
+        yield
+    finally:
+        # In-flight research holds the database and the model clients that
+        # `shutdown_agents` is about to close, and core closes those only once
+        # every extra lifespan here has unwound.
+        await research_runner.shutdown()
 
 
-app = FastAPI(
-    lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
+app = create_app(
+    principal=session_principal,
+    # Core's clarification arm plus the sandbox approval arm; the union exists
+    # because `/resume` must accept exactly the kinds this deployment raises.
+    resume_input=SandboxResumeInput,
+    # Graph state is enough for a model reading `/inputs` through a file tool.
+    # It is not enough for a container process that opens them, so the same
+    # files are copied into the thread's sandbox mount.
+    workspace=ThreadWorkspace(
+        stage=stage_runtime_inputs,
+        delete=delete_runtime_workspace,
+    ),
+    # Without the allowlist the sandbox's status events stop reaching the UI;
+    # without the silent tool, `execute` stdout starts reaching the transcript.
+    stream_policy=StreamPolicy(
+        custom_event_types=frozenset({"sandbox_status"}),
+        silent_tools=frozenset({"execute"}),
+    ),
+    # This block is prepended to the *supervisor's* turn, and the supervisor
+    # has neither `/repos` nor Context7 -- it cannot read `/inputs` either.
+    # So the instruction is about what to put in an objective, not what to do.
+    closing_note=(
+        "The user's pasted or uploaded materials are staged under `/inputs`. Name "
+        "the paths a specialist needs in the objective you send it."
+    ),
+    title="juena",
+    version="0.1.0",
+    extra_routers=(auth_router, research_router),
+    # Entered in this order inside the database lifespan, and unwound in
+    # reverse before it: SAML metadata first, then research, which needs the
+    # database the outer lifespan opened.
+    extra_lifespans=(_optional_saml_lifespan, _research_lifespan, sandbox_lifespan),
 )
-
-app.include_router(auth_router)
-app.include_router(chat_router)
-app.include_router(research_router)
-app.include_router(api_router)
-
-
-@app.get("/health")
-async def health_check() -> HealthStatus:
-    """Health check endpoint."""
-    return HealthStatus(
-        status="ok", version="0.1.0", details={"service": "juena", "uptime": "running"}
-    )

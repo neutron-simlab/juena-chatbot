@@ -1,6 +1,6 @@
 """Tests for the authenticated Streamlit chat-storage adapter."""
 
-from app.chat_storage import get_chat_storage
+from juena_core.ui.chat_storage import get_chat_storage
 from juena.clients.client import AgentClient
 
 

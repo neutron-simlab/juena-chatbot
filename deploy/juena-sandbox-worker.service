@@ -15,7 +15,7 @@ Environment=HOME=/var/lib/juena-sandbox
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=SANDBOX_PODMAN_URI=unix:///run/user/%U/podman/podman.sock
 WorkingDirectory=/opt/juena
-ExecStart=/opt/juena/.venv/bin/python -m juena.sandbox.worker
+ExecStart=/opt/juena/.venv/bin/python -m juena_core.sandbox.worker
 Restart=on-failure
 RestartSec=5
 Delegate=yes

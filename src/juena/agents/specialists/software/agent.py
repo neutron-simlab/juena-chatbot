@@ -10,8 +10,8 @@ from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 
-from juena.agents.ask_user import build_ask_user_tool
-from juena.agents.specialist_runtime import (
+from juena_core.agents.ask_user import build_ask_user_tool
+from juena_core.agents.specialist_runtime import (
     UNATTENDED_NOTICE,
     build_specialist_backend,
     build_specialist_middleware,
@@ -22,11 +22,13 @@ from juena.agents.specialists.software.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
 )
-from juena.core.llms_providers import build_chat_model
-from juena.schema.agents import SpecialistReport
-from juena.schema.llm_models import BlabladorModelName, Provider
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext
-from juena.sandbox.runtime import build_sandbox_backend, sandbox_enabled
+from juena_core.llms_providers import build_chat_model
+from juena_core.schema.agents import SpecialistReport
+from juena_core.schema.llm_models import BlabladorModelName, Provider
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.sandbox.approvals import sandbox_interrupt_on
+from juena_core.sandbox.middleware import SandboxExecutionMiddleware
+from juena_core.sandbox.runtime import build_sandbox_backend, sandbox_enabled
 from juena.sandbox.software import repository_software_prompt
 
 SOFTWARE_SPECIALIST_NAME = "software-specialist"
@@ -149,7 +151,11 @@ def build_software_specialist(
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
             specialist_name=SOFTWARE_SPECIALIST_NAME,
-            enable_execution_approval=can_execute,
+            # An all-or-nothing pair core refuses to take half of: the
+            # middleware records what ran, the policy is what stops it running
+            # unapproved. `unattended` drops both, together with `ask_user`.
+            execution_middleware=(SandboxExecutionMiddleware(),) if can_execute else (),
+            interrupt_on=sandbox_interrupt_on() if can_execute else None,
             unattended=unattended,
         ),
         response_format=ToolStrategy(SpecialistReport),

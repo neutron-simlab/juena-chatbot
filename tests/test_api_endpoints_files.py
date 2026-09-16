@@ -11,9 +11,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from juena.server.api import endpoints as api_endpoints
-from juena.server.auth import AuthenticatedUser, get_current_user
-from juena.server.database import get_db_session
+from juena_core.server.api import endpoints as api_endpoints
+from juena.server.auth import Principal, session_principal
+from juena_core.server.database.connection import get_db_session
 
 
 class _FakeAgent:
@@ -51,9 +51,10 @@ async def test_authorizing_a_message_touches_chat_recency(monkeypatch) -> None:
             committed = True
 
     monkeypatch.setattr(api_endpoints, "ensure_owned_chat", fake_ensure_owned_chat)
-    user = AuthenticatedUser(
+    user = Principal(
         id=UUID("00000000-0000-0000-0000-000000000001"),
-        saml_subject="subject-1",
+        subject="subject-1",
+        issuer="https://idp.example/entity",
         email=None,
         display_name=None,
     )
@@ -70,10 +71,11 @@ def _build_test_client(monkeypatch) -> TestClient:  # noqa: ANN001
     app.include_router(api_endpoints.router)
     user_id = UUID("00000000-0000-0000-0000-000000000001")
 
-    async def fake_user() -> AuthenticatedUser:
-        return AuthenticatedUser(
+    async def fake_user() -> Principal:
+        return Principal(
             id=user_id,
-            saml_subject="subject-1",
+            subject="subject-1",
+        issuer="https://idp.example/entity",
             email=None,
             display_name=None,
         )
@@ -90,7 +92,7 @@ def _build_test_client(monkeypatch) -> TestClient:  # noqa: ANN001
     async def fake_get_owned_chat(session, owner_id, thread_id):  # noqa: ANN001
         return SimpleNamespace(thread_id=thread_id, user_id=owner_id)
 
-    app.dependency_overrides[get_current_user] = fake_user
+    app.dependency_overrides[session_principal] = fake_user
     app.dependency_overrides[get_db_session] = fake_session
     monkeypatch.setattr(api_endpoints, "ensure_owned_chat", fake_ensure_owned_chat)
     monkeypatch.setattr(api_endpoints, "get_owned_chat", fake_get_owned_chat)

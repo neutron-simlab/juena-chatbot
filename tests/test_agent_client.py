@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from juena.clients import client as client_module
-from juena.schema.server import ChatMessage
+from juena_core.schema.server import ChatMessage
 
 
 class _FakeResponse:

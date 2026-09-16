@@ -9,8 +9,8 @@ from unittest.mock import Mock
 import pytest
 
 from juena.clients.client import AgentClientError
-from juena.schema.server import ChatMessage
-from juena.schema.upload_limits import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
+from juena_core.schema.server import ChatMessage
+from juena_core.schema.upload_limits import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
 from app.starters import StarterPrompt as chat_interface_starter
 
 
@@ -98,10 +98,10 @@ class _FakePlaceholder:
 
 
 def _import_chat_interface(monkeypatch):
-    fake_chat_storage = types.ModuleType("app.chat_storage")
+    fake_chat_storage = types.ModuleType("juena_core.ui.chat_storage")
     fake_chat_storage.get_chat_storage = Mock()
 
-    monkeypatch.setitem(sys.modules, "app.chat_storage", fake_chat_storage)
+    monkeypatch.setitem(sys.modules, "juena_core.ui.chat_storage", fake_chat_storage)
     sys.modules.pop("app.chat_interface", None)
     return importlib.import_module("app.chat_interface")
 

@@ -12,18 +12,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from juena.core.config import global_config
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.server.auth import (
     SESSION_COOKIE_NAME,
-    AuthenticatedUser,
+    Principal,
     create_auth_session,
-    get_current_user,
+    session_principal,
     revoke_auth_session,
     revoke_sessions_for_subject,
     upsert_saml_user,
 )
-from juena.server.database import get_db_session
-from juena.server.database.models import SamlLoginRequest, utc_now
+from juena_core.server.database.connection import get_db_session
+from juena_core.server.database.models import utc_now
+from juena.server.database.models import SamlLoginRequest
 from juena.server.auth.saml import (
     PERSISTENT_NAME_ID_FORMAT,
     SamlAuthenticationError,
@@ -197,7 +198,7 @@ async def assertion_consumer_service(
 
 
 @router.get("/me")
-async def current_user(user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, str | None]:
+async def current_user(user: Principal = Depends(session_principal)) -> dict[str, str | None]:
     return {
         "id": str(user.id),
         "email": user.email,
@@ -208,7 +209,7 @@ async def current_user(user: AuthenticatedUser = Depends(get_current_user)) -> d
 @router.post("/logout")
 async def logout(
     request: Request,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: Principal = Depends(session_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
     """Application logout for the signed-in UI session.
@@ -221,7 +222,7 @@ async def logout(
         await session.commit()
     redirect_url: str | None = None
     try:
-        redirect_url = get_saml_service().prepare_logout(user.saml_subject)
+        redirect_url = get_saml_service().prepare_logout(user.subject)
     except Exception:
         # Local session revocation is authoritative and must succeed even when
         # the IdP has no SLO endpoint or rejects the logout request.

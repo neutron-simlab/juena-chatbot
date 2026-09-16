@@ -16,12 +16,12 @@ import pytest
 from deepagents.backends import CompositeBackend
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from juena.agents import specialist_runtime
-from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware, outcome_verified
+from juena_core.agents import specialist_runtime
+from juena_core.agents.specialist_outcome import SpecialistOutcomeMiddleware, outcome_verified
 from juena.agents.specialists.neutron_research import agent as neutron_agent
 from juena.agents.specialists.software import agent as software_agent
 from juena.research import runner
-from juena.sandbox import runtime as sandbox_runtime
+from juena_core.sandbox import runtime as sandbox_runtime
 from juena.tools.research import _summary, build_research_tools
 
 
@@ -240,9 +240,12 @@ class _RefusingSandbox:
 
 def _findings_backends(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
     """The specialist backend in both shapes: with a sandbox and without."""
-    from juena.agents.specialist_runtime import build_specialist_backend
+    from juena_core.agents.specialist_runtime import build_specialist_backend
 
-    monkeypatch.setattr(sandbox_runtime.global_config, "SANDBOX_ENABLED", True)
+    # The sandbox is an opt-in core feature now, with its own settings object
+    # rather than a flag on this application's `Config`. `build_sandbox_backend`
+    # asks `sandbox_enabled()`, so that is the seam a test overrides.
+    monkeypatch.setattr(sandbox_runtime, "sandbox_enabled", lambda: True)
     monkeypatch.setattr(
         sandbox_runtime, "RuntimePodmanSandboxBackend", lambda: _RefusingSandbox()
     )
@@ -351,8 +354,8 @@ def test_a_finding_written_by_one_delegation_reaches_the_next() -> None:
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.store.memory import InMemoryStore
 
-    from juena.agents.backends import build_supervisor_backend
-    from juena.agents.specialist_runtime import build_specialist_backend
+    from juena_core.agents.backends import build_supervisor_backend
+    from juena_core.agents.specialist_runtime import build_specialist_backend
 
     path = "/findings/jscatter-example-plot.md"
 
@@ -618,7 +621,7 @@ async def test_a_terminal_job_already_delivered_is_never_handed_over_twice(
 
 def _runner_harness(monkeypatch: Any, result: dict) -> list[dict]:
     """Wire `runner._run` to a specialist returning `result`, recording outcomes."""
-    from juena.server.agent import registry
+    from juena_core.server.agent import registry
 
     outcomes: list[dict] = []
 

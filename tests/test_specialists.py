@@ -11,15 +11,15 @@ from deepagents.middleware.skills import SkillsMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import RunnableLambda
 
-from juena.agents import specialist_runtime
-from juena.agents.loop_guard import RepeatedToolCallMiddleware
-from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
+from juena_core.agents import specialist_runtime
+from juena_core.agents.loop_guard import RepeatedToolCallMiddleware
+from juena_core.agents.specialist_outcome import SpecialistOutcomeMiddleware
 from juena.agents.specialists.neutron_research import agent as neutron_agent
 from juena.agents.specialists.neutron_research import tools as neutron_tools
 from juena.agents.specialists.software import agent as software_agent
 from juena.agents.specialists.software import tools as software_tools
-from juena.schema.llm_models import BlabladorModelName
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.schema.llm_models import BlabladorModelName
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 
 
 def test_software_tool_assembly_owns_repository_and_context7(

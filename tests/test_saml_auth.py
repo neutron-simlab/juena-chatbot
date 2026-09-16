@@ -302,7 +302,7 @@ async def test_logout_without_idp_redirect_returns_browser_to_ui(monkeypatch) ->
 
     response = await auth_endpoints.logout(
         request=SimpleNamespace(cookies={"juena_session": "opaque-token"}),
-        user=SimpleNamespace(saml_subject="subject-1"),
+        user=SimpleNamespace(subject="subject-1"),
         session=session,
     )
 

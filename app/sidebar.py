@@ -11,14 +11,14 @@ import textwrap
 
 from juena.clients.client import AgentAuthenticationError, AgentClientError
 from juena.core.config import global_config
-from juena.schema.llm_models import Provider
-from juena.core.llms_providers import (
+from juena_core.schema.llm_models import Provider
+from juena_core.llms_providers import (
     get_available_providers,
     get_available_models,
     get_default_model,
     format_model_name,
 )
-from app.chat_storage import Chat, ChatStorage
+from juena_core.ui.chat_storage import Chat, ChatStorage
 
 
 _assets_dir = Path(__file__).parent / "assets"

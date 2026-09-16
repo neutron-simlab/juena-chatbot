@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from juena.agents.specialist_runtime import PromptResourceError, load_markdown
+from juena_core.agents.specialist_runtime import PromptResourceError, load_markdown
 from juena.agents.specialists.neutron_research.agent import build_neutron_research_prompt
 from juena.agents.specialists.software.agent import build_software_prompt
 from juena.sandbox.software import repository_software_requirements
@@ -58,11 +58,11 @@ def test_delegation_rules_live_where_they_are_read_rather_than_twice() -> None:
 def test_the_memory_contract_is_stated_only_in_the_memory_block() -> None:
     """`MemoryMiddleware` injects it on every call, so the prompt need not repeat it."""
 
-    from juena.agents.backends import JUENA_MEMORY_SYSTEM_PROMPT
+    from juena_core.agents.backends import MEMORY_SYSTEM_PROMPT
 
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
-    assert "Never paste the complete memory file" in JUENA_MEMORY_SYSTEM_PROMPT
+    assert "Never paste the complete memory file" in MEMORY_SYSTEM_PROMPT
     assert "paste the complete memory file" not in prompt
 
 
@@ -101,7 +101,7 @@ def test_the_re_asking_rule_has_one_owner_and_covers_rewording() -> None:
     issuing two byte-different calls; nothing mechanical catches that. The rule
     lives on the tool all three agents share, rather than in three prompts.
     """
-    from juena.agents.ask_user import ASK_USER_DESCRIPTION
+    from juena_core.agents.ask_user import ASK_USER_DESCRIPTION
 
     # Collapsed, so the assertion does not depend on where the text wraps.
     description = " ".join(ASK_USER_DESCRIPTION.split())
@@ -178,7 +178,7 @@ def test_undelivered_files_are_reported_by_the_server_not_by_the_model() -> None
     """
     import inspect
 
-    from juena.agents import specialist_outcome
+    from juena_core.agents import specialist_outcome
 
     source = inspect.getsource(specialist_outcome.SpecialistOutcomeMiddleware)
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
@@ -202,17 +202,34 @@ def test_software_prompt_explains_the_virtual_repos_route() -> None:
     assert "never use it in `execute`" in prompt
 
 
-def test_existing_path_write_behaviour_is_left_to_the_backend() -> None:
-    """`StateBackend.write` returns the instruction itself, at the moment it applies."""
+def test_existing_path_write_overwrites_and_only_the_prompt_says_otherwise() -> None:
+    """Deep Agents 0.7 overwrites an existing path; 0.6.12 refused it.
 
-    from deepagents.backends.state import StateBackend
+    Found by the plan-02 cutover, which moved this application from
+    `deepagents==0.6.12` to the `>=0.7.13` set juena-core validated. In 0.6.12
+    `StateBackend.write` returned "... because it already exists" and told the
+    model to use `edit_file` instead, so the prompt did not have to. In 0.7.14
+    it calls `update_file_data` and returns a plain `WriteResult`.
+
+    Nothing else changed, and nothing else guards it: `/findings/<slug>.md` is
+    written across turns, so a second `write` to the same path now replaces a
+    report instead of being refused. The AGENT.md sentence below is what keeps
+    that from happening, and it is load-bearing where it used to be a courtesy.
+    """
 
     import inspect
 
-    assert "because it already exists" in inspect.getsource(StateBackend.write)
-    assert "refuses an existing one" not in load_markdown(
-        "juena.agents.specialists.software", "AGENT.md"
-    )
+    from deepagents.backends.state import StateBackend
+
+    source = inspect.getsource(StateBackend.write)
+    assert "because it already exists" not in source
+    assert "update_file_data" in source
+
+    prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
+    assert "extend it with `edit_file`" in prompt
+    # Still false, and now false in the other direction: the backend does not
+    # refuse anything, so a prompt claiming it does would misdescribe the tool.
+    assert "refuses an existing one" not in prompt
 
 
 def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:

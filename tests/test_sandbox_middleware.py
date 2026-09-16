@@ -8,9 +8,9 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from PIL import Image
 
-from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.sandbox.middleware import SandboxExecutionMiddleware
-from juena.sandbox.evidence import record_sandbox_execution
+from juena_core.artifacts import ArtifactStore, set_artifact_store_for_tests
+from juena_core.sandbox.middleware import SandboxExecutionMiddleware
+from juena_core.sandbox.evidence import record_sandbox_execution
 
 
 def _png() -> bytes:

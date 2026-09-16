@@ -10,11 +10,11 @@ from uuid import uuid4
 
 import pytest
 
-from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.sandbox.backend import PodmanSandboxBackend
-from juena.sandbox.constants import ACTIVE_STATUSES
-from juena.sandbox.jobs import SandboxJobs
-from juena.sandbox.workspace import WorkspaceStore
+from juena_core.artifacts import ArtifactStore, set_artifact_store_for_tests
+from juena_core.sandbox.backend import PodmanSandboxBackend
+from juena_core.sandbox.constants import ACTIVE_STATUSES
+from juena_core.sandbox.jobs import SandboxJobs
+from juena_core.sandbox.workspace import WorkspaceStore
 
 DATABASE_URL = os.getenv("JUENA_TEST_DATABASE_URL")
 WORKSPACE_ROOT = os.getenv("JUENA_TEST_WORKSPACE_ROOT")

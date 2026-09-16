@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import app.sidebar as sidebar
-from app.chat_storage import Chat
+from app.client_setup import JUENA_AGENT_ID
+from juena_core.ui.chat_storage import Chat
 from juena.clients.client import AgentAuthenticationError, AgentClientError
 
 
@@ -31,7 +32,11 @@ def _make_session_state(**overrides) -> _SessionState:
 
 
 def test_format_chat_history_title_uses_thread_id_for_new_chat() -> None:
-    chat = Chat(thread_id="087b99c9-1234-5678-90ab-cdef12345678", title="New Chat")
+    chat = Chat(
+        thread_id="087b99c9-1234-5678-90ab-cdef12345678",
+        agent_id=JUENA_AGENT_ID,
+        title="New Chat",
+    )
 
     display, full = sidebar._format_chat_history_title(chat)
 
@@ -42,6 +47,7 @@ def test_format_chat_history_title_uses_thread_id_for_new_chat() -> None:
 def test_format_chat_history_title_collapses_whitespace_and_truncates() -> None:
     chat = Chat(
         thread_id="thread-1",
+        agent_id=JUENA_AGENT_ID,
         title="  FAQ   Neutron   science knowledge base and troubleshooting guide  ",
     )
 
@@ -69,7 +75,9 @@ def test_logout_form_escapes_configured_public_url() -> None:
 
 
 def test_delete_current_chat_selects_most_recent_remaining_chat(monkeypatch) -> None:
-    remaining_chat = Chat(thread_id="thread-2", title="Existing Chat")
+    remaining_chat = Chat(
+        thread_id="thread-2", agent_id=JUENA_AGENT_ID, title="Existing Chat"
+    )
     remaining_messages = ["loaded message"]
     storage = Mock()
     storage.list_chats.return_value = [remaining_chat]

@@ -13,8 +13,8 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.memory import InMemoryStore
 
-from juena.agents.backends import (
-    JUENA_MEMORY_SYSTEM_PROMPT,
+from juena_core.agents.backends import (
+    MEMORY_SYSTEM_PROMPT,
     MEMORY_SOURCES,
     ReadOnlyFilesystemBackend,
     ReadOnlyFindingsStateBackend,
@@ -23,8 +23,8 @@ from juena.agents.backends import (
     build_supervisor_backend,
     user_store_namespace,
 )
-from juena.agents.specialist_runtime import build_specialist_backend
-from juena.server.agent.runtime_model_middleware import RuntimeModelContext
+from juena_core.agents.specialist_runtime import build_specialist_backend
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 
 
 def test_read_only_filesystem_backend_rejects_writes(tmp_path: Path) -> None:
@@ -173,9 +173,9 @@ def test_memory_prompt_is_opt_in_and_supports_delegation_preferences() -> None:
     from deepagents.middleware.memory import MEMORY_SYSTEM_PROMPT, MemoryMiddleware
 
     assert "might not explicitly ask you to remember" in MEMORY_SYSTEM_PROMPT
-    assert "might not explicitly ask you to remember" not in JUENA_MEMORY_SYSTEM_PROMPT
+    assert "might not explicitly ask you to remember" not in MEMORY_SYSTEM_PROMPT
 
-    prompt = JUENA_MEMORY_SYSTEM_PROMPT.lower()
+    prompt = MEMORY_SYSTEM_PROMPT.lower()
     assert "only when the user explicitly asks" in prompt
     assert "never infer" in prompt
     assert "never save credentials" in prompt
@@ -186,7 +186,7 @@ def test_memory_prompt_is_opt_in_and_supports_delegation_preferences() -> None:
     middleware = MemoryMiddleware(
         backend=ReadOnlyInputsStateBackend(),
         sources=MEMORY_SOURCES,
-        system_prompt=JUENA_MEMORY_SYSTEM_PROMPT,
+        system_prompt=MEMORY_SYSTEM_PROMPT,
     )
     assert middleware.sources == ["/memories/AGENTS.md"]
 

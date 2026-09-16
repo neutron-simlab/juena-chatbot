@@ -5,10 +5,11 @@ from types import SimpleNamespace
 import pytest
 from langgraph.types import Interrupt
 
-from juena.sandbox.approvals import ApprovalError, build_resume_command
-from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.schema.sandbox import ApprovalResumeInput, ClarificationResumeInput
-from juena.sandbox.policy import requires_execution_approval
+from juena_core.sandbox.approvals import ApprovalError, build_resume_command
+from juena_core.artifacts import ArtifactStore, set_artifact_store_for_tests
+from juena_core.sandbox.approvals import ApprovalResumeInput
+from juena_core.schema.interrupts import ClarificationResumeInput
+from juena_core.sandbox.policy import requires_execution_approval
 
 
 def _interrupt(interrupt_id: str = "interrupt-1") -> Interrupt:

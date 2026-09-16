@@ -13,14 +13,14 @@ from urllib.parse import urlencode
 # Add parent directory to path to import juena modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from juena.schema.llm_models import Provider
+from juena_core.schema.llm_models import Provider
 from juena.core.config import global_config
-from juena.core.llms_providers import get_available_providers, get_default_model
+from juena_core.llms_providers import get_available_providers, get_default_model
 
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
 from app.client_setup import initialize_client
-from app.chat_storage import get_chat_storage
+from juena_core.ui.chat_storage import get_chat_storage
 
 _assets_dir = Path(__file__).parent / "assets"
 _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None

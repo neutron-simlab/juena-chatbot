@@ -16,7 +16,7 @@ from uuid import UUID
 from langchain.tools import ToolRuntime, tool
 from langgraph.types import Command
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.research import jobs, runner
 from juena.research.delivery import (
     current_findings,

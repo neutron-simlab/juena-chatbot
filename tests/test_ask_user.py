@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from juena.agents.ask_user import CLARIFICATION_KIND, _payload, build_ask_user_tool
+from juena_core.agents.ask_user import CLARIFICATION_KIND, _payload, build_ask_user_tool
 
 
 class _ToolModel(FakeMessagesListChatModel):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
 from juena.core.paths import get_config
 
 logger = get_logger(__name__)

@@ -16,20 +16,20 @@ from PIL import Image
 # global_config; resolving it freshly here would patch an object the code
 # under test is not reading.
 from juena.core.config import global_config
-from juena.schema.agents import SpecialistReport
-from juena.agents.specialist_outcome import SpecialistOutcomeMiddleware
-from juena.sandbox.artifacts import ArtifactStore, set_artifact_store_for_tests
-from juena.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
-from juena.sandbox.constants import MAX_IMAGE_ARTIFACTS_PER_TURN
-from juena.sandbox.evidence import capture_sandbox_execution
-from juena.sandbox.jobs import SandboxExecutionResult, workspace_id_for
-from juena.sandbox.runtime import (
+from juena_core.schema.agents import SpecialistReport
+from juena_core.agents.specialist_outcome import SpecialistOutcomeMiddleware
+from juena_core.artifacts import ArtifactStore, set_artifact_store_for_tests
+from juena_core.sandbox.backend import PodmanSandboxBackend, ReadOnlySandboxInputsBackend
+from juena_core.sandbox.constants import MAX_IMAGE_ARTIFACTS_PER_TURN
+from juena_core.sandbox.evidence import capture_sandbox_execution
+from juena_core.sandbox.jobs import SandboxExecutionResult, workspace_id_for
+from juena_core.sandbox.runtime import (
     RuntimePodmanSandboxBackend,
     build_sandbox_backend,
     set_sandbox_jobs_for_tests,
     set_workspace_store_for_tests,
 )
-from juena.sandbox.workspace import WorkspaceStore
+from juena_core.sandbox.workspace import WorkspaceStore
 
 
 def _png() -> bytes:
@@ -217,7 +217,7 @@ def test_runtime_backend_routes_only_explicit_read_only_prefixes(monkeypatch, tm
         context=SimpleNamespace(user_id="user-a", thread_id="thread-a"),
         config={"run_id": "run-1"},
     )
-    monkeypatch.setattr("juena.sandbox.runtime.get_runtime", lambda: runtime)
+    monkeypatch.setattr("juena_core.sandbox.runtime.get_runtime", lambda: runtime)
     composite = build_sandbox_backend(
         repo_cache_root=None,
         skills_dir=None,

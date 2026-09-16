@@ -3,62 +3,59 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
-from juena.core.log import get_logger
+from juena_core.log import get_logger
+from juena_core.mcp import discover_optional_tools
 from juena.core.paths import get_config
 
 logger = get_logger(__name__)
 
-
-def _get_mcp_client_class() -> type[Any]:
-    """Import the MCP client lazily so local repo chat still works without it."""
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-
-    return MultiServerMCPClient
+CONTEXT7_LABEL = "Context7"
 
 
 @dataclass
 class Context7Runtime:
-    """Keep the MCP client alive for as long as the agent is registered."""
+    """The tools this integration contributed to the supervisor, if any.
 
-    client: Any
+    It no longer holds a client. `juena_core.mcp` returns tools that each
+    reopen their own connection per call and survive an MCP server restart, so
+    there is nothing whose lifetime has to match the agent's -- and nothing for
+    `shutdown_agents` to close. The retired `MultiServerMCPClient` exposed
+    neither `close` nor `aclose` either, so that shutdown was already a no-op.
+    """
+
     tools: list[Any]
 
 
 async def load_optional_context7_tools() -> Context7Runtime | None:
-    """Return loaded Context7 tools or ``None`` when disabled/unavailable."""
+    """Return loaded Context7 tools or ``None`` when disabled/unavailable.
+
+    Context7 is nobody's product: if it is unreachable its tools should not
+    exist, rather than exist and fail the first time a model reaches for one.
+    """
 
     config = get_config()
     api_key = (config.CONTEXT7_API_KEY or "").strip()
     if not api_key:
         return None
 
-    try:
-        client_cls = _get_mcp_client_class()
-    except ImportError as exc:
-        logger.warning(
-            "Context7 requested but langchain-mcp-adapters is unavailable: %s",
-            exc,
-        )
-        return None
-
-    try:
-        client = client_cls(
-            {
+    # FastMCP's `MCPConfig` shape. The transport is inferred from the entry --
+    # there is no `transport` key any more, and the timeout is seconds.
+    tools = await discover_optional_tools(
+        {
+            "mcpServers": {
                 "context7": {
-                    "transport": "streamable_http",
                     "url": config.CONTEXT7_MCP_URL,
                     "headers": {"CONTEXT7_API_KEY": api_key},
-                    "timeout": timedelta(seconds=config.CONTEXT7_TIMEOUT_SECONDS),
+                    "timeout": config.CONTEXT7_TIMEOUT_SECONDS,
                 }
             }
-        )
-        tools = list(await client.get_tools())
-    except Exception as exc:
-        logger.warning("Failed to load Context7 MCP tools: %s", exc)
+        },
+        label=CONTEXT7_LABEL,
+    )
+    if tools is None:
         return None
 
     logger.info("Loaded %d Context7 MCP tool(s)", len(tools))
-    return Context7Runtime(client=client, tools=tools)
+    return Context7Runtime(tools=tools)

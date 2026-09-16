@@ -31,7 +31,7 @@ The launcher:
 2. builds `deploy/sandbox/Dockerfile`;
 3. starts JüNA and Postgres with Compose;
 4. waits for JüNA to create `sandbox_jobs`;
-5. starts `python -m juena.sandbox.worker` with two slots.
+5. starts `python -m juena_core.sandbox.worker` with two slots.
 
 Use `./juena logs`, `./juena ps`, `./juena sandbox-stop`, and `./juena down`.
 The worker PID and log are under `.sandbox/`.

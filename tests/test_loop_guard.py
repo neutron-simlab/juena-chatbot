@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from juena.agents.loop_guard import GUARD_FLAG, REPEAT_ERROR, RepeatedToolCallMiddleware
+from juena_core.agents.loop_guard import GUARD_FLAG, REPEAT_ERROR, RepeatedToolCallMiddleware
 
 
 def _call(name: str, args: dict, call_id: str) -> dict:
