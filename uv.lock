@@ -1410,6 +1410,7 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
     { name = "requests", specifier = ">=2.32,<3" },
+    { name = "streamlit", specifier = ">=1.53.0" },
 ]
 
 [[package]]
