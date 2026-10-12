@@ -11,6 +11,8 @@ Follow these steps to run JüNA on your own computer. The setup below uses
 **macOS with Docker Desktop** and a **Blablador API key**. It enables chat,
 Python plots, and repository search, starting with jscatter.
 
+On Windows, start with the [WSL 2 instructions](#windows-wsl-2).
+
 ## 1. Install the tools
 
 Install and open **Docker Desktop**. Wait until it says Docker is running.
@@ -162,6 +164,66 @@ Press **Ctrl+C** to stop watching logs; JüNA keeps running.
 | The page asks for FZJ login | Set `AUTH_DEV_BYPASS=true` in the chatbot's `.env`, then run `./juena up` again. |
 | Repository search is unavailable or empty | Finish step 4, then run `./juena rag-up`. Check `./juena rag-logs` if it fails. |
 | The model reports an API key error | Check the key in both `.env` files, then run `./juena down` followed by `./juena up`. |
+
+## Windows (WSL 2)
+
+1. Open **PowerShell as Administrator** and install Ubuntu:
+
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+
+   Restart Windows if prompted, then open **Ubuntu** and create your Linux
+   username and password. If Ubuntu is already installed, run `wsl --update`
+   and check that `wsl --list --verbose` shows version **2**.
+   See [Microsoft's WSL setup](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+2. Install and open **Docker Desktop for Windows**. Enable **Use WSL 2 based
+   engine**, then enable **Ubuntu** under **Settings → Resources → WSL
+   Integration** and apply the changes.
+   See [Docker's WSL setup](https://docs.docker.com/desktop/features/wsl/).
+
+3. Run the remaining commands in the **Ubuntu terminal**. Install the tools:
+
+   ```bash
+   sudo apt update
+   sudo apt install -y git curl podman uidmap slirp4netns fuse-overlayfs
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   source "$HOME/.local/bin/env"
+   systemctl --user enable --now podman.socket
+   docker compose version
+   podman info
+   ```
+
+   If the `systemctl` command fails, follow
+   [Microsoft's systemd setup](https://learn.microsoft.com/en-us/windows/wsl/systemd)
+   and reopen Ubuntu. If Docker is unavailable, check the Ubuntu integration
+   setting from the previous step.
+
+4. Create a project folder inside Ubuntu:
+
+   ```bash
+   mkdir -p ~/projects
+   cd ~/projects
+   ```
+
+   Follow **steps 2–4 above** to download the three repositories and prepare
+   the settings and search database. Keep the repositories under `~/projects`
+   so Docker and Podman can share the same files.
+
+5. From `~/projects/juena-chatbot`, start JüNA with Ubuntu's current address
+   for repository search:
+
+   ```bash
+   JUENA_RAG_URL="http://$(hostname -I | awk '{print $1}'):8100" \
+     JUENA_RAG_BIND=0.0.0.0 ./juena up
+   ./juena ps
+   ./juena health
+   ```
+
+   Use this startup command each time; WSL's address can change after a restart.
+   Open **<http://localhost:9501>** in your Windows browser and click
+   **Sign in (development)**. Stop the app from Ubuntu with `./juena down`.
 
 ## Other setups
 
