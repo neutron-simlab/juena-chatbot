@@ -43,7 +43,7 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "when the sandbox is enabled, this specialist can execute them with user approval."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.MINIMAX_M27.value
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
@@ -124,6 +124,7 @@ def build_software_specialist(
         provider=SOFTWARE_SPECIALIST_PROVIDER,
         model=SOFTWARE_SPECIALIST_MODEL,
         temperature=0.0,
+        max_tokens=32_768,
     )
     specialist_tools = list(
         build_tools(

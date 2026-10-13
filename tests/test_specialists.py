@@ -112,6 +112,7 @@ def test_software_specialist_owns_fixed_model_and_runtime(
         "provider": software_agent.SOFTWARE_SPECIALIST_PROVIDER,
         "model": software_agent.SOFTWARE_SPECIALIST_MODEL,
         "temperature": 0.0,
+        "max_tokens": 32_768,
     }
     assert created["backend_kwargs"]["repo_cache_root"] == repo_manager.cache_dir
     assert created["agent_kwargs"]["model"] is model
@@ -128,10 +129,10 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert spec["runnable"] is runnable
 
 
-def test_software_specialist_defaults_to_minimax() -> None:
+def test_software_specialist_defaults_to_juwels_qwen() -> None:
     assert (
         software_agent.SOFTWARE_SPECIALIST_MODEL
-        == BlabladorModelName.MINIMAX_M27.value
+        == BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
     )
 
 
@@ -178,6 +179,7 @@ def test_neutron_specialist_owns_fixed_model_and_runtime(
         "provider": neutron_agent.NEUTRON_RESEARCH_SPECIALIST_PROVIDER,
         "model": neutron_agent.NEUTRON_RESEARCH_SPECIALIST_MODEL,
         "temperature": 0.0,
+        "max_tokens": 32_768,
     }
     assert "repo_cache_root" not in created["backend_kwargs"]
     assert created["agent_kwargs"]["model"] is model

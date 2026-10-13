@@ -34,7 +34,7 @@ NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION = (
     "about neutron software -- sending them here produces a web search instead of an answer."
 )
 NEUTRON_RESEARCH_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.GPT_OSS.value
+NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
 
 
 def build_neutron_research_prompt(
@@ -76,6 +76,7 @@ def build_neutron_research_specialist(
         provider=NEUTRON_RESEARCH_SPECIALIST_PROVIDER,
         model=NEUTRON_RESEARCH_SPECIALIST_MODEL,
         temperature=0.0,
+        max_tokens=32_768,
     )
     specialist_tools = list(build_tools(tavily_tool))
     if not unattended:
