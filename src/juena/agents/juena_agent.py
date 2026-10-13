@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from langchain.agents import create_agent
@@ -59,10 +60,8 @@ class JuenaAgentResources:
 
     app: CompiledStateGraph
     context7_runtime: Context7Runtime | None = None
-    #: The same specialists compiled for unattended work -- no `ask_user`, no
-    #: sandbox. `juena.research.runner` invokes these directly; they are held
-    #: here rather than inside `SubAgentMiddleware`, which owns only the
-    #: interactive set and exposes them only through its `task` closure.
+    #: Builders for unattended specialists. Each job supplies its own persistent
+    #: checkpointer; no idle second set of compiled graphs is retained.
     background_specialists: dict[str, Any] = field(default_factory=dict)
 
 
@@ -95,6 +94,14 @@ async def create_juena_agent(
         model=SUMMARIZER_MODEL,
         temperature=0.0,
     )
+    # Compaction thresholds follow the summarizer's context profile. Specialists
+    # need a matching window instead of the smaller GPT-OSS context limit.
+    specialist_summarizer_model = build_chat_model(
+        provider=Provider.BLABLADOR.value,
+        model=BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value,
+        temperature=0.0,
+        max_tokens=32_768,
+    )
     context7_runtime = await load_optional_context7_tools()
     context7_tools = (
         tuple(context7_runtime.tools) if context7_runtime is not None else ()
@@ -102,32 +109,28 @@ async def create_juena_agent(
     tavily_tool = load_optional_tavily_tool()
     fallback_models = build_fallback_models()
 
-    def compile_specialists(*, unattended: bool) -> list:
-        return [
-            build_software_specialist(
-                repo_manager=repo_manager,
-                vector_index=vector_index,
-                has_repo_research=has_repo_research,
-                context7_tools=context7_tools,
-                summarizer_model=summarizer_model,
-                fallback_models=fallback_models,
-                unattended=unattended,
-            ),
-            build_neutron_research_specialist(
-                tavily_tool=tavily_tool,
-                summarizer_model=summarizer_model,
-                fallback_models=fallback_models,
-                unattended=unattended,
-            ),
-        ]
+    specialist_builders = [
+        partial(
+            build_software_specialist,
+            repo_manager=repo_manager,
+            vector_index=vector_index,
+            has_repo_research=has_repo_research,
+            context7_tools=context7_tools,
+            summarizer_model=specialist_summarizer_model,
+            fallback_models=fallback_models,
+        ),
+        partial(
+            build_neutron_research_specialist,
+            tavily_tool=tavily_tool,
+            summarizer_model=specialist_summarizer_model,
+            fallback_models=fallback_models,
+        ),
+    ]
 
-    specialists = compile_specialists(unattended=False)
-    # A second compile, not a second set of models: `build_chat_model` caches on
-    # (provider, model, temperature), so this costs tool objects and a prompt
-    # string. The two sets must stay one graph apart -- an unattended specialist
-    # that could still reach `ask_user` would block forever on nobody.
+    specialists = [build() for build in specialist_builders]
     background_specialists = {
-        spec["name"]: spec["runnable"] for spec in compile_specialists(unattended=True)
+        spec["name"]: partial(build, unattended=True)
+        for spec, build in zip(specialists, specialist_builders, strict=True)
     }
 
     store = get_store()

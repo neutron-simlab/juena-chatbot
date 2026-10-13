@@ -55,7 +55,6 @@ from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
 from juena_core.server.database.store import store_lifespan
 from juena_core.server.database.models import AuthSession, User, utc_now
 from juena.research import jobs as research_jobs
-from juena.research.constants import RESTART_MESSAGE as RESEARCH_RESTART_MESSAGE
 from juena_core.sandbox.jobs import SandboxJobs, hold_worker_lock
 from juena_core.sandbox.worker import RESTART_MESSAGE
 
@@ -586,6 +585,18 @@ async def _research_user(prefix: str):
         return user.id
 
 
+async def _create_research(**kwargs):
+    return await research_jobs.create(
+        run_input={"provider": "blablador", "model": "m", "files": {}}, **kwargs,
+    )
+
+
+async def _finish_research(job_id, **kwargs):
+    async with research_jobs.claim(job_id) as claimed:
+        assert claimed is not None
+        await research_jobs.finish(claimed[1], job_id, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_research_concurrency_is_per_user_and_counts_only_active_jobs(
     monkeypatch: pytest.MonkeyPatch,
@@ -600,26 +611,26 @@ async def test_research_concurrency_is_per_user_and_counts_only_active_jobs(
         bob = await _research_user("research-bob")
         thread = f"thread-{uuid4()}"
 
-        first = await research_jobs.create(
+        first = await _create_research(
             user_id=alice, thread_id=thread, specialist="s", objective="one", concurrency=2
         )
-        second = await research_jobs.create(
+        second = await _create_research(
             user_id=alice, thread_id=thread, specialist="s", objective="two", concurrency=2
         )
-        third = await research_jobs.create(
+        third = await _create_research(
             user_id=alice, thread_id=thread, specialist="s", objective="three", concurrency=2
         )
         assert first is not None and second is not None
         assert third is None, "the third job must be refused, not queued"
 
         # Another user is not affected by Alice's spend.
-        assert await research_jobs.create(
+        assert await _create_research(
             user_id=bob, thread_id=thread, specialist="s", objective="bob's", concurrency=2
         ) is not None
 
         # Finishing one frees the slot.
-        await research_jobs.finish(first.id, status="succeeded", report="done")
-        assert await research_jobs.create(
+        await _finish_research(first.id, status="succeeded", report="done")
+        assert await _create_research(
             user_id=alice, thread_id=thread, specialist="s", objective="four", concurrency=2
         ) is not None
 
@@ -666,7 +677,7 @@ async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
                 )
 
                 admitted = asyncio.create_task(
-                    research_jobs.create(
+                    _create_research(
                         user_id=alice,
                         thread_id=thread,
                         specialist="s",
@@ -679,7 +690,7 @@ async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
                 # wait below is the row lock rather than an exhausted connection
                 # pool, which would stall every caller equally.
                 assert await asyncio.wait_for(
-                    research_jobs.create(
+                    _create_research(
                         user_id=bob,
                         thread_id=thread,
                         specialist="s",
@@ -698,31 +709,28 @@ async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
 
 
 @pytest.mark.asyncio
-async def test_a_job_left_running_by_a_dead_process_is_failed_not_left_hanging(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The run lived in that process's event loop and did not survive it.
-
-    A row still reading `running` would make `check_research` say "still working"
-    forever, which is the one answer that is never true.
-    """
+async def test_research_claim_excludes_other_workers_and_is_recoverable() -> None:
     async with database_lifespan():
-        user = await _research_user("research-orphan")
-        thread = f"thread-{uuid4()}"
-
-        job = await research_jobs.create(
-            user_id=user, thread_id=thread, specialist="s", objective="interrupted", concurrency=4
+        user = await _research_user("research-recovery")
+        job = await _create_research(
+            user_id=user, thread_id=f"thread-{uuid4()}", specialist="s",
+            objective="interrupted", concurrency=4,
         )
-        assert job is not None
-        await research_jobs.mark_running(job.id)
-
-        await research_jobs.fail_orphans()
-
-        after = await research_jobs.get(job.id, user)
-        assert after is not None
-        assert after.status == "failed"
-        assert after.error == RESEARCH_RESTART_MESSAGE
-        assert after.finished_at is not None
+        async with research_jobs.claim(job.id) as first:
+            assert first is not None
+            started_at = first[0].started_at
+            async with research_jobs.claim(job.id) as competing:
+                assert competing is None
+            assert (await research_jobs.get(job.id, user)).status == "running"
+        # The connection closes without a terminal write, just as on shutdown.
+        assert job.id in await research_jobs.active_ids()
+        async with research_jobs.claim(job.id) as recovered:
+            assert recovered is not None
+            assert recovered[0].started_at == started_at
+            await research_jobs.finish(recovered[1], job.id, status="succeeded", report="recovered")
+        assert job.id not in await research_jobs.active_ids()
+        async with research_jobs.claim(job.id) as completed:
+            assert completed is None
 
 
 @pytest.mark.asyncio
@@ -738,11 +746,11 @@ async def test_a_collected_result_is_never_reported_twice(
         user = await _research_user("research-collect")
         thread = f"thread-{uuid4()}"
 
-        job = await research_jobs.create(
+        job = await _create_research(
             user_id=user, thread_id=thread, specialist="s", objective="survey", concurrency=4
         )
         assert job is not None
-        await research_jobs.finish(
+        await _finish_research(
             job.id,
             status="succeeded",
             report="<specialist_report>\nStatus: OK\n</specialist_report>",
@@ -778,7 +786,7 @@ async def test_bulk_acknowledgement_stamps_once_and_leaves_other_jobs_alone(
         thread = f"thread-{uuid4()}"
 
         async def _finished(objective: str):  # noqa: ANN202
-            job = await research_jobs.create(
+            job = await _create_research(
                 user_id=user,
                 thread_id=thread,
                 specialist="s",
@@ -786,7 +794,7 @@ async def test_bulk_acknowledgement_stamps_once_and_leaves_other_jobs_alone(
                 concurrency=4,
             )
             assert job is not None
-            await research_jobs.finish(job.id, status="succeeded", report="done")
+            await _finish_research(job.id, status="succeeded", report="done")
             return job
 
         delivered = await _finished("the one the conversation received")
@@ -832,11 +840,11 @@ async def test_findings_survive_postgres_with_their_full_file_data_shape(
                 "modified_at": "2026-08-19T10:05:00+00:00",
             }
         }
-        job = await research_jobs.create(
+        job = await _create_research(
             user_id=user, thread_id=thread, specialist="s", objective="survey", concurrency=4
         )
         assert job is not None
-        await research_jobs.finish(
+        await _finish_research(
             job.id,
             status="succeeded",
             report="<specialist_report>\nStatus: OK\n</specialist_report>",
@@ -861,10 +869,203 @@ async def test_one_users_research_is_invisible_to_another(
         bob = await _research_user("research-intruder")
         thread = f"thread-{uuid4()}"
 
-        job = await research_jobs.create(
+        job = await _create_research(
             user_id=alice, thread_id=thread, specialist="s", objective="private", concurrency=4
         )
         assert job is not None
 
         assert await research_jobs.get(job.id, bob) is None
         assert await research_jobs.for_thread(thread, bob) == []
+
+
+async def _research_recovery_process(job_id: str, evidence_path: str, pause: str) -> None:
+    """Subprocess probe: real runner/checkpoints, deterministic research nodes."""
+    from pathlib import Path
+    from types import SimpleNamespace
+    from uuid import UUID
+    from juena.research import runner
+    from juena_core.agents.specialist_outcome import SpecialistOutcomeMiddleware
+    from juena_core.server.agent import registry
+
+    juena_core.config._settings = dataclasses.replace(
+        juena_core.settings(), DATABASE_URL=TEST_DATABASE_URL,
+    )
+
+    class State(MessagesState):
+        files: dict
+
+    async def wait_for_crash():
+        print("RESEARCH_WAITING", flush=True)
+        await asyncio.Event().wait()
+
+    def build(*, checkpointer):
+        def search(state):
+            with Path(evidence_path).open("a") as output:
+                output.write("completed search\n")
+            assert state["files"]["/findings/base.md"]["content"] == "original input"
+            return {"files": {
+                **state["files"],
+                "/findings/recovered.md": create_file_data("saved evidence"),
+            }}
+
+        async def report(state):
+            if pause == "mid-step":
+                await wait_for_crash()
+            assert "/findings/recovered.md" in state["files"]
+            return SpecialistOutcomeMiddleware(specialist_name="software-specialist").after_agent(
+                {"structured_response": {
+                    "status": "completed", "finding": "Recovered survey",
+                    "evidence": ["saved evidence"],
+                }},
+                SimpleNamespace(),
+            )
+
+        builder = StateGraph(State)
+        builder.add_node("search", search)
+        builder.add_node("report", report)
+        builder.add_edge(START, "search")
+        builder.add_edge("search", "report")
+        builder.add_edge("report", END)
+        return {"runnable": builder.compile(checkpointer=checkpointer)}
+
+    async def get_agent(_name):
+        return None
+
+    registry.get_agent = get_agent
+    registry.get_agent_resources = lambda _name: SimpleNamespace(
+        background_specialists={"software-specialist": build},
+    )
+    if pause == "after-graph":
+        async def finish(*args, **kwargs):
+            assert kwargs["status"] == "succeeded", kwargs
+            await wait_for_crash()
+        research_jobs.finish = finish
+
+    async with database_lifespan(), checkpointer_lifespan():
+        await runner._run(UUID(job_id))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause", ["mid-step", "after-graph"])
+async def test_research_recovers_after_process_death_without_repeating_completed_work(
+    tmp_path, pause,
+) -> None:
+    import sys
+
+    evidence_path = tmp_path / "completed-searches.txt"
+    async with database_lifespan():
+        user = await _research_user("research-process-recovery")
+        job = await research_jobs.create(
+            user_id=user, thread_id=f"thread-{uuid4()}", specialist="software-specialist",
+            objective="survey", concurrency=2,
+            run_input={"provider": "blablador", "model": "m", "files": {
+                "/findings/base.md": create_file_data("original input"),
+            }},
+        )
+        script = (
+            "import asyncio, sys; import tests.conftest; "
+            "from tests.test_postgres_integration import _research_recovery_process; "
+            "asyncio.run(_research_recovery_process(*sys.argv[1:]))"
+        )
+
+        async def spawn(mode):
+            return await asyncio.create_subprocess_exec(
+                sys.executable, "-c", script, str(job.id), str(evidence_path), mode,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+
+        process = await spawn(pause)
+        output = []
+        try:
+            async with asyncio.timeout(30):
+                while True:
+                    line = await process.stdout.readline()
+                    assert line, b"".join(output).decode()
+                    output.append(line)
+                    if b"RESEARCH_WAITING" in line:
+                        break
+            before = await research_jobs.get(job.id, user)
+            assert before.status == "running"
+        finally:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+
+        recovered_process = await spawn("resume")
+        try:
+            output, _ = await asyncio.wait_for(recovered_process.communicate(), 30)
+            assert recovered_process.returncode == 0, output.decode()
+        finally:
+            if recovered_process.returncode is None:
+                recovered_process.kill()
+                await recovered_process.wait()
+        recovered = await research_jobs.get(job.id, user)
+        assert recovered.status == "succeeded", output.decode()
+        assert recovered.started_at == before.started_at
+        assert "Recovered survey" in recovered.report
+        assert set(recovered.findings) == {"/findings/recovered.md"}
+        assert recovered.base_findings == {"/findings/base.md": "original input"}
+        assert evidence_path.read_text() == "completed search\n"
+
+
+@pytest.mark.asyncio
+async def test_a_lost_research_connection_cannot_overwrite_the_new_owner():
+    import psycopg
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    async with database_lifespan(), checkpointer_lifespan():
+        user = await _research_user("research-lost-connection")
+        job = await _create_research(
+            user_id=user, thread_id=f"thread-{uuid4()}", specialist="s",
+            objective="survey", concurrency=2,
+        )
+        async with research_jobs.claim(job.id) as first:
+            connection = first[1]
+            graph = _counter_graph(AsyncPostgresSaver(connection))
+            config = {"configurable": {"thread_id": f"research:{job.id}"}}
+            await graph.ainvoke({"count": 0}, config, durability="sync")
+            await connection.close()
+            async with research_jobs.claim(job.id) as recovered:
+                await research_jobs.finish(recovered[1], job.id, status="succeeded", report="new owner")
+            with pytest.raises(psycopg.Error):
+                await graph.ainvoke({"count": 99}, config, durability="sync")
+            with pytest.raises(psycopg.Error):
+                await research_jobs.finish(connection, job.id, status="failed", error="old owner")
+        result = await research_jobs.get(job.id, user)
+        assert result.status == "succeeded"
+        assert result.report == "new owner"
+
+
+@pytest.mark.asyncio
+async def test_research_upgrade_preserves_reports_and_fails_only_legacy_active_jobs():
+    from pathlib import Path
+    from psycopg import AsyncConnection
+    from juena_core.server.database.connection import psycopg_database_url
+
+    # A session-local table shadows the real one. No application rows are changed.
+    async with await AsyncConnection.connect(
+        psycopg_database_url(TEST_DATABASE_URL), autocommit=True,
+    ) as connection:
+        await connection.execute(
+            "CREATE TEMP TABLE research_jobs "
+            "(id int, status text, error text, report text, finished_at timestamptz)"
+        )
+        await connection.execute(
+            "INSERT INTO research_jobs (id, status, report) "
+            "VALUES (1, 'running', ''), (2, 'succeeded', 'keep this report')"
+        )
+        migration = (Path(__file__).parents[1] / "deploy/research-recovery.sql").read_text()
+        await connection.execute(migration)
+        await connection.execute(
+            "INSERT INTO research_jobs (id, status, run_input) "
+            "VALUES (3, 'running', '{\"provider\":\"blablador\"}')"
+        )
+        await connection.execute(migration)
+        cursor = await connection.execute(
+            "SELECT id, status, report, error FROM research_jobs ORDER BY id"
+        )
+        old_active, completed, new_active = await cursor.fetchall()
+        assert old_active[1] == "failed"
+        assert "predates research recovery" in old_active[3]
+        assert completed[1:3] == ("succeeded", "keep this report")
+        assert new_active[1] == "running"

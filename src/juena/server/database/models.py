@@ -16,6 +16,7 @@ same metadata by `configure_sandbox(... enabled=True)` and absent otherwise.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -84,6 +85,9 @@ class ResearchJob(Base):
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
     specialist: Mapped[str] = mapped_column(String(64), nullable=False)
     objective: Mapped[str] = mapped_column(Text, nullable=False)
+    # Frozen at admission: provider, model and the files the specialist receives.
+    # Recovery must not reseed from a conversation that has moved on.
+    run_input: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     report: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # Deep Agents `FileData`, not plain strings: {path: {content, encoding, ...}}.

@@ -1,31 +1,27 @@
-"""Every `research_jobs` read and write.
-
-Async SQLAlchemy over the application session factory, not a second psycopg
-pool. `sandbox_jobs` needed its own pool because a separate worker process on
-the host claims from it; background research runs inside this process, so the
-table is ordinary application data like `Chat`.
-"""
+"""Research admission, ownership and results in the existing Postgres database."""
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import AsyncIterator, Collection
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from sqlalchemy import func, select, update
 
 from juena_core.agents.findings import FindingsMap
-from juena_core.log import get_logger
+from juena_core.config import settings
 from juena.research.constants import (
     ACTIVE_STATUSES,
-    RESTART_MESSAGE,
     ResearchStatus,
 )
-from juena_core.server.database.connection import get_session_factory
+from juena_core.server.database.connection import get_session_factory, psycopg_database_url
 from juena_core.server.database.models import User
 from juena.server.database.models import ResearchJob
-
-logger = get_logger(__name__)
 
 
 async def create(
@@ -35,6 +31,7 @@ async def create(
     specialist: str,
     objective: str,
     concurrency: int,
+    run_input: dict[str, Any],
 ) -> ResearchJob | None:
     """Admit one job, or return ``None`` when the user is already at the limit.
 
@@ -70,6 +67,7 @@ async def create(
             thread_id=thread_id,
             specialist=specialist,
             objective=objective,
+            run_input=run_input,
             status="queued",
         )
         session.add(job)
@@ -78,17 +76,53 @@ async def create(
         return job
 
 
-async def mark_running(job_id: UUID) -> None:
+async def active_ids() -> list[UUID]:
+    """Durable work to attempt, including jobs interrupted by a dead process."""
     factory = get_session_factory()
-    async with factory() as session, session.begin():
-        await session.execute(
-            update(ResearchJob)
-            .where(ResearchJob.id == job_id, ResearchJob.status == "queued")
-            .values(status="running", started_at=datetime.now(UTC))
+    async with factory() as session:
+        result = await session.scalars(
+            select(ResearchJob.id)
+            .where(ResearchJob.status.in_(ACTIVE_STATUSES))
+            .order_by(ResearchJob.created_at)
         )
+        return list(result)
+
+
+@asynccontextmanager
+async def claim(job_id: UUID) -> AsyncIterator[tuple[ResearchJob, AsyncConnection] | None]:
+    """Own a job until this connection closes, including on process death.
+
+    The runner uses this same connection for checkpoints and completion. Losing
+    ownership therefore also prevents the old runner from persisting progress.
+    It is dedicated to the job, so long runs cannot exhaust the chat's pool or
+    return an advisory lock to a pool. No lease columns or heartbeat are needed.
+    """
+    async with await AsyncConnection.connect(
+        psycopg_database_url(settings().DATABASE_URL),
+        autocommit=True,
+        prepare_threshold=0,
+        row_factory=dict_row,
+        connect_timeout=5,
+    ) as connection:
+        cursor = await connection.execute(
+            "SELECT pg_try_advisory_lock(hashtextextended(%s, 0)) AS acquired",
+            (f"research:{job_id}",),
+        )
+        if not (await cursor.fetchone())["acquired"]:
+            yield None
+            return
+        cursor = await connection.execute(
+            "UPDATE research_jobs SET status = 'running', "
+            "started_at = COALESCE(started_at, now()) "
+            "WHERE id = %s AND status = ANY(%s) RETURNING *",
+            (job_id, list(ACTIVE_STATUSES)),
+        )
+        row = await cursor.fetchone()
+        yield (ResearchJob(**row), connection) if row else None
 
 
 async def finish(
+    connection: AsyncConnection,
     job_id: UUID,
     *,
     status: ResearchStatus,
@@ -97,24 +131,14 @@ async def finish(
     base_findings: dict[str, str] | None = None,
     error: str = "",
 ) -> None:
-    """Record a terminal outcome. Only an active job can reach one."""
-    factory = get_session_factory()
-    async with factory() as session, session.begin():
-        await session.execute(
-            update(ResearchJob)
-            .where(
-                ResearchJob.id == job_id,
-                ResearchJob.status.in_(ACTIVE_STATUSES),
-            )
-            .values(
-                status=status,
-                report=report,
-                findings=findings or {},
-                base_findings=base_findings or {},
-                error=error,
-                finished_at=datetime.now(UTC),
-            )
-        )
+    """Record the outcome through the connection that owns the job."""
+    await connection.execute(
+        "UPDATE research_jobs SET status = %s, report = %s, findings = %s, "
+        "base_findings = %s, error = %s, finished_at = now() "
+        "WHERE id = %s AND status = ANY(%s)",
+        (status, report, Jsonb(findings or {}), Jsonb(base_findings or {}),
+         error, job_id, list(ACTIVE_STATUSES)),
+    )
 
 
 async def get(job_id: UUID, user_id: UUID) -> ResearchJob | None:
@@ -183,27 +207,4 @@ async def mark_collected_many(job_ids: Collection[UUID]) -> int:
             )
             .values(collected_at=datetime.now(UTC))
         )
-    return result.rowcount or 0
-
-
-async def fail_orphans() -> int:
-    """Fail every job left active by a previous process.
-
-    The run itself lived in that process's event loop and did not survive it, so
-    a row still reading `running` is a lie the next `check_research` would repeat
-    forever. Called once at startup, before anything can create a new job.
-    """
-    factory = get_session_factory()
-    async with factory() as session, session.begin():
-        result = await session.execute(
-            update(ResearchJob)
-            .where(ResearchJob.status.in_(ACTIVE_STATUSES))
-            .values(
-                status="failed",
-                error=RESTART_MESSAGE,
-                finished_at=datetime.now(UTC),
-            )
-        )
-    if result.rowcount:
-        logger.info("Failed %d research job(s) left by a previous process", result.rowcount)
     return result.rowcount or 0

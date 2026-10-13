@@ -17,7 +17,8 @@ from langchain.tools import ToolRuntime, tool
 from langgraph.types import Command
 
 from juena_core.log import get_logger
-from juena.research import jobs, runner
+from juena_core.agents.findings import crossing_files
+from juena.research import jobs
 from juena.research.delivery import (
     current_findings,
     deliver,
@@ -141,19 +142,15 @@ def build_research_tools(
             specialist=specialist,
             objective=objective,
             concurrency=concurrency,
+            run_input={
+                "provider": context.provider,
+                "model": context.model,
+                "files": crossing_files(runtime.state.get("files")),
+            },
         )
         if job is None:
             return BUSY_MESSAGE
 
-        runner.launch(
-            job_id=job.id,
-            objective=objective,
-            thread_id=thread_id,
-            user_id=user_id,
-            specialist=specialist,
-            provider=context.provider,
-            model=context.model,
-        )
         logger.info("Started research job %s (%s) on thread %s", job.id, specialist, thread_id)
         return (
             f"Started background research job {job.id} with {specialist}. "

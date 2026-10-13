@@ -1,12 +1,14 @@
 """Background research: what the runner extracts, and what unattended removes.
 
 Nothing here touches Postgres or a model provider. The database half lives in
-`test_postgres_integration.py`, because concurrency and orphan-sweeping are only
+`test_postgres_integration.py`, because concurrency and recovery are only
 meaningful against a real transaction.
 """
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -30,31 +32,35 @@ from juena.tools.research import _summary, build_research_tools
 # --------------------------------------------------------------------------- #
 
 
-def test_only_findings_and_staged_inputs_are_seeded() -> None:
-    """A `task` subagent inherits the parent's whole `files`; this one does not.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("files", [None, {}, {
+    "/findings/fitting.md": {"content": "earlier evidence"},
+    "/inputs/current_message.txt": {"content": "staged message"},
+    "/conversation_history/thread.md": {"content": "private"},
+    "/scratch.md": {"content": "private"},
+}])
+async def test_start_persists_only_the_inputs_needed_for_recovery(monkeypatch, files):
+    captured = {}
+    job_id = uuid4()
 
-    The supervisor's own scratch files are working memory for the conversation,
-    not evidence, and sending them would put the specialist's context back where
-    delegation exists to keep it from.
-    """
-    seeded = runner._seed_files(
-        {
-            "files": {
-                "/findings/fitting.md": {"content": "what an earlier run found"},
-                "/inputs/current_message.txt": {"content": "the staged message"},
-                "/conversation_history/thread-1.md": {"content": "evicted turns"},
-                "/memories/AGENTS.md": {"content": "user preferences"},
-                "/scratch.md": {"content": "supervisor scribble"},
-            }
-        }
+    async def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=job_id)
+
+    monkeypatch.setattr(runner.jobs, "create", create)
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(user_id=str(uuid4()), thread_id="t1", provider="blablador", model="m"),
+        state={"files": files},
     )
+    start = build_research_tools(["software-specialist"])[0]
+    answer = await start.coroutine(specialist="software-specialist", objective="survey", runtime=runtime)
 
-    assert set(seeded) == {"/findings/fitting.md", "/inputs/current_message.txt"}
-
-
-def test_seeding_survives_a_thread_with_no_files() -> None:
-    assert runner._seed_files({}) == {}
-    assert runner._seed_files({"files": None}) == {}
+    assert str(job_id) in answer
+    expected = {"/findings/fitting.md", "/inputs/current_message.txt"} if files else set()
+    assert set(captured["run_input"]["files"]) == expected
+    assert captured["run_input"]["provider"] == "blablador"
+    assert captured["run_input"]["model"] == "m"
+    assert captured["objective"] == "survey"
 
 
 def test_the_report_is_the_last_ai_message_with_text() -> None:
@@ -436,6 +442,10 @@ def _job(**overrides: Any) -> SimpleNamespace:
         "status": "running",
         "created_at": created,
         "finished_at": None,
+        "started_at": created,
+        "thread_id": "t1",
+        "user_id": uuid4(),
+        "run_input": {"provider": "blablador", "model": "m", "files": {}},
     }
     return SimpleNamespace(**{**defaults, **overrides})
 
@@ -619,48 +629,45 @@ async def test_a_terminal_job_already_delivered_is_never_handed_over_twice(
 # --------------------------------------------------------------------------- #
 
 
-def _runner_harness(monkeypatch: Any, result: dict) -> list[dict]:
-    """Wire `runner._run` to a specialist returning `result`, recording outcomes."""
+def _runner_harness(monkeypatch: Any, result: dict, *, job=None) -> list[dict]:
+    """Wire the real runner to a claimed job and record its terminal writes."""
     from juena_core.server.agent import registry
 
-    outcomes: list[dict] = []
+    outcomes = []
+    connection = object()
 
-    class _Specialist:
-        async def ainvoke(self, _payload: Any, **_kwargs: Any) -> dict:
+    class Specialist:
+        async def aget_state(self, _config):
+            return SimpleNamespace(created_at=None)
+
+        async def ainvoke(self, _payload, **_kwargs):
             return result
 
-    async def fake_get_agent(_name: str) -> Any:
-        async def aget_state(_config: Any) -> Any:
-            return SimpleNamespace(values={})
-
-        return SimpleNamespace(aget_state=aget_state)
-
-    async def fake_mark_running(_job_id: Any) -> None:
+    async def get_agent(_name):
         return None
 
-    async def fake_finish(job_id: Any, **fields: Any) -> None:
+    @asynccontextmanager
+    async def claim(job_id):
+        yield (job or _job(id=job_id)), connection
+
+    async def finish(owner_connection, job_id, **fields):
+        assert owner_connection is connection
         outcomes.append({"job_id": job_id, **fields})
 
-    resources = SimpleNamespace(background_specialists={"software-specialist": _Specialist()})
-    monkeypatch.setattr(registry, "get_agent", fake_get_agent)
+    resources = SimpleNamespace(background_specialists={
+        "software-specialist": lambda **kwargs: {"runnable": Specialist()},
+    })
+    monkeypatch.setattr(registry, "get_agent", get_agent)
     monkeypatch.setattr(registry, "get_agent_resources", lambda _name: resources)
-    monkeypatch.setattr(runner.jobs, "mark_running", fake_mark_running)
-    monkeypatch.setattr(runner.jobs, "finish", fake_finish)
+    monkeypatch.setattr(runner.jobs, "claim", claim)
+    monkeypatch.setattr(runner.jobs, "finish", finish)
+    monkeypatch.setattr(runner, "AsyncPostgresSaver", lambda _connection: object())
     return outcomes
 
 
 async def _run_once(monkeypatch: Any, result: dict) -> dict:
     outcomes = _runner_harness(monkeypatch, result)
-    await runner._run(
-        uuid4(),
-        "survey the fitting code",
-        "t1",
-        uuid4(),
-        "software-specialist",
-        "blablador",
-        "a-model",
-        timeout_seconds=30,
-    )
+    await runner._run(uuid4())
     assert len(outcomes) == 1
     return outcomes[0]
 
@@ -842,3 +849,79 @@ async def test_a_turn_that_delivered_nothing_opens_no_transaction() -> None:
     from juena.research import jobs
 
     assert await jobs.mark_collected_many([]) == 0
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_extend_the_original_deadline(monkeypatch):
+    job = _job(started_at=datetime.now(UTC) - timedelta(seconds=901))
+    outcomes = _runner_harness(monkeypatch, {}, job=job)
+    await runner._run(job.id)
+    assert outcomes[0]["status"] == "failed"
+    assert outcomes[0]["error"] == runner.TIMEOUT_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_a_finished_checkpoint_is_delivered_even_after_the_deadline():
+    result = {"messages": [_handoff_package({"status": "completed", "finding": "saved"})]}
+
+    class Finished:
+        async def aget_state(self, config):
+            return SimpleNamespace(created_at="saved", next=(), values=result)
+
+        async def ainvoke(self, *args, **kwargs):
+            pytest.fail("A completed graph must not run again")
+
+    job = _job(started_at=datetime.now(UTC) - timedelta(hours=1))
+    assert await runner._invoke(Finished(), job) == result
+
+
+@pytest.mark.asyncio
+async def test_a_job_owned_elsewhere_is_not_executed(monkeypatch):
+    @asynccontextmanager
+    async def claim(_job_id):
+        yield None
+
+    monkeypatch.setattr(runner.jobs, "claim", claim)
+    # No agent registry or database setup: executing anything would fail.
+    await runner._run(uuid4())
+
+
+@pytest.mark.asyncio
+async def test_lifespan_polls_once_per_job_and_cancels_only_local_tasks(monkeypatch):
+    from contextvars import ContextVar
+
+    parent_span = ContextVar("test_parent_span", default=None)
+    parent_span.set("request-span")
+    job_id = uuid4()
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    polled_twice = asyncio.Event()
+    polls = 0
+    starts = 0
+
+    async def active_ids():
+        nonlocal polls
+        polls += 1
+        if polls >= 2:
+            polled_twice.set()
+        return [job_id]
+
+    async def run(_job_id):
+        nonlocal starts
+        starts += 1
+        assert parent_span.get() is None
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(runner.jobs, "active_ids", active_ids)
+    monkeypatch.setattr(runner, "_run", run)
+    monkeypatch.setattr(runner, "POLL_SECONDS", 0.01)
+    async with runner.lifespan():
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(polled_twice.wait(), 1)
+        assert starts == 1
+    assert cancelled.is_set()
+    assert runner._running == {}

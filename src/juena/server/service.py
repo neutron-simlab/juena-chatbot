@@ -22,7 +22,6 @@ from juena_core.sandbox.runtime import (
 from juena_core.server.service import StreamPolicy, ThreadWorkspace, create_app
 
 from juena.core.config import global_config
-from juena.research import jobs as research_jobs
 from juena.research import runner as research_runner
 from juena.server.auth.endpoints import router as auth_router
 from juena.server.auth.principal import session_principal
@@ -69,23 +68,6 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
         yield
 
 
-@asynccontextmanager
-async def _research_lifespan() -> AsyncGenerator[None, None]:
-    """Sweep abandoned research at startup; stop in-flight research at shutdown."""
-
-    # Background research runs in this process's event loop, so any row still
-    # marked active belongs to a process that is gone. Sweep before anything
-    # can create a new one.
-    await research_jobs.fail_orphans()
-    try:
-        yield
-    finally:
-        # In-flight research holds the database and the model clients that
-        # `shutdown_agents` is about to close, and core closes those only once
-        # every extra lifespan here has unwound.
-        await research_runner.shutdown()
-
-
 app = create_app(
     principal=session_principal,
     # Core's clarification arm plus the sandbox approval arm; the union exists
@@ -115,7 +97,11 @@ app = create_app(
     version="0.1.0",
     extra_routers=(auth_router, research_router),
     # Entered in this order inside the database lifespan, and unwound in
-    # reverse before it: SAML metadata first, then research, which needs the
-    # database the outer lifespan opened.
-    extra_lifespans=(_optional_saml_lifespan, _research_lifespan, sandbox_lifespan),
+    # reverse before it. Research starts last so recovery can build agents only
+    # after their resources are ready; it stops before those resources close.
+    extra_lifespans=(
+        _optional_saml_lifespan,
+        sandbox_lifespan,
+        research_runner.lifespan,
+    ),
 )

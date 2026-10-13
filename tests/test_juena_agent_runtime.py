@@ -254,6 +254,7 @@ async def test_supervisor_assembly_registers_both_specialists(
     fake_graph = object()
     supervisor_model = object()
     summarizer_model = object()
+    specialist_summarizer_model = object()
     context7_tool = object()
     tavily_tool = object()
     fallback_model = object()
@@ -280,6 +281,8 @@ async def test_supervisor_assembly_registers_both_specialists(
 
     def fake_build_chat_model(**kwargs: Any) -> object:
         created.setdefault("model_calls", []).append(kwargs)
+        if kwargs["model"].startswith("90 - Qwen 3.8-Flash-Next"):
+            return specialist_summarizer_model
         return supervisor_model if kwargs["model"] == "user-model" else summarizer_model
 
     def fake_build_software_specialist(**kwargs: Any) -> dict[str, Any]:
@@ -343,21 +346,37 @@ async def test_supervisor_assembly_registers_both_specialists(
             "model": juena_agent.SUMMARIZER_MODEL,
             "temperature": 0.0,
         },
+        {
+            "provider": "blablador",
+            "model": (
+                "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
+                "An excellent model from September 2026"
+            ),
+            "temperature": 0.0,
+            "max_tokens": 32_768,
+        },
     ]
+    assert created["software_kwargs"]["summarizer_model"] is specialist_summarizer_model
+    assert created["neutron_kwargs"]["summarizer_model"] is specialist_summarizer_model
     assert created["software_kwargs"]["has_repo_research"] is True
     assert created["software_kwargs"]["context7_tools"] == (context7_tool,)
     assert created["neutron_kwargs"]["tavily_tool"] is tavily_tool
     assert created["software_kwargs"]["fallback_models"] == [fallback_model]
     assert created["neutron_kwargs"]["fallback_models"] == [fallback_model]
 
-    # Each specialist is compiled twice: the interactive copy `task` invokes,
-    # and the unattended copy background research invokes.
+    # Background graphs are built only when a job owns its checkpoint connection.
     for calls in (created["software_calls"], created["neutron_calls"]):
-        assert [call["unattended"] for call in calls] == [False, True]
+        assert len(calls) == 1
+        assert not calls[0].get("unattended", False)
     assert set(resources.background_specialists) == {
         SOFTWARE_SPECIALIST_NAME,
         NEUTRON_RESEARCH_SPECIALIST_NAME,
     }
+    checkpointer = object()
+    resources.background_specialists[SOFTWARE_SPECIALIST_NAME](checkpointer=checkpointer)
+    assert created["software_calls"][-1]["unattended"] is True
+    assert created["software_calls"][-1]["checkpointer"] is checkpointer
+    assert len(created["neutron_calls"]) == 1
 
     agent_kwargs = created["agent_kwargs"]
     assert agent_kwargs["model"] is supervisor_model

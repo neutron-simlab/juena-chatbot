@@ -24,10 +24,6 @@ DEFAULT_CONCURRENCY = 2
 #: without ever exceeding a turn count.
 DEFAULT_TIMEOUT_SECONDS = 900
 
-#: What a restarting process says about jobs it finds still marked active. They
-#: cannot be resumed: the run lived in the previous process's event loop.
-RESTART_MESSAGE = "The server restarted before this research finished"
-
 TIMEOUT_MESSAGE = "This research ran past its time limit and was stopped"
 
 BUSY_MESSAGE = (

@@ -9,6 +9,7 @@ from typing import Any
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from juena_core.agents.ask_user import build_ask_user_tool
 from juena_core.agents.specialist_runtime import (
@@ -97,6 +98,7 @@ def build_software_specialist(
     summarizer_model: Any,
     fallback_models: list[Any],
     unattended: bool = False,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> CompiledSubAgent:
     """Compile the software specialist with its own model, tools, and backend.
 
@@ -161,6 +163,7 @@ def build_software_specialist(
         ),
         response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,
+        checkpointer=checkpointer,
         name="juena_software_specialist",
     )
     return {
