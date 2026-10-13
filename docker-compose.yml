@@ -126,7 +126,16 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-juena-chatbot}
-      
+
+      # Self-hosted Langfuse tracing (optional; `./juena langfuse-up`). Inside
+      # this container Langfuse is `http://langfuse:3000`, reached over the
+      # private `juena-tracing` network below -- not `localhost`, which is
+      # this container's own loopback.
+      - LANGFUSE_TRACING=${LANGFUSE_TRACING:-false}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+
       # Environment settings
       - ENVIRONMENT=${ENVIRONMENT:-production}
       # Keep the documented one-shot SAML check executable:
@@ -165,6 +174,9 @@ services:
       - "9501:9501"  # Streamlit UI
     networks:
       - chatbot-network
+      # Shared only with Langfuse's web container (deploy/langfuse/), so the
+      # Langfuse UI can stay on the host's loopback on every platform.
+      - tracing-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -174,6 +186,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    # Docker's default is 10 s before SIGKILL. main.py lets in-flight requests
+    # take up to 10 s; research cancellation and the Langfuse flush come after.
+    stop_grace_period: 30s
     # This container no longer indexes: it clones the repositories, and juena-rag
     # holds the vectors. The old 12 GB was sized for building several large HNSW
     # indices in one process, which does not happen here any more -- measured at
@@ -225,3 +240,9 @@ networks:
   chatbot-network:
     driver: bridge
     name: juena-chatbot-network
+  # External: owned by neither this project nor deploy/langfuse/, so neither
+  # project's `down` removes it and each keeps its own lifecycle. The launcher
+  # creates it (`./juena up`, `prod-up`, `langfuse-up`).
+  tracing-network:
+    external: true
+    name: juena-tracing

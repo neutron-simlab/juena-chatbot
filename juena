@@ -35,6 +35,15 @@ cd "$REPO_ROOT"
 COMPOSE_DEV=(docker compose -f docker-compose.yml -f docker-compose.dev.yml)
 COMPOSE_PROD=(docker compose -f docker-compose.yml)
 
+# Self-hosted Langfuse is a Compose project of its own, so `juena down` leaves
+# it running. `-p` on every call: a COMPOSE_PROJECT_NAME in the environment
+# would otherwise override the file's `name:`, and both projects have a
+# service called `postgres`. `--env-file` names the one file it reads rather
+# than leaving that to Compose's project-directory rules.
+LANGFUSE_DIR="deploy/langfuse"
+COMPOSE_LANGFUSE=(docker compose -p juena-langfuse -f "$LANGFUSE_DIR/docker-compose.yml" --env-file "$LANGFUSE_DIR/.env")
+LANGFUSE_URL="http://localhost:3000"
+
 # Production reads its settings from a file outside the repo.
 PROD_ENV_FILE="${PROD_ENV_FILE:-/etc/juena/juena.env}"
 
@@ -617,6 +626,103 @@ start_rag_if_available() {
 }
 
 # ---------------------------------------------------------------------------
+# Langfuse, the self-hosted tracing UI (deploy/langfuse/, deploy/LANGFUSE.md)
+# ---------------------------------------------------------------------------
+#
+# Started on its own and left running: `juena down` does not touch it, so the
+# traces at http://localhost:3000 stay there between chatbot restarts.
+
+# The private network the chatbot container and Langfuse's web container
+# share. External to both Compose projects -- so neither project's `down`
+# removes it -- which means it is created here, by whichever starts first.
+ensure_tracing_network() {
+    docker network inspect juena-tracing >/dev/null 2>&1 \
+        || docker network create juena-tracing >/dev/null
+}
+
+require_langfuse_env() {
+    [ -f "$LANGFUSE_DIR/.env" ] \
+        || die "$LANGFUSE_DIR/.env is missing. Run 'juena langfuse-up' first."
+}
+
+cmd_langfuse_up() { ## Start self-hosted Langfuse on http://localhost:3000 (kept running by 'down')
+    if [ ! -f "$LANGFUSE_DIR/.env" ]; then
+        cp "$LANGFUSE_DIR/env.example" "$LANGFUSE_DIR/.env"
+        echo "Created $LANGFUSE_DIR/.env from env.example (development values)"
+    fi
+    ensure_tracing_network
+    # Returns once the web *and* worker health checks pass. The first start
+    # runs the database migrations and takes a minute or two.
+    "${COMPOSE_LANGFUSE[@]}" up -d --wait --wait-timeout 300 "$@" \
+        || die "Langfuse did not become healthy. See 'juena langfuse-logs'."
+    # Only once the chatbot has keys to send with; until then the stack is up
+    # and there is nothing to prove yet.
+    uv run python scripts/langfuse_check.py --if-configured "$LANGFUSE_URL"
+    echo "Langfuse  $LANGFUSE_URL"
+    echo "${DIM}Login: LANGFUSE_INIT_USER_EMAIL / _PASSWORD in $LANGFUSE_DIR/.env${RESET}"
+}
+
+# Healthy containers do not prove traces arrive. This sends a test observation
+# with the *chatbot's* keys from .env and reads it back, so it also proves the
+# two key pairs match. The script reads .env itself, with python-dotenv like
+# the application: this file's line parser keeps quotes and inline comments,
+# so `KEY="pk-lf-..."` would reach Langfuse with its quotes on. The URL is the
+# host's view of Langfuse: .env's LANGFUSE_BASE_URL is the container's.
+cmd_langfuse_check() { ## Prove Langfuse stores traces sent with .env's keys
+    [ -f .env ] || die ".env is missing. Run 'juena env' first."
+    uv run python scripts/langfuse_check.py "$LANGFUSE_URL"
+}
+
+cmd_langfuse_down() { ## Stop Langfuse, keeping its traces
+    require_langfuse_env
+    "${COMPOSE_LANGFUSE[@]}" down "$@"
+}
+
+cmd_langfuse_logs() { ## Follow the Langfuse web and worker logs
+    require_langfuse_env
+    "${COMPOSE_LANGFUSE[@]}" logs -f langfuse-web langfuse-worker "$@"
+}
+
+cmd_langfuse_reset() { ## DESTROYS every Langfuse trace, login and key. Needs --confirm
+    require_langfuse_env
+    local confirmed="${CONFIRM:-}"
+    case "${1:-}" in --confirm|-y|yes) confirmed=yes ;; esac
+    if [ "$confirmed" != "yes" ]; then
+        echo "refusing: this deletes the juena-langfuse-* volumes -- every trace," >&2
+        echo "login and API key. The next 'juena langfuse-up' starts empty and" >&2
+        echo "creates the login and keys again from $LANGFUSE_DIR/.env." >&2
+        echo "Re-run with: juena langfuse-reset --confirm" >&2
+        exit 1
+    fi
+    "${COMPOSE_LANGFUSE[@]}" down --volumes
+}
+
+# From inside the container, over the address the SDK will use. Warns, never
+# fails: chats work without Langfuse, they are just not traced. The switch and
+# the URL are read inside the container too: Compose has already parsed .env
+# into its environment, quotes and all, which this file's line parser does not.
+report_langfuse_reachability() {
+    local result
+    result="$("${COMPOSE_DEV[@]}" exec -T juena-chatbot sh -c '
+        tracing="$(printf %s "$LANGFUSE_TRACING" | tr "[:upper:]" "[:lower:]")"
+        [ "$tracing" = "true" ] || { echo off; exit 0; }
+        curl -fsS -m 5 "${LANGFUSE_BASE_URL%/}/api/public/health" >/dev/null 2>&1 \
+            && echo "ok $LANGFUSE_BASE_URL" || echo "unreachable $LANGFUSE_BASE_URL"
+    ' 2>/dev/null)" || return 0
+    case "$result" in
+        ok\ *)
+            echo "${DIM}The stack reaches Langfuse at ${result#ok }.${RESET}"
+            echo "Traces  $LANGFUSE_URL (Langfuse)"
+            ;;
+        unreachable\ *)
+            echo "warning: LANGFUSE_TRACING is on, but the juena-chatbot container" >&2
+            echo "         cannot reach ${result#unreachable } -- traces are being dropped." >&2
+            echo "         Start Langfuse with 'juena langfuse-up'." >&2
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # Development stack
 # ---------------------------------------------------------------------------
 
@@ -627,6 +733,7 @@ cmd_up() { ## Start the full development stack (build if needed)
     # the agent, and a juena-rag that arrives late means a startup logged as
     # degraded.
     start_rag_if_available
+    ensure_tracing_network
     "${COMPOSE_DEV[@]}" up --build -d --remove-orphans "$@"
     wait_for_sandbox_stack
     start_sandbox_worker
@@ -637,6 +744,7 @@ cmd_up() { ## Start the full development stack (build if needed)
     # before the stack existed, so this is the first point the real path can be
     # checked end to end.
     report_rag_reachability
+    report_langfuse_reachability
     echo "UI      http://localhost:${UI_PORT}"
     echo "API     http://localhost:${API_PORT}"
     echo "Search  http://127.0.0.1:$(rag_port) (juena-rag)"
@@ -748,6 +856,7 @@ cmd_prod_config() { ## Validate the production compose config against PROD_ENV_F
 }
 
 cmd_prod_up() { ## Start the production stack (base compose file only)
+    ensure_tracing_network
     "${COMPOSE_PROD[@]}" --env-file "$PROD_ENV_FILE" up -d "$@"
 }
 

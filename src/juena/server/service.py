@@ -27,6 +27,7 @@ from juena.server.auth.endpoints import router as auth_router
 from juena.server.auth.principal import session_principal
 from juena.server.auth.saml import saml_lifespan
 from juena.server.research.endpoints import router as research_router
+from juena.server.tracing import langfuse_lifespan, start_langfuse
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API
@@ -48,6 +49,10 @@ logger.info("Service logging initialized")
 # single lifetime, so they register together -- and before the app is built,
 # because an unregistered kind can neither be shown nor answered.
 register_sandbox_interrupt()
+
+# Before the app is built: the first run must already carry the handler.
+if global_config.LANGFUSE_TRACING:
+    start_langfuse()
 
 
 @asynccontextmanager
@@ -99,7 +104,9 @@ app = create_app(
     # Entered in this order inside the database lifespan, and unwound in
     # reverse before it. Research starts last so recovery can build agents only
     # after their resources are ready; it stops before those resources close.
+    # Langfuse enters first so it flushes last.
     extra_lifespans=(
+        langfuse_lifespan,
         _optional_saml_lifespan,
         sandbox_lifespan,
         research_runner.lifespan,

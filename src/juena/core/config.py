@@ -39,6 +39,15 @@ class Config:
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
     LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT")
 
+    # Self-hosted Langfuse (deploy/langfuse/). Independent of LangSmith: with
+    # both on, every run is traced to both. No default URL on purpose -- the
+    # SDK's own default is Langfuse Cloud, and chats must never go there by
+    # accident.
+    LANGFUSE_TRACING = os.getenv("LANGFUSE_TRACING", "false").lower() == "true"
+    LANGFUSE_BASE_URL = (os.getenv("LANGFUSE_BASE_URL") or "").strip() or None
+    LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+    LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+
     DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "blablador")
     FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "blablador")
 
@@ -311,6 +320,24 @@ class Config:
                 "LANGSMITH_API_KEY is required when LANGSMITH_TRACING is enabled"
             )
 
+        if cls.LANGFUSE_TRACING:
+            for setting_name in (
+                "LANGFUSE_BASE_URL",
+                "LANGFUSE_PUBLIC_KEY",
+                "LANGFUSE_SECRET_KEY",
+            ):
+                if not getattr(cls, setting_name):
+                    errors.append(
+                        f"{setting_name} is required when LANGFUSE_TRACING is enabled"
+                    )
+            # The SDK has its own off switch. Left at false it would silently
+            # drop every trace while startup reported Langfuse as enabled.
+            if os.getenv("LANGFUSE_TRACING_ENABLED", "").strip().lower() == "false":
+                errors.append(
+                    "LANGFUSE_TRACING_ENABLED=false conflicts with "
+                    "LANGFUSE_TRACING=true; remove LANGFUSE_TRACING_ENABLED"
+                )
+
         if cls.SANDBOX_ENABLED:
             if not cls.DATABASE_URL:
                 errors.append("DATABASE_URL is required when SANDBOX_ENABLED is true")
@@ -383,7 +410,13 @@ class Config:
 
     @classmethod
     def setup_langsmith(cls):
-        """Setup LangSmith tracing if enabled"""
+        """Make LANGSMITH_TRACING the one switch that decides LangSmith tracing.
+
+        The langsmith library reads `LANGSMITH_TRACING_V2` (then the legacy
+        `LANGCHAIN_TRACING_V2`) before `LANGSMITH_TRACING`, so a stray `_V2`
+        left in the environment would keep tracing on while startup printed
+        "disabled". Writing `LANGSMITH_TRACING_V2` in both branches settles it.
+        """
         if cls.LANGSMITH_TRACING and cls.LANGSMITH_API_KEY:
             os.environ["LANGSMITH_TRACING_V2"] = "true"
             if cls.LANGSMITH_ENDPOINT:
@@ -392,6 +425,7 @@ class Config:
             if cls.LANGSMITH_PROJECT:
                 os.environ["LANGSMITH_PROJECT"] = cls.LANGSMITH_PROJECT
             return True
+        os.environ["LANGSMITH_TRACING_V2"] = "false"
         return False
 
     @classmethod
@@ -412,6 +446,7 @@ class Config:
             f"✅ Available Providers: {', '.join(available_list) if available_list else 'None'}"
         )
         print(f"✅ LangSmith: {'enabled' if langsmith_enabled else 'disabled'}")
+        print(f"✅ Langfuse: {'enabled' if cls.LANGFUSE_TRACING else 'disabled'}")
         print("✅ Persistence: Postgres (required at service startup)")
 
         return cls

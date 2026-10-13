@@ -1,0 +1,201 @@
+# =============================================================================
+# Self-hosted Langfuse for JueNA's traces -- see deploy/LANGFUSE.md
+# =============================================================================
+# Adapted from Langfuse's own docker-compose.yml (v4). Run it through the
+# launcher, which always passes the project name and env file:
+#
+#   juena langfuse-up      start (and keep running through `juena down`)
+#   juena langfuse-check   prove traces arrive
+#   juena langfuse-down    stop, keeping the data
+#
+# What differs from upstream, and why:
+#   - Only the UI/API is published, and only on 127.0.0.1:3000. The chatbot
+#     container reaches it as http://langfuse:3000 over the private
+#     `juena-tracing` network instead, so nothing needs a wider bind.
+#   - Nothing else is published. Upstream binds Postgres to 127.0.0.1:5432,
+#     which is the chatbot's development Postgres port.
+#   - Connection settings between these containers are literals, not
+#     `${POSTGRES_USER}`-style variables: the launcher exports POSTGRES_* and
+#     DATABASE_URL for the chatbot, and those would leak in here. The
+#     datastores are reachable only from inside this project.
+#   - Only LANGFUSE_*-prefixed values come from deploy/langfuse/.env.
+#   - Media upload and batch export are not configured: JueNA traces are text.
+# =============================================================================
+
+name: juena-langfuse
+
+x-langfuse-env: &langfuse-env
+  # Web and worker both bind to $HOSTNAME, which Docker sets to the container
+  # id -- one interface on one network. All interfaces, so they answer on
+  # every network they join and on loopback for their health checks.
+  HOSTNAME: 0.0.0.0
+  NEXTAUTH_URL: http://localhost:3000
+  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?set LANGFUSE_NEXTAUTH_SECRET in deploy/langfuse/.env}
+  SALT: ${LANGFUSE_SALT:?set LANGFUSE_SALT in deploy/langfuse/.env}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY in deploy/langfuse/.env}
+  TELEMETRY_ENABLED: "false"
+  DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+
+x-langfuse-depends-on: &langfuse-depends-on
+  postgres:
+    condition: service_healthy
+  clickhouse:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+
+services:
+  langfuse-web:
+    image: langfuse/langfuse:4
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      # First boot only: these create the org, project, API key pair and login
+      # that do not exist yet. Changing them later rotates nothing -- see
+      # deploy/LANGFUSE.md before exposing this instance anywhere.
+      LANGFUSE_INIT_ORG_ID: juena
+      LANGFUSE_INIT_ORG_NAME: JueNA
+      LANGFUSE_INIT_PROJECT_ID: juena-chatbot
+      LANGFUSE_INIT_PROJECT_NAME: juena-chatbot
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?set LANGFUSE_INIT_PROJECT_PUBLIC_KEY in deploy/langfuse/.env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:?set LANGFUSE_INIT_PROJECT_SECRET_KEY in deploy/langfuse/.env}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:?set LANGFUSE_INIT_USER_EMAIL in deploy/langfuse/.env}
+      LANGFUSE_INIT_USER_NAME: JueNA developer
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?set LANGFUSE_INIT_USER_PASSWORD in deploy/langfuse/.env}
+    networks:
+      default:
+      tracing:
+        aliases:
+          - langfuse
+    healthcheck:
+      # The database check makes "healthy" mean the API can serve, not just
+      # that the process is up. The first start runs the migrations, hence
+      # the long start period.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/public/health?failIfDatabaseUnavailable=true"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  # Turns what the web container accepts into rows in ClickHouse. The web
+  # health check cannot see a broken worker, so it has its own.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3030/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    # Creates the 'langfuse' bucket before starting the server.
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: >
+      --requirepass langfuse
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      # Authenticated, and only PONG counts: an unauthenticated `ping` answers
+      # "NOAUTH Authentication required" and still exits 0.
+      test: ["CMD-SHELL", "redis-cli -a langfuse --no-auth-warning ping | grep -qx PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+    name: juena-langfuse-postgres
+  clickhouse-data:
+    name: juena-langfuse-clickhouse-data
+  clickhouse-logs:
+    name: juena-langfuse-clickhouse-logs
+  minio-data:
+    name: juena-langfuse-minio
+  redis-data:
+    name: juena-langfuse-redis
+
+networks:
+  # Shared with the chatbot container only; see docker-compose.yml at the
+  # repository root. External, so neither project's `down` removes it.
+  tracing:
+    external: true
+    name: juena-tracing

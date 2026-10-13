@@ -24,6 +24,7 @@ def test_main_runs_bootstrap_before_starting_server(monkeypatch) -> None:
             "port": main.global_config.SERVER_PORT,
             "reload": False,
             "log_level": "info",
+            "timeout_graceful_shutdown": 10,
         },
     )
 
@@ -50,6 +51,7 @@ def test_main_skips_bootstrap_when_flag_is_present(monkeypatch) -> None:
                 "port": main.global_config.SERVER_PORT,
                 "reload": True,
                 "log_level": "info",
+                "timeout_graceful_shutdown": 10,
             },
         )
     ]

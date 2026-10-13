@@ -20,6 +20,7 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
     env["DEFAULT_PROVIDER"] = "openai"
     env["FALLBACK_PROVIDER"] = "openai"
     env["LANGSMITH_TRACING"] = "false"
+    env["LANGFUSE_TRACING"] = "false"
     env["ENVIRONMENT"] = "development"
     env["AUTH_DEV_BYPASS"] = "false"
 
@@ -143,6 +144,7 @@ def test_production_requires_public_https_configuration() -> None:
             "DEFAULT_PROVIDER": "openai",
             "FALLBACK_PROVIDER": "openai",
             "LANGSMITH_TRACING": "false",
+            "LANGFUSE_TRACING": "false",
             "ENVIRONMENT": "production",
             "AUTH_DEV_BYPASS": "false",
         }
@@ -188,3 +190,114 @@ def test_production_accepts_explicit_secure_public_origins() -> None:
     assert snapshot["public_url"] == "https://juena.example.org"
     assert snapshot["ui_public_url"] == "https://juena.example.org"
     assert snapshot["cookie_secure"] is True
+
+
+def _run_config(extra_env: dict[str, str], code: str) -> subprocess.CompletedProcess:
+    """Import the real config in a fresh process with exactly these switches."""
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith(("LANGSMITH_", "LANGCHAIN_", "LANGFUSE_")):
+            env.pop(key)
+    env.update(
+        {
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+            "JUENA_ENV_PATH": str(REPO_ROOT / ".env.test.empty"),
+            "OPENAI_API_KEY": "test-key",
+            "DEFAULT_PROVIDER": "openai",
+            "FALLBACK_PROVIDER": "openai",
+            "ENVIRONMENT": "development",
+            "AUTH_DEV_BYPASS": "false",
+            "LANGSMITH_TRACING": "false",
+            "LANGFUSE_TRACING": "false",
+            **extra_env,
+        }
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+_LANGSMITH_EFFECTIVE = (
+    "from juena.core.config import global_config\n"
+    "from langsmith.utils import tracing_is_enabled\n"
+    "print('TRACING::' + str(tracing_is_enabled()))\n"
+)
+
+
+def test_langsmith_switch_overrides_stray_v2_variables() -> None:
+    # The langsmith library reads both `_V2` names before LANGSMITH_TRACING;
+    # left alone, these would trace while startup printed "disabled".
+    result = _run_config(
+        {"LANGSMITH_TRACING_V2": "true", "LANGCHAIN_TRACING_V2": "true"},
+        _LANGSMITH_EFFECTIVE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "TRACING::False" in result.stdout
+    assert "LangSmith: disabled" in result.stdout
+
+
+def test_langsmith_switch_still_turns_tracing_on() -> None:
+    # The other half: the check above is only meaningful if the same probe
+    # reports True when the switch is on.
+    result = _run_config(
+        {
+            "LANGSMITH_TRACING": "true",
+            "LANGSMITH_API_KEY": "test-langsmith-key",
+            "LANGCHAIN_TRACING_V2": "false",
+        },
+        _LANGSMITH_EFFECTIVE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "TRACING::True" in result.stdout
+    assert "LangSmith: enabled" in result.stdout
+
+
+def test_langfuse_tracing_requires_its_url_and_keys() -> None:
+    result = _run_config(
+        {"LANGFUSE_TRACING": "true"},
+        "from juena.core.config import global_config",
+    )
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    for name in ("LANGFUSE_BASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert f"{name} is required when LANGFUSE_TRACING is enabled" in output
+
+
+def test_langfuse_tracing_refuses_the_sdk_off_switch() -> None:
+    # The SDK's own switch would drop every trace while startup said enabled.
+    result = _run_config(
+        {
+            "LANGFUSE_TRACING": "true",
+            "LANGFUSE_BASE_URL": "http://127.0.0.1:9",
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+            "LANGFUSE_SECRET_KEY": "sk-lf-test",
+            "LANGFUSE_TRACING_ENABLED": "false",
+        },
+        "from juena.core.config import global_config",
+    )
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "LANGFUSE_TRACING_ENABLED=false conflicts with LANGFUSE_TRACING=true" in output
+
+
+def test_langfuse_tracing_starts_when_configured() -> None:
+    result = _run_config(
+        {
+            "LANGFUSE_TRACING": "true",
+            "LANGFUSE_BASE_URL": "http://127.0.0.1:9",
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+            "LANGFUSE_SECRET_KEY": "sk-lf-test",
+        },
+        "from juena.core.config import global_config",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Langfuse: enabled" in result.stdout

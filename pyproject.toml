@@ -40,6 +40,9 @@ dependencies = [
     # The retrieval store, over HTTP. The `client` extra is httpx only -- no
     # database driver and no embedder, because the service does both.
     "juena-rag[client] @ git+https://github.com/neutron-simlab/juena-rag.git",
+    # Self-hosted tracing, switched on by LANGFUSE_TRACING. The floor is the
+    # version whose span propagation tests/test_langfuse_tracing.py verifies.
+    "langfuse>=4.17,<5",
 ]
 
 [project.optional-dependencies]

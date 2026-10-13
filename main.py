@@ -37,7 +37,15 @@ def main():
         host=global_config.SERVER_HOST,
         port=global_config.SERVER_PORT,
         reload=reload,  # Enable auto-reload only if RELOAD=true
-        log_level="info"
+        log_level="info",
+        # On SIGTERM uvicorn waits for in-flight requests before it runs the
+        # shutdown lifespans (research cancellation, Langfuse flush). Chat
+        # streams are not what it waits for -- sse-starlette ends every event
+        # stream as soon as shutdown begins -- but any other slow request
+        # could use up Docker's whole grace period, and the container would be
+        # killed before anything was flushed. 10 s caps that wait;
+        # docker-compose.yml's stop_grace_period budgets for it.
+        timeout_graceful_shutdown=10,
     )
 
 

@@ -235,6 +235,8 @@ Press **Ctrl+C** to stop watching logs; JüNA keeps running.
   Repository search still needs the Blablador key in `juena-rag/.env`.
 - **FZJ login or a shared server:** use the [login setup guide](SAML-IFFLOGIN.md)
   and [sandbox deployment guide](deploy/SANDBOX.md).
+- **Tracing every chat:** run `./juena langfuse-up` for a Langfuse server on
+  <http://localhost:3000>; see the [Langfuse guide](deploy/LANGFUSE.md).
 - **More settings:** see [env.example](env.example).
 - **Development checks:** run `./juena test`. Run `./juena test-integration`
   for the database checks.
