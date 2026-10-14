@@ -49,20 +49,17 @@ Create your local settings file:
 ./juena env
 ```
 
-Open `.env` in your editor. Set the following values, replacing the example
-key with your Blablador API key. Remove the leading `#` from these settings
-where needed, and edit existing lines rather than adding duplicates.
+Open `.env` in your editor and put your Blablador API key after
+`BLABLADOR_API_KEY=`:
 
 ```dotenv
 BLABLADOR_API_KEY=your-blablador-api-key
-BLABLADOR_BASE_URL=https://api.blablador.fz-juelich.de/v1/
-DEFAULT_PROVIDER=blablador
-AUTH_DEV_BYPASS=true
 ```
 
-Leave the other settings as supplied. `AUTH_DEV_BYPASS=true` lets you sign in
-locally without setting up FZJ login. Use it only on your own development
-computer.
+Leave the other settings as supplied. They already set up Blablador, the
+sandbox, Langfuse tracing (its UI starts with `./juena langfuse-up`; chats work
+without it) and `AUTH_DEV_BYPASS=true`, which lets you sign in locally without
+setting up FZJ login. Use that only on your own development computer.
 
 ## 4. Prepare repository search once
 

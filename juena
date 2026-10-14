@@ -221,7 +221,7 @@ cmd_env() { ## Create .env from env.example if it does not exist
         echo ".env already exists; leaving it alone"
     else
         cp env.example .env
-        echo "Created .env from env.example -- add at least one LLM provider key"
+        echo "Created .env from env.example -- add your Blablador API key (BLABLADOR_API_KEY)"
     fi
 }
 
