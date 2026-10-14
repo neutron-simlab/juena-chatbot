@@ -99,7 +99,7 @@ app = create_app(
         "the paths a specialist needs in the objective you send it."
     ),
     title="juena",
-    version="0.1.0",
+    version="1.0.0",
     extra_routers=(auth_router, research_router),
     # Entered in this order inside the database lifespan, and unwound in
     # reverse before it. Research starts last so recovery can build agents only

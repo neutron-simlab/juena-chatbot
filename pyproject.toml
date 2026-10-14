@@ -3,7 +3,7 @@ name = "juena"
 authors = [
     {name = "Ahmad Z. Ihsan", email = "a.ihsan@fz-juelich.de"}
 ]
-version = "0.1.0"
+version = "1.0.0"
 description = "A general-purpose chatbot template for building LangGraph-based chatbots"
 readme = "README.md"
 requires-python = ">=3.11, <4.0"
