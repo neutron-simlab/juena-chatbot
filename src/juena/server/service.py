@@ -7,11 +7,13 @@ paragraph of prompt text that closes a staged-input manifest.
 """
 
 import warnings
+from urllib.parse import urlsplit
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from langchain_core._api import LangChainBetaWarning
 
+from juena_core.filesystem import get_filesystem
 from juena_core.log import get_logger
 from juena_core.sandbox.approvals import SandboxResumeInput, register_sandbox_interrupt
 from juena_core.sandbox.runtime import (
@@ -75,6 +77,11 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
 
 app = create_app(
     principal=session_principal,
+    filesystem=get_filesystem(),
+    browser_origins=tuple(dict.fromkeys(
+        f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
+        for url in (global_config.UI_PUBLIC_URL, global_config.JUENA_PUBLIC_URL)
+    )),
     # Core's clarification arm plus the sandbox approval arm; the union exists
     # because `/resume` must accept exactly the kinds this deployment raises.
     resume_input=SandboxResumeInput,
@@ -95,7 +102,8 @@ app = create_app(
     # has neither `/repos` nor Context7 -- it cannot read `/inputs` either.
     # So the instruction is about what to put in an objective, not what to do.
     closing_note=(
-        "The user's pasted or uploaded materials are staged under `/inputs`. Name "
+        "Conversation files are shared under `/workspace`; uploads are in `/workspace/uploads`. "
+        "Pasted material is under `/inputs`. No attachment or pin is needed. Name "
         "the paths a specialist needs in the objective you send it."
     ),
     title="juena",

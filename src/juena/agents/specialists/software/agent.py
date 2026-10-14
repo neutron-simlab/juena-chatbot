@@ -119,6 +119,7 @@ def build_software_specialist(
         if can_execute
         else build_specialist_backend(
             repo_cache_root=repo_cache_root,
+            workspace_writable=not unattended,
             skills_dir=_SPECIALIST_SKILLS_PATH,
         )
     )

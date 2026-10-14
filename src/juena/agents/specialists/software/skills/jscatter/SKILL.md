@@ -76,7 +76,7 @@ Read more than one reference only when the task genuinely crosses those boundari
 
 - Inspect `/repos` and `/skills` only through the specialist's read tools. `/inputs`
   is also mounted read-only inside `execute`; use it for staged inputs and use
-  `/workspace` for writable state. Never assume the virtual `/repos` or `/skills`
+  `/workspace` for persistent working files and `/workspace/.scratch` for disposable execution scripts. Never assume the virtual `/repos` or `/skills`
   routes are mounted in the execution container. Use `/workspace/outputs` for
   requested or reusable artifacts.
 - Do not install packages or access the network. JScatter is already installed.

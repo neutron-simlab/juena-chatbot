@@ -62,12 +62,12 @@ services:
       # open a real file and quote real line numbers.
       - chatbot-repos:/data/repos
       - chatbot-saml:/data/saml
-      # Generated files live outside the temporary sandbox workspace so chat
-      # reloads can retrieve them through the authenticated API.
+      # Chat artifacts are immutable delivered snapshots. Current working files
+      # persist separately in the shared conversation workspace below.
       - chatbot-artifacts:/data/artifacts
       - chatbot-audit:/data/audit
-      # Trusted shared exchange area. The application can stage and validate
-      # files here, but it receives neither the host path nor a Podman socket.
+      # Persistent conversation files, also used when execution is disabled.
+      # API and worker must share this storage and its filesystem locks.
       - ${SANDBOX_WORKSPACE_HOST_ROOT:-./.sandbox/workspaces}:/sandbox-workspaces
     environment:
       # Server configuration

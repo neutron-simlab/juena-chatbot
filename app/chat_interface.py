@@ -189,6 +189,7 @@ def _chat_input_kwargs() -> dict[str, Any]:
     # A single agent handles every conversation, so attachments are always on.
     return {
         "placeholder": "Type your message here...",
+        "key": "chat_prompt",
         "max_chars": CHAT_INPUT_MAX_CHARS,
         "accept_file": "multiple",
         "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
@@ -207,12 +208,11 @@ def render_chat_interface() -> None:
     if render_sandbox_interrupt():
         return
 
-    # On an empty thread the composer sits directly under the title, with the
-    # starter chips beneath it, so the first thing the user sees is where to
-    # type. `st.chat_input` pins itself to the bottom of the viewport only when
-    # called at the top level of the script; inside a container it renders
-    # inline. Once the thread has messages it returns to the bottom, which is
-    # where a growing transcript expects it.
+    # The composer stays inside the chat column, below its transcript. On an
+    # empty thread the starter chips sit beneath it.
+    mention = st.session_state.pop("filesystem_mention", None)
+    if mention and mention["thread_id"] == st.session_state.thread_id:
+        st.session_state["chat_prompt"] = f"Please look at `{mention['path']}`: "
     starter_prompt: str | None = None
     if st.session_state.client and not st.session_state.messages:
         with st.container():

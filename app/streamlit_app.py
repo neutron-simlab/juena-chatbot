@@ -21,6 +21,7 @@ from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
 from app.client_setup import initialize_client
 from juena_core.ui.chat_storage import get_chat_storage
+from juena_core.ui.filesystem import render_filesystem
 
 _assets_dir = Path(__file__).parent / "assets"
 _logo_path = _assets_dir / "logo.png" if (_assets_dir.exists() and (_assets_dir / "logo.png").exists()) else None
@@ -48,6 +49,7 @@ if (
         session_token=session_token,
     )
     st.session_state.client = client
+    st.session_state.filesystem_session_scope = str(uuid4())
 
 if not client.health():
     st.error("The JüNA service is unavailable. Please try again later.")
@@ -77,6 +79,7 @@ except Exception:
 
 st.session_state.session_token = session_token
 st.session_state.user = current_user
+st.session_state.setdefault("filesystem_session_scope", str(uuid4()))
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -119,6 +122,9 @@ if "chat_initialized" not in st.session_state:
     if loaded is not None:
         _, st.session_state.messages = loaded
         st.session_state.welcome_initialized = True
+    else:
+        # A stale bookmark may refer to a deleted conversation identity.
+        st.session_state.thread_id = str(uuid4())
     st.session_state.chat_initialized = True
 
 # Keep the address bar in step with the active conversation so reloads and
@@ -127,4 +133,14 @@ if st.query_params.get("thread") != st.session_state.thread_id:
     st.query_params["thread"] = st.session_state.thread_id
 
 render_sidebar()
-render_chat_interface()
+chat_column, files_column = st.columns([3, 2], gap="medium")
+# Mount the independent browser first: rendering chat can consume SSE for minutes.
+with files_column:
+    render_filesystem(
+        api_url=global_config.JUENA_PUBLIC_URL,
+        thread_id=st.session_state.thread_id,
+        session_scope=st.session_state.filesystem_session_scope,
+        refresh_generation=st.session_state.get("filesystem_refresh", {}).get(st.session_state.thread_id, 0),
+    )
+with chat_column:
+    render_chat_interface()

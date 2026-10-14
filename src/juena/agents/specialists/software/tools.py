@@ -10,7 +10,7 @@ from juena.tools.repo_search import build_code_chat_tools
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
         "List an absolute directory path. Use `/findings` to see what earlier "
-        "specialists established, and `/inputs` for staged user files. "
+        "specialists established, `/workspace` for shared files, and `/inputs` for pasted material. "
         "Use `/repos` only when indexed search cannot identify the repository. "
         "For which repositories exist, call `list_indexed_repositories` instead: "
         "`/repos` shows what is cloned on disk, not what is indexed."
@@ -28,13 +28,13 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "patterns. Do not use it for broad repository discovery."
     ),
     "write_file": (
-        "Create short disposable scratch files at new `/workspace` paths. Write to "
+        "Create shared working files under `/workspace`; use `/workspace/.scratch` for disposable scripts. Write to "
         "`/findings/<topic>.md` only when the objective asks you to record findings; "
         "otherwise the report is the result. `/repos` and `/inputs` are read-only tool "
         "routes, not execution paths."
     ),
     "edit_file": (
-        "Revise a scratch file under `/workspace`, or extend an existing "
+        "Edit the shared working file at its `/workspace` path, or extend an existing "
         "`/findings/<topic>.md` rather than starting a second file on the same topic. "
         "`/repos` and `/inputs` are read-only."
     ),

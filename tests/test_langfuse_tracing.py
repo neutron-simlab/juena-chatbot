@@ -474,3 +474,23 @@ async def test_a_client_that_stops_reading_still_gets_its_graph_spans_flushed(
     exported = {span.name for span in langfuse_capture.exporter.get_finished_spans()}
     assert {"LangGraph", "agent"} <= exported
     assert released == [True]
+
+
+@pytest.mark.asyncio
+async def test_research_start_waits_for_a_short_filesystem_save(monkeypatch, tmp_path) -> None:
+    from juena_core.filesystem.service import ConversationFilesystem
+    from juena_core.filesystem.storage import WorkspaceStore
+    filesystem = ConversationFilesystem(WorkspaceStore(tmp_path), identity_secret="research-test-secret-at-least-32-characters")
+    monkeypatch.setattr(runner, "get_filesystem", lambda: filesystem)
+    job = _research_job()
+    files = filesystem.for_thread(str(job.user_id), job.thread_id)
+    class Specialist:
+        async def aget_state(self, config):
+            return SimpleNamespace(created_at=None, next=(), values={})
+        async def ainvoke(self, *args, **kwargs):
+            return {"report": "finished"}
+    with files.guard(operation=True):
+        task = asyncio.create_task(runner._invoke(Specialist(), job))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    assert await asyncio.wait_for(task, 1) == {"report": "finished"}

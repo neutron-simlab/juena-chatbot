@@ -54,6 +54,9 @@
 **/.ipynb_checkpoints
 **/build
 **/dist
+**/filesystem_dist
+**/test-results
+**/playwright-report
 
 # Tests. The Dockerfile copies neither repository's suite; excluding them keeps
 # the context small and keeps this honest about what ships.
@@ -75,6 +78,7 @@ juena-chatbot/benchmarks
 
 # Internal development notes. Untracked on purpose and not for distribution.
 juena-chatbot/DOCS
+juena-core/DOCS
 
 # Editor and OS noise.
 **/.DS_Store

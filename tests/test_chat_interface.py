@@ -250,7 +250,8 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
     assert session_state.messages == [existing_message]
 
 
-def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -> None:
+@pytest.mark.parametrize("mention_thread", [None, "thread-1", "other-thread"])
+def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, mention_thread) -> None:
     chat_interface = _import_chat_interface(monkeypatch)
     monkeypatch.setattr(
         chat_interface, "render_sandbox_interrupt", Mock(return_value=False)
@@ -273,6 +274,8 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -
         empty=Mock(),
         chat_input=chat_input_mock,
     )
+    if mention_thread:
+        session_state.filesystem_mention = {"thread_id": mention_thread, "path": "/workspace/analysis.py"}
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
@@ -282,8 +285,14 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -
 
     chat_interface.render_chat_interface()
 
+    if mention_thread == "thread-1":
+        assert session_state.chat_prompt == "Please look at `/workspace/analysis.py`: "
+    else:
+        assert "chat_prompt" not in session_state
+    assert "filesystem_mention" not in session_state
     chat_input_mock.assert_called_once_with(
         placeholder="Type your message here...",
+        key="chat_prompt",
         max_chars=CHAT_INPUT_MAX_CHARS,
         accept_file="multiple",
         max_upload_size=CHAT_INPUT_MAX_UPLOAD_MB,

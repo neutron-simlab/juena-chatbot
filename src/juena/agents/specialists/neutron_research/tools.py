@@ -7,7 +7,7 @@ from typing import Any
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
         "List `/findings` to see what earlier specialists established, or `/inputs` "
-        "for staged user files."
+        "for pasted material, or `/workspace` for shared user files (read-only)."
     ),
     "read_file": (
         "Read staged user inputs with line numbers. Use this for uploaded notes, "

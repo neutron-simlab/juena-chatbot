@@ -26,6 +26,9 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
 
     for key in (
         "DATABASE_URL",
+        "DEFAULT_MODEL",
+        "OPENAI_DEFAULT_MODEL",
+        "BLABLADOR_DEFAULT_MODEL",
         "CONTEXT7_API_KEY",
         "CONTEXT7_MCP_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
@@ -53,6 +56,7 @@ sandbox = sandbox_settings()
 
 print("JSON::" + json.dumps({
     "database_url": global_config.DATABASE_URL,
+    "blablador_default_model": global_config.BLABLADOR_DEFAULT_MODEL,
     "context7_api_key": global_config.CONTEXT7_API_KEY,
     "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
     "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
@@ -88,6 +92,21 @@ def test_postgres_is_not_silently_defaulted_outside_compose() -> None:
     snapshot = _load_config_snapshot()
 
     assert snapshot["database_url"] is None
+
+
+def test_blablador_defaults_to_juwels_qwen() -> None:
+    snapshot = _load_config_snapshot()
+
+    assert snapshot["blablador_default_model"] == (
+        "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
+        "An excellent model from September 2026"
+    )
+
+
+def test_blablador_default_model_can_be_overridden() -> None:
+    snapshot = _load_config_snapshot({"BLABLADOR_DEFAULT_MODEL": "deployment-model"})
+
+    assert snapshot["blablador_default_model"] == "deployment-model"
 
 
 def test_postgres_url_is_taken_verbatim_from_the_environment() -> None:
@@ -301,3 +320,15 @@ def test_langfuse_tracing_starts_when_configured() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "Langfuse: enabled" in result.stdout
+
+
+def test_filesystem_identity_secret_is_required_with_execution_disabled() -> None:
+    for secret in ("", "short"):
+        try:
+            _load_config_snapshot({"SANDBOX_ENABLED": "false", "SANDBOX_IDENTITY_SECRET": secret})
+        except subprocess.CalledProcessError as exc:
+            assert "SANDBOX_IDENTITY_SECRET" in exc.stdout + exc.stderr
+            assert "32 characters" in exc.stdout + exc.stderr
+        else:
+            raise AssertionError("An invalid filesystem secret was accepted")
+    _load_config_snapshot({"SANDBOX_ENABLED": "false", "SANDBOX_IDENTITY_SECRET": "stable-secret-with-at-least-32-characters"})

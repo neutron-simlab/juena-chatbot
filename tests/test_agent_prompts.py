@@ -75,7 +75,8 @@ def test_supervisor_prompt_makes_the_server_block_authoritative() -> None:
     assert "`<verified_by_server>`" in prompt
     assert "It is authoritative and overrides the report" in prompt
     assert "STATUS: UNVERIFIED" in prompt
-    assert "Only mention files the verified block actually lists" in prompt
+    assert "Only present delivered outputs listed in the verified block" in prompt
+    assert "their presence alone does not verify execution" in prompt
 
 
 @pytest.mark.parametrize(

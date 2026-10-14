@@ -1,5 +1,12 @@
 # Dockerfile for juena-chatbot
 
+FROM node:24-bookworm-slim AS filesystem-build
+WORKDIR /core/frontend/filesystem
+COPY juena-core/frontend/filesystem/package.json juena-core/frontend/filesystem/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY juena-core/frontend/filesystem/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 # Install system dependencies
@@ -35,6 +42,7 @@ COPY juena-chatbot/pyproject.toml juena-chatbot/uv.lock juena-chatbot/README.md 
 # sync below to find it. uv builds a wheel from this tree; nothing imports it from
 # here at runtime.
 COPY juena-core/ /juena-core/
+COPY --from=filesystem-build /core/src/juena_core/ui/filesystem_dist/ /juena-core/src/juena_core/ui/filesystem_dist/
 
 # Install locked third-party dependencies into /app/.venv.
 RUN uv sync --frozen --no-dev --no-install-project

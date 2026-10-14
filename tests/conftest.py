@@ -13,6 +13,7 @@ import yaml
 # Unit tests must not inherit live integrations from the developer's .env.
 # Individual sandbox tests enable the feature explicitly with local fakes.
 os.environ["SANDBOX_ENABLED"] = "false"
+os.environ["SANDBOX_IDENTITY_SECRET"] = "juena-test-filesystem-identity-secret"
 os.environ["SANDBOX_STARTER_PREVIEW"] = "false"
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGFUSE_TRACING"] = "false"

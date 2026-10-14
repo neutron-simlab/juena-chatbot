@@ -59,6 +59,7 @@ def _logout_form_html(public_url: str) -> str:
 def _activate_chat(storage: ChatStorage, thread_id: str) -> None:
     """Load a saved chat into the current Streamlit session."""
 
+    st.session_state.pop("filesystem_mention", None)
     st.session_state.thread_id = thread_id
     st.session_state.messages = storage.load_messages(thread_id)
     st.session_state.welcome_initialized = True
@@ -73,6 +74,7 @@ def _create_new_chat() -> None:
     "Chat <id>" in the history for every new chat that is never used.
     """
 
+    st.session_state.pop("filesystem_mention", None)
     new_thread_id = str(uuid4())
     st.session_state.thread_id = new_thread_id
     st.session_state.messages = []
@@ -236,107 +238,117 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        st.subheader("Chat History")
-        storage = st.session_state.chat_storage
+        _render_conversation_navigation()
 
-        if st.button("➕ New Chat", help="Start a new conversation", use_container_width=True):
-            _create_new_chat()
-            st.rerun()
 
-        chats = storage.list_chats(limit=20)
+@st.fragment
+def _render_conversation_navigation() -> None:
+    """Keep browsing actions from interrupting the foreground response.
 
-        editing_thread_id = st.session_state.get("editing_thread_id")
-        if editing_thread_id:
-            editing_chat = storage.get_chat(editing_thread_id)
-            if editing_chat:
-                st.caption("Rename conversation:")
-                new_title = st.text_input(
-                    "New name",
-                    value=editing_chat.title if editing_chat.title != "New Chat" else "",
-                    key="rename_input",
-                    placeholder="Enter chat name...",
-                    label_visibility="collapsed"
-                )
-                save_col, cancel_col = st.columns(2)
-                with save_col:
-                    if st.button("Save", key="save_rename", use_container_width=True):
-                        if new_title.strip():
-                            editing_chat.title = new_title.strip()
-                        else:
-                            editing_chat.title = "New Chat"
-                        editing_chat.updated_at = datetime.now()
-                        storage.upsert_chat(editing_chat)
-                        del st.session_state.editing_thread_id
-                        st.rerun()
-                with cancel_col:
-                    if st.button("Cancel", key="cancel_rename", use_container_width=True):
-                        del st.session_state.editing_thread_id
-                        st.rerun()
-                st.divider()
-        
-        if chats:
-            st.caption("Recent conversations:")
-            for chat in chats:
-                is_current = chat.thread_id == st.session_state.thread_id
-                
-                display_title, full_title = _format_chat_history_title(chat)
-                
-                # Give the title most of the width and collapse actions into a popover.
-                select_col, actions_col = st.columns([6, 1], gap="small")
-                
-                with select_col:
-                    button_type = "primary" if is_current else "secondary"
+    Widget reruns stay in this fragment.
+    Explicit conversation actions can still request a full app rerun.
+    """
+    st.subheader("Chat History")
+    storage = st.session_state.chat_storage
+
+    if st.button("➕ New Chat", help="Start a new conversation", use_container_width=True):
+        _create_new_chat()
+        st.rerun()
+
+    chats = storage.list_chats(limit=20)
+
+    editing_thread_id = st.session_state.get("editing_thread_id")
+    if editing_thread_id:
+        editing_chat = storage.get_chat(editing_thread_id)
+        if editing_chat:
+            st.caption("Rename conversation:")
+            new_title = st.text_input(
+                "New name",
+                value=editing_chat.title if editing_chat.title != "New Chat" else "",
+                key="rename_input",
+                placeholder="Enter chat name...",
+                label_visibility="collapsed"
+            )
+            save_col, cancel_col = st.columns(2)
+            with save_col:
+                if st.button("Save", key="save_rename", use_container_width=True):
+                    if new_title.strip():
+                        editing_chat.title = new_title.strip()
+                    else:
+                        editing_chat.title = "New Chat"
+                    editing_chat.updated_at = datetime.now()
+                    storage.upsert_chat(editing_chat)
+                    del st.session_state.editing_thread_id
+                    st.rerun()
+            with cancel_col:
+                if st.button("Cancel", key="cancel_rename", use_container_width=True):
+                    del st.session_state.editing_thread_id
+                    st.rerun()
+            st.divider()
+
+    if chats:
+        st.caption("Recent conversations:")
+        for chat in chats:
+            is_current = chat.thread_id == st.session_state.thread_id
+
+            display_title, full_title = _format_chat_history_title(chat)
+
+            # Give the title most of the width and collapse actions into a popover.
+            select_col, actions_col = st.columns([6, 1], gap="small")
+
+            with select_col:
+                button_type = "primary" if is_current else "secondary"
+                if st.button(
+                    display_title,
+                    key=f"chat_{chat.thread_id}",
+                    use_container_width=True,
+                    type=button_type,
+                    disabled=is_current,
+                    help=full_title,
+                ):
+                    _activate_chat(storage, chat.thread_id)
+                    st.rerun()
+
+            with actions_col:
+                with st.popover("⋯"):
+                    st.caption(full_title)
+                    if is_current:
+                        st.caption("Current conversation")
+
                     if st.button(
-                        display_title,
-                        key=f"chat_{chat.thread_id}",
+                        "Rename",
+                        key=f"write_{chat.thread_id}",
                         use_container_width=True,
-                        type=button_type,
-                        disabled=is_current,
-                        help=full_title,
                     ):
-                        _activate_chat(storage, chat.thread_id)
+                        st.session_state.editing_thread_id = chat.thread_id
                         st.rerun()
-                
-                with actions_col:
-                    with st.popover("⋯"):
-                        st.caption(full_title)
-                        if is_current:
-                            st.caption("Current conversation")
 
-                        if st.button(
-                            "Rename",
-                            key=f"write_{chat.thread_id}",
-                            use_container_width=True,
-                        ):
-                            st.session_state.editing_thread_id = chat.thread_id
+                    if st.button(
+                        "Delete",
+                        key=f"delete_{chat.thread_id}",
+                        use_container_width=True,
+                    ):
+                        deleted, error_message = _delete_chat_with_server_state(
+                            storage,
+                            chat.thread_id,
+                            is_current=is_current,
+                        )
+                        if deleted:
                             st.rerun()
+                        if error_message:
+                            st.error(error_message)
+    else:
+        st.caption("No saved conversations yet.")
 
-                        if st.button(
-                            "Delete",
-                            key=f"delete_{chat.thread_id}",
-                            use_container_width=True,
-                        ):
-                            deleted, error_message = _delete_chat_with_server_state(
-                                storage,
-                                chat.thread_id,
-                                is_current=is_current,
-                            )
-                            if deleted:
-                                st.rerun()
-                            if error_message:
-                                st.error(error_message)
-        else:
-            st.caption("No saved conversations yet.")
-        
-        st.divider()
+    st.divider()
 
-        st.subheader("About")
-        st.info(
-            """
-            **JüNA Chatbot** is a production-ready neutron science chatbot
-            built with LangGraph, FastAPI, and Streamlit.
-            
-            It supports custom LangGraph agents to power
-            tailored neutron science chatbot experiences.
-            """
-        )
+    st.subheader("About")
+    st.info(
+        """
+        **JüNA Chatbot** is a production-ready neutron science chatbot
+        built with LangGraph, FastAPI, and Streamlit.
+
+        It supports custom LangGraph agents to power
+        tailored neutron science chatbot experiences.
+        """
+    )
