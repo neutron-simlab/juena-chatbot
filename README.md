@@ -32,7 +32,7 @@ skip that command.
 Run these commands in the folder where you keep your projects:
 
 ```bash
-git clone --branch juena-core-cutover-runtime https://github.com/neutron-simlab/juena-chatbot.git
+git clone https://github.com/neutron-simlab/juena-chatbot.git
 git clone https://github.com/neutron-simlab/juena-core.git
 git clone https://github.com/neutron-simlab/juena-rag.git
 cd juena-chatbot
