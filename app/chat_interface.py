@@ -202,14 +202,20 @@ def render_chat_interface() -> None:
     render_header_with_logo()
     render_chat_input_styles()
 
-    for message in st.session_state.messages:
-        render_message(message, show_system=st.session_state.show_system_messages)
+    # Made before the composer so the turn it submits can be drawn here too.
+    transcript = st.container()
+    with transcript:
+        for message in st.session_state.messages:
+            render_message(message, show_system=st.session_state.show_system_messages)
 
     if render_sandbox_interrupt():
         return
 
     # The composer stays inside the chat column, below its transcript. On an
-    # empty thread the starter chips sit beneath it.
+    # empty thread the starter chips sit beneath it. Inside a column
+    # `st.chat_input` is drawn where it is called, not pinned to the bottom of
+    # the window, so the turn it returns goes into `transcript` above it;
+    # drawn here it would sit under the composer until the post-stream rerun.
     mention = st.session_state.pop("filesystem_mention", None)
     if mention and mention["thread_id"] == st.session_state.thread_id:
         st.session_state["chat_prompt"] = f"Please look at `{mention['path']}`: "
@@ -253,13 +259,14 @@ def render_chat_interface() -> None:
         ),
     )
     st.session_state.messages.append(user_message)
-    render_message(user_message)
+    with transcript:
+        render_message(user_message)
 
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        stream_and_display_response(
-            prompt,
-            message_placeholder,
-            attachments=attachments or None,
-            custom_status=SANDBOX_STATUS_RENDERERS,
-        )
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            stream_and_display_response(
+                prompt,
+                message_placeholder,
+                attachments=attachments or None,
+                custom_status=SANDBOX_STATUS_RENDERERS,
+            )

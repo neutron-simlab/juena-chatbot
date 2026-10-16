@@ -233,6 +233,7 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=None),
+        container=lambda: _DummyContext(),
     )
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
@@ -273,6 +274,7 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, m
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=chat_input_mock,
+        container=lambda: _DummyContext(),
     )
     if mention_thread:
         session_state.filesystem_mention = {"thread_id": mention_thread, "path": "/workspace/analysis.py"}
@@ -352,6 +354,82 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     render_chat_input_styles_mock.assert_called_once_with()
     assert stream_mock.call_args.args[:2] == ("please inspect", fake_st.empty.return_value)
     assert stream_mock.call_args.kwargs["attachments"] == [attachment]
+
+
+def test_a_new_turn_is_drawn_above_the_composer(monkeypatch) -> None:
+    """In the chat column the composer is drawn where it is called, not pinned
+    to the bottom of the window. The turn it submits arrives after that call,
+    so it has to go into a block made before the composer, or the box sits
+    above the message and the live reply until the stream ends."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    monkeypatch.setattr(
+        chat_interface, "render_sandbox_interrupt", Mock(return_value=False)
+    )
+    events: list[tuple] = []
+    open_blocks: list[int] = []
+    created: list[int] = []
+
+    class _Block:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def __enter__(self):
+            open_blocks.append(self.index)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            open_blocks.pop()
+            return False
+
+    def container():
+        created.append(len(created))
+        events.append(("block", created[-1]))
+        return _Block(created[-1])
+
+    def chat_input(**_kwargs):
+        events.append(("composer",))
+        return "fit the SANS data"
+
+    def chat_message(role):
+        events.append(("bubble", role, tuple(open_blocks)))
+        return _DummyContext()
+
+    def render_message(message, **_kwargs):
+        events.append(("message", message.content, tuple(open_blocks)))
+
+    existing_message = ChatMessage(type="ai", content="Existing response")
+    session_state = _SessionState(
+        client=Mock(),
+        messages=[existing_message],
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        show_system_messages=False,
+    )
+    monkeypatch.setattr(
+        chat_interface,
+        "st",
+        SimpleNamespace(
+            session_state=session_state,
+            chat_message=chat_message,
+            empty=Mock(),
+            chat_input=chat_input,
+            container=container,
+            error=Mock(),
+        ),
+    )
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
+    monkeypatch.setattr(chat_interface, "render_message", render_message)
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+
+    chat_interface.render_chat_interface()
+
+    assert events.index(("block", 0)) < events.index(("composer",))
+    assert ("message", "Existing response", (0,)) in events
+    assert ("message", "fit the SANS data", (0,)) in events
+    assert ("bubble", "assistant", (0,)) in events
 
 
 def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -> None:
