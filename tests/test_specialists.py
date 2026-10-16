@@ -140,10 +140,10 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert spec["runnable"] is runnable
 
 
-def test_software_specialist_defaults_to_juwels_qwen() -> None:
+def test_software_specialist_defaults_to_juwels_deepseek() -> None:
     assert (
         software_agent.SOFTWARE_SPECIALIST_MODEL
-        == BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+        == BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
     )
 
 

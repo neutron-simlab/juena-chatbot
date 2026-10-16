@@ -44,7 +44,7 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "when the sandbox is enabled, this specialist can execute them automatically in isolation."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 

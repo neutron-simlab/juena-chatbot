@@ -12,9 +12,21 @@ from juena_core.schema.llm_models import BlabladorModelName
 
 
 @pytest.mark.parametrize("unattended", [False, True])
-@pytest.mark.parametrize("specialist", [software, neutron])
-def test_specialists_use_juwels_qwen_with_matching_compaction(
-    monkeypatch, specialist, unattended
+@pytest.mark.parametrize(
+    ("specialist", "model_name", "max_input_tokens"),
+    [
+        # 1,048,576 served minus 32,768 reserved for output.
+        (software, "15 - DeepSeek-V4.1-Flash on JUWELS Booster", 1_015_808),
+        (
+            neutron,
+            "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
+            "An excellent model from September 2026",
+            907_232,
+        ),
+    ],
+)
+def test_specialists_use_juwels_models_with_matching_compaction(
+    monkeypatch, specialist, model_name, max_input_tokens, unattended
 ) -> None:
     captured = {}
 
@@ -45,19 +57,16 @@ def test_specialists_use_juwels_qwen_with_matching_compaction(
         neutron.build_neutron_research_specialist(tavily_tool=None, **common)
 
     model = captured["model"]
-    assert model.model_name == (
-        "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
-        "An excellent model from September 2026"
-    )
+    assert model.model_name == model_name
     assert model.max_tokens == 32_768
-    assert model.profile["max_input_tokens"] == 907_232
+    assert model.profile["max_input_tokens"] == max_input_tokens
     compaction = next(
         item for item in captured["middleware"]
         if isinstance(item, SummarizationMiddleware)
     )
     assert compaction.model is summarizer
-    # The normal 85% trigger now retains long histories, while reserving output
-    # and headroom for another tool result before reaching the served 940k limit.
+    # The trigger is 85% of the Qwen summarizer's window, so it retains long
+    # histories and still fires before either specialist's window is full.
     assert not compaction._should_summarize([], 700_000)
     assert compaction._should_summarize([], 800_000)
 
@@ -70,9 +79,12 @@ def test_specialists_stream_with_one_retry_layer_and_a_real_fallback(monkeypatch
 
     captured = {}
     monkeypatch.setattr(specialist, "create_agent", lambda **kwargs: captured.update(kwargs) or object())
-    same_model_other_settings = build_chat_model(
-        provider="blablador", model=BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+    own_model = (
+        software.SOFTWARE_SPECIALIST_MODEL
+        if specialist is software
+        else neutron.NEUTRON_RESEARCH_SPECIALIST_MODEL
     )
+    same_model_other_settings = build_chat_model(provider="blablador", model=own_model)
     other_model = build_chat_model(provider="blablador", model=BlabladorModelName.GPT_OSS.value)
     common = {
         "summarizer_model": other_model,
