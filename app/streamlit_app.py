@@ -20,6 +20,7 @@ from juena_core.llms_providers import get_available_providers, get_default_model
 from app.sidebar import render_sidebar
 from app.chat_interface import render_chat_interface
 from app.client_setup import initialize_client
+from app.ui_components import FILES_PANEL_KEY, render_files_panel_styles
 from juena_core.ui.chat_storage import get_chat_storage
 from juena_core.ui.filesystem import render_filesystem
 
@@ -133,9 +134,10 @@ if st.query_params.get("thread") != st.session_state.thread_id:
     st.query_params["thread"] = st.session_state.thread_id
 
 render_sidebar()
+render_files_panel_styles()
 chat_column, files_column = st.columns([3, 2], gap="medium")
 # Mount the independent browser first: rendering chat can consume SSE for minutes.
-with files_column:
+with files_column, st.container(key=FILES_PANEL_KEY):
     render_filesystem(
         api_url=global_config.JUENA_PUBLIC_URL,
         thread_id=st.session_state.thread_id,
