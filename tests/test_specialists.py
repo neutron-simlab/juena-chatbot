@@ -11,6 +11,7 @@ from deepagents.middleware.skills import SkillsMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import RunnableLambda
 
+from juena_core.agents.specialist_outcome import REPORT_REMINDER_KEY
 from juena_core.agents import specialist_runtime
 from juena_core.agents.loop_guard import RepeatedToolCallMiddleware
 from juena_core.agents.specialist_outcome import SpecialistOutcomeMiddleware
@@ -232,6 +233,10 @@ async def test_foreground_commands_run_automatically_but_clarification_pauses(
                    for message in result["messages"])
         assert "Status: completed" in result["messages"][-1].content
         assert "Executions: 2 -- completed (exit 0), completed (exit 0)." in result["messages"][-1].content
+        # Tool calls and a clarification pause never trigger the report reminder.
+        assert not any(
+            message.additional_kwargs.get(REPORT_REMINDER_KEY) for message in result["messages"]
+        )
     finally:
         set_artifact_store_for_tests(None)
 
