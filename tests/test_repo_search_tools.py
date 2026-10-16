@@ -28,8 +28,8 @@ class _FanOutStub:
 
 
 
-def test_search_code_semantic_returns_compact_preview() -> None:
-    content = "def login(user):\n" + ("x" * 400)
+def test_search_code_semantic_returns_source_evidence_with_formatting() -> None:
+    content = "def login(user):\n    # Preserve indentation and π\n    return user\n" + ("x" * 12_000)
 
     class StubRepoManager:
         repo_ids = ["repo-a"]
@@ -50,6 +50,9 @@ def test_search_code_semantic_returns_compact_preview() -> None:
                     "is_doc": False,
                     "distance": 0.12,
                     "content": content,
+                    "start_line": 12,
+                    "end_line": 16,
+                    "symbol": "login",
                 }
             ]
 
@@ -71,7 +74,10 @@ def test_search_code_semantic_returns_compact_preview() -> None:
             "path": "/repos/repo-a/src/auth.py",
             "is_doc": False,
             "distance": 0.12,
-            "preview": repo_search._compact_preview(content),
+            "start_line": 12,
+            "end_line": 16,
+            "symbol": "login",
+            "content": content,
         }
     ]
 
@@ -184,6 +190,8 @@ def test_search_code_semantic_normalises_repo_id_labels() -> None:
 
 
 def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
+    content = "Setup guide\n\n    python example.py  # π\n" * 300
+
     class StubRepoManager:
         repo_ids = ["repo-a"]
 
@@ -200,7 +208,7 @@ def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
                     "chunk_index": 0,
                     "is_doc": True,
                     "distance": 0.2,
-                    "content": "setup docs",
+                    "content": content,
                 }
             ]
 
@@ -217,6 +225,7 @@ def test_search_docs_local_all_repositories_restricts_to_doc_hits() -> None:
     assert payload[0]["repo_id"] == "repo-a"
     assert payload[0]["path"] == "/repos/repo-a/README.md"
     assert payload[0]["is_doc"] is True
+    assert payload[0]["content"] == content
 
 
 def test_code_chat_tools_only_exposes_unique_retrieval_tools() -> None:
@@ -236,7 +245,7 @@ def test_code_chat_tools_only_exposes_unique_retrieval_tools() -> None:
     # The whole point of the tool: `ls /repos` answers a different question.
     assert "cloned on disk" in catalogue_tool.description
     semantic_tool = next(tool for tool in tools if tool.name == "search_code_semantic")
-    assert "candidate paths and previews" in semantic_tool.description
+    assert "Answer from sufficient excerpts" in semantic_tool.description
     assert "read_file" in semantic_tool.description
     assert "grep/glob" in semantic_tool.description
     assert 'repo_id="all"' in semantic_tool.description

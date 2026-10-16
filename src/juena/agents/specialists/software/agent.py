@@ -27,7 +27,6 @@ from juena_core.llms_providers import build_chat_model
 from juena_core.schema.agents import SpecialistReport
 from juena_core.schema.llm_models import BlabladorModelName, Provider
 from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
-from juena_core.sandbox.approvals import sandbox_interrupt_on
 from juena_core.sandbox.middleware import SandboxExecutionMiddleware
 from juena_core.sandbox.runtime import build_sandbox_backend, sandbox_enabled
 from juena.sandbox.software import repository_software_prompt
@@ -41,7 +40,7 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "what each is for, what is searchable -- including when the question also names "
     "neutron science, because it holds the only tools that can answer it. "
     "Delegate Python or shell execution, calculations, plots, and generated files here; "
-    "when the sandbox is enabled, this specialist can execute them with user approval."
+    "when the sandbox is enabled, this specialist can execute them automatically in isolation."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
 SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
@@ -104,8 +103,8 @@ def build_software_specialist(
 
     ``unattended`` compiles the copy that background research runs: no
     ``ask_user`` and no sandbox, because a job nobody is watching cannot answer
-    an interrupt. Both capabilities are removed together -- dropping the approval
-    middleware while leaving `execute` mounted would run commands unapproved.
+    an interrupt. Foreground commands run automatically, with execution evidence
+    still recorded by the sandbox middleware.
     """
 
     repo_cache_root = repo_manager.cache_dir if has_repo_research else None
@@ -155,11 +154,10 @@ def build_software_specialist(
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
             specialist_name=SOFTWARE_SPECIALIST_NAME,
-            # An all-or-nothing pair core refuses to take half of: the
-            # middleware records what ran, the policy is what stops it running
-            # unapproved. `unattended` drops both, together with `ask_user`.
+            # Keep execution evidence and an explicit automatic policy together.
+            # Unattended jobs receive neither execution nor questions.
             execution_middleware=(SandboxExecutionMiddleware(),) if can_execute else (),
-            interrupt_on=sandbox_interrupt_on() if can_execute else None,
+            interrupt_on={"execute": False} if can_execute else None,
             unattended=unattended,
         ),
         response_format=ToolStrategy(SpecialistReport),
