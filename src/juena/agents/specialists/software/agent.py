@@ -12,6 +12,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from juena_core.agents.ask_user import build_ask_user_tool
+from juena_core.config import settings
 from juena_core.agents.specialist_runtime import (
     UNATTENDED_NOTICE,
     build_specialist_backend,
@@ -75,7 +76,9 @@ def build_software_prompt(
         "there too; the application collects, displays, and attaches them automatically. "
         f"{repository_software_prompt()} "
         "After a successful command reports collected artifacts, do not inspect, encode, "
-        "or print those files. Never attempt package installation or network access."
+        "or print those files. Never attempt package installation or network access. "
+        f"One command may run for at most {settings().EXECUTE_TIMEOUT_SECONDS} seconds; "
+        "the `execute` tool rejects a larger `timeout`."
         if sandbox_enabled() and not unattended
         else "Sandboxed execution is unavailable. Do not claim to run Python or generate plots."
     )

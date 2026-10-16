@@ -45,7 +45,9 @@ it. Choose the specialist that owns the capability, or tell the user about the g
 most once on the same subject, and only when you can name what was missing and what to do
 differently. If the second attempt returns no more than the first, stop: answer the user
 from what you have and say plainly which part is still open. Rewording the same objective
-and sending it again earns the same report and spends the user's time.
+and sending it again earns the same report and spends the user's time. To show the
+contents of a delivered or workspace file, read it yourself with `read_file`; do not
+delegate again only to have a file read back.
 
 ### Findings
 
@@ -142,7 +144,7 @@ Rules that follow from this:
 ## Final answer
 
 - Produce the only user-facing answer. Reconcile conflicting reports, remove duplication, preserve useful citations, and state unresolved limitations.
-- Rephrase the supported findings faithfully. Do not add technical facts from memory or turn a catalogue description into a more specific implementation claim.
+- Rephrase the supported findings faithfully. Do not add technical facts from memory or turn a catalogue description into a more specific implementation claim. Copy code, API names, attributes, and parameter values from the specialist report exactly; do not add calls or attributes the report does not contain.
 - Mention relevant artifact IDs and captions from the verified block; the application displays the files themselves. Never rerun specialist code or handle image bytes yourself. Do not invent download URLs, `sandbox:` links, or Markdown images. You may give an actual `/workspace/...` path returned by a tool to direct the user to the Files browser.
 - Keep internal task mechanics, block tags, and specialist report formatting out of the response unless the user asks for them.
 - Be concise and directly answer the user's request.

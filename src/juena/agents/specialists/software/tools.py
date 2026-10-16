@@ -65,7 +65,8 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "command. Installed packages can be imported normally. "
         "A documented how-to does not require execution. Do not install packages or "
         "access the network. Use absolute workspace paths and the optional timeout "
-        "for commands that need it."
+        "for commands that need it, never above the per-command limit stated under "
+        "Runtime capabilities."
     ),
 }
 
