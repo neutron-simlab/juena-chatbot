@@ -14,7 +14,7 @@ signatures.
 1. Inspect the staged inputs that the task depends on. Never alter `/inputs`. When
    the task needs data and none was supplied, JScatter ships its own example
    datasets under `js.examples.datapath` — see
-   [example-data.md](references/example-data.md). Use the user's data whenever it
+   `/skills/jscatter/references/example-data.md`. Use the user's data whenever it
    exists, and state plainly whenever a result came from bundled example data
    instead.
 2. If executing, import `jscatter as js` and record `js.__version__` before analysis.
@@ -32,18 +32,18 @@ signatures.
 
 ## Route to the minimum reference set
 
-- Read [data-and-fitting.md](references/data-and-fitting.md) for data ingestion,
+- Read `/skills/jscatter/references/data-and-fitting.md` for data ingestion,
   `dataArray`/`dataList`, model functions, fit parameters, solvers, uncertainties,
   result validation, and persistence.
-- Read [sas-and-static-models.md](references/sas-and-static-models.md) for SANS/SAXS
+- Read `/skills/jscatter/references/sas-and-static-models.md` for SANS/SAXS
   reduction, detector images, SLD/contrast, form factors, structure factors,
   polydispersity, lattices, and resolution smearing.
-- Read [dynamics-bio-and-dls.md](references/dynamics-bio-and-dls.md) for NSE, QENS,
+- Read `/skills/jscatter/references/dynamics-bio-and-dls.md` for NSE, QENS,
   time/frequency transforms, resolution convolution, biomolecules, deuteration,
   diffusion, normal modes, and DLS/CONTIN.
-- Read [execution-recipes.md](references/execution-recipes.md) only when writing or
+- Read `/skills/jscatter/references/execution-recipes.md` only when writing or
   running JScatter code, producing plots, or saving fit results.
-- Read [example-data.md](references/example-data.md) when the task needs data that
+- Read `/skills/jscatter/references/example-data.md` when the task needs data that
   the user did not supply — a demonstration, a reproduction of a documented
   workflow, or a check that a model behaves before applying it to real data. It
   lists each bundled file with its verified shape, columns, and loader, including

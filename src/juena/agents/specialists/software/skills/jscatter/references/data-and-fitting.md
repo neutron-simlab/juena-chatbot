@@ -141,7 +141,7 @@ inside the installed package:
 data = js.dL(js.examples.datapath + "/exampledata.dat")
 ```
 
-See [example-data.md](example-data.md) for each bundled file with its verified
+See `/skills/jscatter/references/example-data.md` for each bundled file with its verified
 shape, columns, and loader — several need a non-obvious reader. Always prefer the
 user's own data, and state when a result came from example data instead.
 
@@ -305,8 +305,9 @@ counting uncertainty, is used.
 ## Fit one `dataArray`
 
 Write a vectorized model with physical names. Do not name model arguments `X`, `Y`,
-`eY`, `eX`, `Z`, `eZ`, `W`, or `eW`; those names are reserved by JScatter. Map a
-physical coordinate name such as `q` or `t` to the appropriate role:
+`eY`, `eX`, `Z`, `eZ`, `W`, or `eW`; those names are reserved by JScatter. They are,
+however, the normal *targets* of `mapNames`: map a physical coordinate name such as `q`
+or `t` onto its role, as in `mapNames={"q": "X"}`:
 
 ```python
 def decay(t, amplitude, rate, background):
@@ -327,16 +328,39 @@ Apply these rules:
 
 - Return a one-dimensional modeled-Y array or a `dataArray` whose `.Y` has the same
   point count as the selected data.
+- Do arithmetic on `.Y`, never on the whole `dataArray`. A `dataArray` holds every column
+  (`X`, `Y`, `eY`, ...) as rows of one array, so `A * js.ff.sphere(q, R) + bgr` also
+  scales and shifts `q` and the errors. Write `result.Y = A * result.Y + bgr`, or return
+  `A * js.ff.sphere(q=q, radius=R).Y + bgr`.
 - Use NumPy operations so the model accepts arrays.
+- Pass `condition` as a callable such as `lambda a: (a.X > 0.05) & (a.X < 2)`, not a string.
 - Put fitted starting values in `freepar` and fixed values in `fixpar`.
 - Let same-named dataset metadata satisfy other model arguments, or map a differently
   named attribute with `mapNames`.
 - Evaluate the model once at the initial values before fitting and require finite output.
 - Use `lm` first for an unconstrained local least-squares fit. Use `trf` or `dogbox` for
   bounded least squares. Set limits with `setLimit` before fitting and inspect
-  `prepared.hasLimit`.
+  `prepared.hasLimit` (a property, no parentheses).
+- `setLimit(par=(low, up, lowhard, uphard))`: two values set a lower *and* an upper soft
+  limit, so `setLimit(bgr=[0, 1])` pulls `bgr` below 1. Use `(low, None)` for a lower
+  bound only, and keep start values inside the limits.
 - Treat `Nelder-Mead` and `differential_evolution` as optimization tools that do not
   supply the usual covariance-derived errors; refine locally when justified.
+
+### `dataArray.fit` versus `dataList.fit`
+
+`dataArray.fit` is a thin wrapper. It puts the single dataset into a one-element
+`dataList`, calls `dataList.fit`, and copies `lastfit[0]` back. Its docstring says "only
+first parameter is used if more than one given":
+
+- each `freepar` value must be a number or a list; a list keeps only its first element,
+  and a NumPy array is rejected;
+- a `fixpar` list whose first element is a number is also cut to its first element;
+- `method`, `weight`, and other options pass through `**kw` to `dataList.fit`.
+
+The list, `[start]`, and `[start, "attribute_name"]` forms in the `dataList.fit`
+docstring therefore only matter for a `dataList`. When explaining `dataArray.fit`, say
+this explicitly instead of repeating the `dataList.fit` docstring as its contract.
 
 ## Validate and save a fit
 
@@ -351,6 +375,11 @@ print("reduced chi2", fit.chi2)
 print("degrees of freedom", fit.dof)
 print("correlation matrix\n", fit.parcorr)
 ```
+
+`fit.chi2` is already the reduced chi-square (the weighted squared residuals divided by
+`dof`); do not divide it by `dof` again, and there is no `reduced_chi2` attribute.
+`prepared.getFreepar` is a property that returns the best values in `freepar` form:
+write `prepared.getFreepar`, not `prepared.getFreepar()`.
 
 JScatter 1.9.0.1 does not store a generic optimizer `success` flag on `lastfit`.
 Treat a fit exception, a reported failure, a `-1` result, or a missing `lastfit` as a
@@ -405,7 +434,7 @@ for dataset in series:
     print(dataset.shape, dataset.columnIndex, dataset.temperature)
 ```
 
-For `dataList.fit`:
+For `dataList.fit` (these forms do not apply to a single `dataArray.fit`; see above):
 
 - use a scalar parameter value for one value shared by all datasets;
 - use `[start]` for an independent value per dataset;
@@ -428,3 +457,6 @@ Fit a single element with `series[index].fit(...)`. Save the simultaneous result
 - Do not use `.eX`, `.eZ`, or `.eW` as if the fitter propagated coordinate errors.
 - Do not use protected aliases as model parameter names; map physical names to them.
 - Do not save only the original dataset and expect `.lastfit` to be embedded.
+- Do not apply arithmetic to a whole `dataArray` when you mean its intensity; use `.Y`.
+- Do not describe `dataList.fit` list or link forms as the contract of `dataArray.fit`.
+- Do not call properties such as `getFreepar` or `hasLimit` with parentheses.
