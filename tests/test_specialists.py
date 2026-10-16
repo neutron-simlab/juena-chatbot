@@ -120,6 +120,8 @@ def test_software_specialist_owns_fixed_model_and_runtime(
         "model": software_agent.SOFTWARE_SPECIALIST_MODEL,
         "temperature": 0.0,
         "max_tokens": 32_768,
+        "streaming": True,
+        "max_retries": 0,
     }
     assert created["backend_kwargs"]["repo_cache_root"] == repo_manager.cache_dir
     assert created["agent_kwargs"]["model"] is model
@@ -278,6 +280,8 @@ def test_neutron_specialist_owns_fixed_model_and_runtime(
         "model": neutron_agent.NEUTRON_RESEARCH_SPECIALIST_MODEL,
         "temperature": 0.0,
         "max_tokens": 32_768,
+        "streaming": True,
+        "max_retries": 0,
     }
     assert "repo_cache_root" not in created["backend_kwargs"]
     assert created["agent_kwargs"]["model"] is model

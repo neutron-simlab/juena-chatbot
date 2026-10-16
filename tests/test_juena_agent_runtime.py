@@ -65,7 +65,9 @@ def test_fallback_models_do_not_depend_on_request_model(
     )
 
     assert specialist_runtime.build_fallback_models() == [sentinel]
-    assert built == [{"provider": "openai", "model": "gpt-test"}]
+    assert built == [
+        {"provider": "openai", "model": "gpt-test", "streaming": True, "max_retries": 0}
+    ]
 
 
 def test_fallback_models_are_skipped_when_provider_is_unavailable(

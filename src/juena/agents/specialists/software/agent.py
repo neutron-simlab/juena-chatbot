@@ -24,7 +24,7 @@ from juena.agents.specialists.software.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
 )
-from juena_core.llms_providers import build_chat_model
+from juena_core.llms_providers import build_chat_model, same_model
 from juena_core.schema.agents import SpecialistReport
 from juena_core.schema.llm_models import BlabladorModelName, Provider
 from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
@@ -125,11 +125,14 @@ def build_software_specialist(
             skills_dir=_SPECIALIST_SKILLS_PATH,
         )
     )
+    # Streaming and max_retries=0: see MODEL_MAX_RETRIES in juena_core.agents.specialist_runtime.
     model = build_chat_model(
         provider=SOFTWARE_SPECIALIST_PROVIDER,
         model=SOFTWARE_SPECIALIST_MODEL,
         temperature=0.0,
         max_tokens=32_768,
+        streaming=True,
+        max_retries=0,
     )
     specialist_tools = list(
         build_tools(
@@ -152,7 +155,8 @@ def build_software_specialist(
         middleware=build_specialist_middleware(
             backend=backend,
             summarizer_model=summarizer_model,
-            fallback_models=fallback_models,
+            # A fallback that calls the same model would fail the same way.
+            fallback_models=[m for m in fallback_models if not same_model(m, model)],
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
