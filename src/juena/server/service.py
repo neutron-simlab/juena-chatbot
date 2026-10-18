@@ -28,6 +28,7 @@ from juena.research import runner as research_runner
 from juena.server.auth.endpoints import router as auth_router
 from juena.server.auth.principal import session_principal
 from juena.server.auth.saml import saml_lifespan
+from juena.server.tool_labels import JUENA_TOOL_LABELS
 from juena.server.research.endpoints import router as research_router
 from juena.server.tracing import langfuse_lifespan, start_langfuse
 
@@ -93,10 +94,13 @@ app = create_app(
         delete=delete_runtime_workspace,
     ),
     # Without the allowlist the sandbox's status events stop reaching the UI;
-    # without the silent tool, `execute` stdout starts reaching the transcript.
+    # without the silent tool, `execute` stdout reaches the transcript whenever
+    # tool payloads are switched on. The labels word this deployment's own
+    # tools in the activity log.
     stream_policy=StreamPolicy(
         custom_event_types=frozenset({"sandbox_status"}),
         silent_tools=frozenset({"execute"}),
+        tool_labels=JUENA_TOOL_LABELS,
     ),
     # This block is prepended to the *supervisor's* turn, and the supervisor
     # has neither `/repos` nor Context7 -- it cannot read `/inputs` either.

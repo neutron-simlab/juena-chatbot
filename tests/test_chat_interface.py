@@ -573,3 +573,24 @@ def test_a_pending_interrupt_replaces_the_composer(monkeypatch) -> None:
 
     interrupt_mock.assert_called_once_with()
     chat_input_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("state", "written"),
+    [("running", False), ("completed", False), ("timed_out", True), ("failed", True)],
+)
+def test_only_a_failed_sandbox_run_adds_a_line(monkeypatch, state, written) -> None:
+    """A run's own step says it worked; a failure needs the reason beside it."""
+    from juena_core.sandbox import backend
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(backend, "get_stream_writer", lambda: emitted.append)
+    backend.PodmanSandboxBackend._status(state, backend.STATUS_LABELS[state])
+    chat_interface = _import_chat_interface(monkeypatch)
+    activity = Mock()
+
+    chat_interface._render_sandbox_status(activity, emitted[0])
+
+    assert activity.write.called is written
+    if written:
+        activity.write.assert_called_once_with(backend.STATUS_LABELS[state])

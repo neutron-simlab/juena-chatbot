@@ -73,13 +73,14 @@ def _sandbox_limits_caption(limits: Any) -> str:
 def _render_sandbox_status(status: Any, chunk: dict[str, Any]) -> None:
     """Show a `sandbox_status` event, which core forwards but does not read.
 
-    A terminal state is written as a line, so the log keeps it; anything else
-    relabels the container in place, because a queued job can report progress
-    many times before it runs.
+    A run that failed or timed out is written as a line, so the log says why
+    its "Run" step failed; a successful run needs no line, because the step
+    already says so. Anything else relabels the container in place, because a
+    queued job can report progress many times before it runs.
     """
 
     label = chunk.get("label", "")
-    if chunk.get("status") in {"completed", "timed_out", "failed"}:
+    if chunk.get("status") in {"timed_out", "failed"}:
         status.write(label)
     elif label:
         status.update(label=label)
