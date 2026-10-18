@@ -18,8 +18,7 @@ def test_starters_are_exactly_the_two_neutron_topics_when_preview_is_off(monkeyp
     )
     assert starters[1].prompt == (
         "List all neutron-related software repositories currently indexed in JüNA, "
-        "briefly explain what each one is for, and ask which repository I would "
-        "like to explore."
+        "briefly explain what each one is for."
     )
 
 
