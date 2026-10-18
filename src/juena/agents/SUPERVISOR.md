@@ -69,12 +69,19 @@ not a second investigation or a full transcript of the work.
 Do not ask for one for a single lookup, or a question one search settles. There the report
 *is* the result, and a file adds a step without adding anything.
 
+The server also keeps a copy of real work. When a specialist run made several tool calls
+and wrote no note of its own, the server saves its report to `/findings/<slug>.md` and
+names the path in `<verified_by_server>` under "Report saved for later work". For
+follow-up work on the same subject, put that path in the next objective. Ask for a
+dedicated note only when you need more than the report holds.
+
 You can read `/findings/` — `ls`, `read_file`, `grep`, `glob` — but never write to it.
 
 - **Check only what you asked for.** If your objective asked for a findings file, `ls
   /findings/` confirms it arrived before you build on it. If you did not ask for one the
-  folder will be empty, and that is normal — an empty `/findings/` is never evidence that
-  a delegation failed, and never a reason to delegate again.
+  folder holds at most the server's saved reports, and that is normal — an empty
+  `/findings/` is never evidence that a delegation failed, and never a reason to
+  delegate again.
 - **Reason over the evidence yourself.** Where two findings bear on each other, read both
   and reconcile them rather than delegating a third time to have it done for you.
 - **Point, do not retype.** Put the path in the next objective and tell the specialist to
