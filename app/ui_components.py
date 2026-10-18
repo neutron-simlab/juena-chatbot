@@ -151,6 +151,9 @@ def render_files_panel_styles() -> None:
     browser taller than the window scrolls inside itself instead of being cut
     off. Below 640px Streamlit stacks the columns, so the rule stays off there.
 
+    ``--juena-files-height`` is the height core's file browser grows to with a
+    file open, so the file fills the column instead of stopping at 340px.
+
     ``st.html`` with only a ``<style>`` tag takes no space on the page.
     """
     st.html(
@@ -163,6 +166,7 @@ def render_files_panel_styles() -> None:
                 align-self: flex-start;
                 max-height: calc(100vh - 5rem);
                 overflow-y: auto;
+                --juena-files-height: calc(100vh - 5rem);
             }}
         }}
         </style>
