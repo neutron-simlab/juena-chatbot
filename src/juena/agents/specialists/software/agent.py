@@ -44,7 +44,10 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "when the sandbox is enabled, this specialist can execute them automatically in isolation."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
+# HZDR is much faster per call but limited to about 30 requests a minute, so
+# juena_core paces it; JUWELS serves the same model when HZDR still refuses.
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
+SOFTWARE_SPECIALIST_BACKUP_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
@@ -126,14 +129,15 @@ def build_software_specialist(
         )
     )
     # Streaming and max_retries=0: see MODEL_MAX_RETRIES in juena_core.agents.specialist_runtime.
-    model = build_chat_model(
-        provider=SOFTWARE_SPECIALIST_PROVIDER,
-        model=SOFTWARE_SPECIALIST_MODEL,
-        temperature=0.0,
-        max_tokens=32_768,
-        streaming=True,
-        max_retries=0,
-    )
+    model_settings = {
+        "provider": SOFTWARE_SPECIALIST_PROVIDER,
+        "temperature": 0.0,
+        "max_tokens": 32_768,
+        "streaming": True,
+        "max_retries": 0,
+    }
+    model = build_chat_model(model=SOFTWARE_SPECIALIST_MODEL, **model_settings)
+    backup = build_chat_model(model=SOFTWARE_SPECIALIST_BACKUP_MODEL, **model_settings)
     specialist_tools = list(
         build_tools(
             repo_manager,
@@ -156,7 +160,7 @@ def build_software_specialist(
             backend=backend,
             summarizer_model=summarizer_model,
             # A fallback that calls the same model would fail the same way.
-            fallback_models=[m for m in fallback_models if not same_model(m, model)],
+            fallback_models=[m for m in (backup, *fallback_models) if not same_model(m, model)],
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",

@@ -15,8 +15,8 @@ from juena_core.schema.llm_models import BlabladorModelName
 @pytest.mark.parametrize(
     ("specialist", "model_name", "max_input_tokens"),
     [
-        # 1,048,576 served minus 32,768 reserved for output.
-        (software, "15 - DeepSeek-V4.1-Flash on JUWELS Booster", 1_015_808),
+        # 900,000 verified at HZDR minus 32,768 reserved for output.
+        (software, "deepseek-v4.1-flash-at-hzdr", 867_232),
         (
             neutron,
             "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
@@ -25,7 +25,7 @@ from juena_core.schema.llm_models import BlabladorModelName
         ),
     ],
 )
-def test_specialists_use_juwels_models_with_matching_compaction(
+def test_specialists_use_their_models_with_matching_compaction(
     monkeypatch, specialist, model_name, max_input_tokens, unattended
 ) -> None:
     captured = {}
@@ -74,7 +74,8 @@ def test_specialists_use_juwels_models_with_matching_compaction(
 @pytest.mark.parametrize("specialist", [software, neutron])
 def test_specialists_stream_with_one_retry_layer_and_a_real_fallback(monkeypatch, specialist) -> None:
     """Streaming bounds the gap between tokens; ModelRetryMiddleware owns retries;
-    a fallback that calls the specialist's own model is dropped."""
+    a fallback that calls the specialist's own model is dropped. The code agent's
+    rate-limited HZDR model is paced and backed by the same model on JUWELS."""
     from langchain.agents.middleware import ModelFallbackMiddleware
 
     captured = {}
@@ -105,5 +106,9 @@ def test_specialists_stream_with_one_retry_layer_and_a_real_fallback(monkeypatch
     assert model.streaming is True
     assert model.stream_usage is True
     assert model.max_retries == 0
+    assert (model.rate_limiter is not None) is (specialist is software)
     fallback = next(m for m in captured["middleware"] if isinstance(m, ModelFallbackMiddleware))
-    assert fallback.models == [other_model]
+    expected = [BlabladorModelName.GPT_OSS.value]
+    if specialist is software:
+        expected.insert(0, BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value)
+    assert [m.model_name for m in fallback.models] == expected

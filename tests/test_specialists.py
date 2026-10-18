@@ -80,10 +80,11 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     repo_manager = SimpleNamespace(cache_dir=Path("/tmp/repos"))
     vector_index = object()
 
+    built_models: list[dict[str, Any]] = []
     monkeypatch.setattr(
         software_agent,
         "build_chat_model",
-        lambda **kwargs: created.__setitem__("model_kwargs", kwargs) or model,
+        lambda **kwargs: built_models.append(kwargs) or model,
     )
     monkeypatch.setattr(
         software_agent,
@@ -116,14 +117,18 @@ def test_software_specialist_owns_fixed_model_and_runtime(
         fallback_models=[],
     )
 
-    assert created["model_kwargs"] == {
+    model_settings = {
         "provider": software_agent.SOFTWARE_SPECIALIST_PROVIDER,
-        "model": software_agent.SOFTWARE_SPECIALIST_MODEL,
         "temperature": 0.0,
         "max_tokens": 32_768,
         "streaming": True,
         "max_retries": 0,
     }
+    # The primary first, then its backup with the same settings.
+    assert built_models == [
+        {**model_settings, "model": software_agent.SOFTWARE_SPECIALIST_MODEL},
+        {**model_settings, "model": software_agent.SOFTWARE_SPECIALIST_BACKUP_MODEL},
+    ]
     assert created["backend_kwargs"]["repo_cache_root"] == repo_manager.cache_dir
     assert created["agent_kwargs"]["model"] is model
     assert created["agent_kwargs"]["tools"][:-1] == list(tools)
@@ -140,9 +145,13 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert spec["runnable"] is runnable
 
 
-def test_software_specialist_defaults_to_juwels_deepseek() -> None:
+def test_software_specialist_runs_on_hzdr_with_juwels_backup() -> None:
     assert (
         software_agent.SOFTWARE_SPECIALIST_MODEL
+        == BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
+    )
+    assert (
+        software_agent.SOFTWARE_SPECIALIST_BACKUP_MODEL
         == BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
     )
 
