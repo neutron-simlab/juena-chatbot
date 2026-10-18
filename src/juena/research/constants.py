@@ -19,9 +19,9 @@ TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
 #: as a concurrency limit.
 DEFAULT_CONCURRENCY = 2
 
-#: Wall-clock ceiling for one job. `SPECIALIST_MODEL_CALL_LIMIT` already bounds
-#: the number of turns; this bounds the time, which a slow provider can stretch
-#: without ever exceeding a turn count.
+#: Wall-clock ceiling for one job. `BACKGROUND_TOOL_CALL_LIMIT` already bounds
+#: the number of tool calls; this bounds the time, which a slow provider can
+#: stretch without ever exceeding a call count.
 DEFAULT_TIMEOUT_SECONDS = 900
 
 TIMEOUT_MESSAGE = "This research ran past its time limit and was stopped"
