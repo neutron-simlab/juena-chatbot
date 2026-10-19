@@ -73,13 +73,14 @@ def _sandbox_limits_caption(limits: Any) -> str:
 def _render_sandbox_status(status: Any, chunk: dict[str, Any]) -> None:
     """Show a `sandbox_status` event, which core forwards but does not read.
 
-    A terminal state is written as a line, so the log keeps it; anything else
-    relabels the container in place, because a queued job can report progress
-    many times before it runs.
+    A run that failed or timed out is written as a line, so the log says why
+    its "Run" step failed; a successful run needs no line, because the step
+    already says so. Anything else relabels the container in place, because a
+    queued job can report progress many times before it runs.
     """
 
     label = chunk.get("label", "")
-    if chunk.get("status") in {"completed", "timed_out", "failed"}:
+    if chunk.get("status") in {"timed_out", "failed"}:
         status.write(label)
     elif label:
         status.update(label=label)
@@ -189,6 +190,7 @@ def _chat_input_kwargs() -> dict[str, Any]:
     # A single agent handles every conversation, so attachments are always on.
     return {
         "placeholder": "Type your message here...",
+        "key": "chat_prompt",
         "max_chars": CHAT_INPUT_MAX_CHARS,
         "accept_file": "multiple",
         "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
@@ -201,18 +203,23 @@ def render_chat_interface() -> None:
     render_header_with_logo()
     render_chat_input_styles()
 
-    for message in st.session_state.messages:
-        render_message(message, show_system=st.session_state.show_system_messages)
+    # Made before the composer so the turn it submits can be drawn here too.
+    transcript = st.container()
+    with transcript:
+        for message in st.session_state.messages:
+            render_message(message, show_system=st.session_state.show_system_messages)
 
     if render_sandbox_interrupt():
         return
 
-    # On an empty thread the composer sits directly under the title, with the
-    # starter chips beneath it, so the first thing the user sees is where to
-    # type. `st.chat_input` pins itself to the bottom of the viewport only when
-    # called at the top level of the script; inside a container it renders
-    # inline. Once the thread has messages it returns to the bottom, which is
-    # where a growing transcript expects it.
+    # The composer stays inside the chat column, below its transcript. On an
+    # empty thread the starter chips sit beneath it. Inside a column
+    # `st.chat_input` is drawn where it is called, not pinned to the bottom of
+    # the window, so the turn it returns goes into `transcript` above it;
+    # drawn here it would sit under the composer until the post-stream rerun.
+    mention = st.session_state.pop("filesystem_mention", None)
+    if mention and mention["thread_id"] == st.session_state.thread_id:
+        st.session_state["chat_prompt"] = f"Please look at `{mention['path']}`: "
     starter_prompt: str | None = None
     if st.session_state.client and not st.session_state.messages:
         with st.container():
@@ -253,13 +260,14 @@ def render_chat_interface() -> None:
         ),
     )
     st.session_state.messages.append(user_message)
-    render_message(user_message)
+    with transcript:
+        render_message(user_message)
 
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        stream_and_display_response(
-            prompt,
-            message_placeholder,
-            attachments=attachments or None,
-            custom_status=SANDBOX_STATUS_RENDERERS,
-        )
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            stream_and_display_response(
+                prompt,
+                message_placeholder,
+                attachments=attachments or None,
+                custom_status=SANDBOX_STATUS_RENDERERS,
+            )

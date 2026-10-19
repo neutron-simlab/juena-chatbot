@@ -12,6 +12,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from juena_core.agents.ask_user import build_ask_user_tool
+from juena_core.config import settings
 from juena_core.agents.specialist_runtime import (
     UNATTENDED_NOTICE,
     build_specialist_backend,
@@ -23,11 +24,10 @@ from juena.agents.specialists.software.tools import (
     FILESYSTEM_TOOL_DESCRIPTIONS,
     build_tools,
 )
-from juena_core.llms_providers import build_chat_model
+from juena_core.llms_providers import build_chat_model, same_model
 from juena_core.schema.agents import SpecialistReport
 from juena_core.schema.llm_models import BlabladorModelName, Provider
 from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
-from juena_core.sandbox.approvals import sandbox_interrupt_on
 from juena_core.sandbox.middleware import SandboxExecutionMiddleware
 from juena_core.sandbox.runtime import build_sandbox_backend, sandbox_enabled
 from juena.sandbox.software import repository_software_prompt
@@ -41,10 +41,13 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "what each is for, what is searchable -- including when the question also names "
     "neutron science, because it holds the only tools that can answer it. "
     "Delegate Python or shell execution, calculations, plots, and generated files here; "
-    "when the sandbox is enabled, this specialist can execute them with user approval."
+    "when the sandbox is enabled, this specialist can execute them automatically in isolation."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+# HZDR is much faster per call but limited to about 30 requests a minute, so
+# juena_core paces it; JUWELS serves the same model when HZDR still refuses.
+SOFTWARE_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
+SOFTWARE_SPECIALIST_BACKUP_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
 _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
@@ -76,7 +79,9 @@ def build_software_prompt(
         "there too; the application collects, displays, and attaches them automatically. "
         f"{repository_software_prompt()} "
         "After a successful command reports collected artifacts, do not inspect, encode, "
-        "or print those files. Never attempt package installation or network access."
+        "or print those files. Never attempt package installation or network access. "
+        f"One command may run for at most {settings().EXECUTE_TIMEOUT_SECONDS} seconds; "
+        "the `execute` tool rejects a larger `timeout`."
         if sandbox_enabled() and not unattended
         else "Sandboxed execution is unavailable. Do not claim to run Python or generate plots."
     )
@@ -104,8 +109,8 @@ def build_software_specialist(
 
     ``unattended`` compiles the copy that background research runs: no
     ``ask_user`` and no sandbox, because a job nobody is watching cannot answer
-    an interrupt. Both capabilities are removed together -- dropping the approval
-    middleware while leaving `execute` mounted would run commands unapproved.
+    an interrupt. Foreground commands run automatically, with execution evidence
+    still recorded by the sandbox middleware.
     """
 
     repo_cache_root = repo_manager.cache_dir if has_repo_research else None
@@ -119,15 +124,20 @@ def build_software_specialist(
         if can_execute
         else build_specialist_backend(
             repo_cache_root=repo_cache_root,
+            workspace_writable=not unattended,
             skills_dir=_SPECIALIST_SKILLS_PATH,
         )
     )
-    model = build_chat_model(
-        provider=SOFTWARE_SPECIALIST_PROVIDER,
-        model=SOFTWARE_SPECIALIST_MODEL,
-        temperature=0.0,
-        max_tokens=32_768,
-    )
+    # Streaming and max_retries=0: see MODEL_MAX_RETRIES in juena_core.agents.specialist_runtime.
+    model_settings = {
+        "provider": SOFTWARE_SPECIALIST_PROVIDER,
+        "temperature": 0.0,
+        "max_tokens": 32_768,
+        "streaming": True,
+        "max_retries": 0,
+    }
+    model = build_chat_model(model=SOFTWARE_SPECIALIST_MODEL, **model_settings)
+    backup = build_chat_model(model=SOFTWARE_SPECIALIST_BACKUP_MODEL, **model_settings)
     specialist_tools = list(
         build_tools(
             repo_manager,
@@ -149,16 +159,16 @@ def build_software_specialist(
         middleware=build_specialist_middleware(
             backend=backend,
             summarizer_model=summarizer_model,
-            fallback_models=fallback_models,
+            # A fallback that calls the same model would fail the same way.
+            fallback_models=[m for m in (backup, *fallback_models) if not same_model(m, model)],
             filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
             skills_dir=_SPECIALIST_SKILLS_PATH,
             skills_label="Software",
             specialist_name=SOFTWARE_SPECIALIST_NAME,
-            # An all-or-nothing pair core refuses to take half of: the
-            # middleware records what ran, the policy is what stops it running
-            # unapproved. `unattended` drops both, together with `ask_user`.
+            # Keep execution evidence and an explicit automatic policy together.
+            # Unattended jobs receive neither execution nor questions.
             execution_middleware=(SandboxExecutionMiddleware(),) if can_execute else (),
-            interrupt_on=sandbox_interrupt_on() if can_execute else None,
+            interrupt_on={"execute": False} if can_execute else None,
             unattended=unattended,
         ),
         response_format=ToolStrategy(SpecialistReport),

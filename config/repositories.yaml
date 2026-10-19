@@ -39,7 +39,7 @@ repositories:
 
   - id: datreat
     name: Datreat
-    description: "Fortran codebase with a different structure than Python projects (index and answer from source + docs)."
+    description: "Fortran program for processing, plotting, and fitting neutron-scattering data with scientific models."
     source:
       url: https://github.com/birkenfeld/datreat.git
       branch: master

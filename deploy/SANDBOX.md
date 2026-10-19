@@ -114,8 +114,92 @@ Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
 6. Stdout, stderr, PNG, and downloadable files reach the authenticated UI.
 7. Recursive `/` searches are rejected and later workspace writes stay responsive.
 8. JüNA starts and normal chat works with no worker running.
-9. Old terminal job rows and idle workspaces are removed by the hourly pass.
+9. Old terminal job rows and idle `/workspace/.scratch` contents are removed by
+   the hourly pass; ordinary workspace files survive until conversation deletion.
 10. The host has capacity for four configured sandbox CPU/memory limits plus
     JüNA, Postgres, and the operating system.
 11. Generated code cannot reach networks, credentials, application data,
     container sockets, another tenant workspace, or arbitrary host paths.
+
+## Shared conversation filesystem rollout
+
+Deploy the API, UI, and host worker from matching versions of `juena-core`.
+Stop the old worker before upgrading: its cleanup loop deletes whole idle
+workspaces. Start the updated API and worker together after the update.
+The launcher installs its sibling core package; for native development run
+`uv sync --extra dev --reinstall-package juena-core` in `juena-chatbot`.
+
+Keep the existing workspace root and identity secret unchanged. A stable secret of
+at least 32 characters is now required even when sandbox execution is disabled.
+If an older deployment used an empty secret, stop and migrate its workspace
+identities before setting a new secret; do not start it against newly keyed empty
+workspaces. Back up the old root and secret before any such migration. Existing disk
+files stay at their paths. Legacy checkpoint uploads are copied on first access
+into `/workspace/uploads`; collisions preserve both contents using a suffix.
+A persisted alias map makes migration repeatable and keeps old `/inputs/uploads`
+paths readable. Missing alias targets are omitted without resurrecting deleted
+uploads from old checkpoints. Subsequent edits update only the workspace copy.
+
+The Files panel beside chat and specialist tools use the same disk files, even
+with `SANDBOX_ENABLED=false`. The existing root, quota, and TTL settings still
+apply. TTL now affects only `.scratch`; the API also runs hourly cleanup when
+no execution worker is present. Back up the persistent workspace alongside the
+database and artifact store. Changing the identity secret changes workspace
+identifiers, so it requires a separate storage migration.
+
+The UI uses a 60/40 chat/files layout with a React folder browser and Ace editor.
+Docker builds core's frontend in a Node 24 stage; the running image needs no Node.
+For native installation, first run `npm ci && npm run build` in
+`juena-core/frontend/filesystem`, then reinstall core in chatbot's environment.
+Keep `UI_PUBLIC_URL` and `JUENA_PUBLIC_URL` browser-reachable on the same cookie
+host; their explicit origins configure credentialed CORS and browser-save origin
+validation. Production uses the shared public origin. Never pass
+`JUENA_API_INTERNAL_URL` or session tokens to the component.
+
+The production gateway must route browser filesystem requests to FastAPI. With
+the VM plan's unprefixed URLs, Caddy must forward `/auth/*`, `/chats/*`,
+`/threads/*/filesystem`, and `/threads/*/filesystem/*`; other paths, including
+`/_stcore/*`, go to Streamlit. Forwarding only `/auth/*` is insufficient. On
+OpenShift (or a gateway using the same convention), route `/api/*` to FastAPI
+and set `JUENA_PUBLIC_URL=https://<host>/api`, with `UI_PUBLIC_URL=https://<host>`.
+Verify authenticated list, preview, download and Save through the public hostname.
+Use explicit UI origins for credentialed requests; origin checks compare origins,
+not the `/api` path prefix.
+
+Browsing uses independent HTTP requests during response streaming. During a
+sandbox command, cached views remain visible and uncached requests show that
+files are busy. The visible folder and clean preview refresh at turn completion
+or an approval pause. Drafts remain separate per session and conversation; no
+continuous filesystem polling or data migration is needed for the React update.
+
+Commands start in `/workspace/.scratch`. Use absolute `/workspace/...` paths
+for durable scripts, uploads, and outputs. An execution's nested outputs retain
+their relative paths. Chat artifacts remain immutable snapshots; the browser
+shows current contents. File preview and Save never execute code.
+
+API and worker coordinate through OS file locks in the shared storage and the
+existing execution queue. Use a single host or storage with equivalent lock
+semantics. Active operations and pending approvals protect scratch from expiry;
+user saves return a conflict during either. Concurrent reads share a lock; short writes wait briefly without blocking the
+API event loop. The execution gate alone causes immediate busy responses to
+file reads. Cancellation and normal completion reconcile the pause marker with
+the checkpoint. A process killed before reconciliation can still leave a pending
+marker; resume the conversation or complete an allowed save to reconcile it.
+Deletion tombstones prevent late workers and stale bookmarks from recreating a
+deleted workspace. Lock files and tombstones intentionally remain outside the
+workspace: unlinking a lock with waiters splits coordination across inodes, and
+removing a tombstone would allow retired identities to be reused.
+
+Editing supports UTF-8 text up to 1 MiB, with revision checks and atomic saves.
+Larger text has a bounded preview. PNG previews are bounded to 5 MiB; downloads
+are bounded to 100 MiB. HTML and notebooks display source. Temporary files,
+pasted inputs, and specialist notes are read-only in the browser. Existing
+upload type, count, and size limits continue to apply.
+
+Quota accounting is cached outside the container mount and invalidated around
+sandbox commands and scratch cleanup. After an administrator changes workspace
+files directly or restores only part of a workspace, remove that workspace's
+`.usage` file before restarting services so the next write recounts disk usage.
+Draft text stays in the browser's session-scoped cache rather than crossing the
+Streamlit bridge on each pause in typing. Permission failures preserve it; session
+expiry clears it and explicitly tells the user that unsaved edits were discarded.

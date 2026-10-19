@@ -26,8 +26,7 @@ STARTER_PROMPTS: tuple[StarterPrompt, ...] = (
         label="Neutron software and codes",
         prompt=(
             "List all neutron-related software repositories currently indexed in JüNA, "
-            "briefly explain what each one is for, and ask which repository I would "
-            "like to explore."
+            "briefly explain what each one is for."
         ),
     ),
 )

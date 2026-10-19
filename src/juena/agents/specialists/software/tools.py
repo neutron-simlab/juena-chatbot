@@ -10,33 +10,63 @@ from juena.tools.repo_search import build_code_chat_tools
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
         "List an absolute directory path. Use `/findings` to see what earlier "
-        "specialists established, and `/inputs` for staged user files. "
-        "Use `/repos` only when indexed search cannot identify the repository. "
+        "specialists established, `/workspace` for shared files, and `/inputs` for pasted material. "
+        "For repository content, use search_docs_local or search_code_semantic first. "
+        "List a specific repository directory only to resolve a missing path after "
+        "retrieval fails or is unavailable; do not walk repository trees. "
         "For which repositories exist, call `list_indexed_repositories` instead: "
         "`/repos` shows what is cloned on disk, not what is indexed."
     ),
     "read_file": (
-        "Read an absolute file path with line numbers. Use it for staged inputs "
-        "and exact evidence from the few best indexed repository search hits."
+        "Read an absolute file path with line numbers. Read `/skills` instructions and "
+        "references directly. For repository questions, retrieve relevant paths with "
+        "search_docs_local or search_code_semantic first, unless the user asked to "
+        "inspect an exact file. Also reads shared workspace "
+        "files, pasted inputs, and findings. Sufficient retrieved source excerpts need "
+        "no additional file read. For missing context, read only the relevant "
+        "range: offset=start_line-1 and limit=end_line-start_line+1 when supplied. "
+        "Extend the range only if needed for context."
     ),
     "grep": (
-        "Search for exact text. Use it only for symbols, imports, configuration "
-        "keys, or call sites after indexed search identifies a likely area."
+        "Search for literal text, not regex, within a known file or directory. "
+        "Use separate calls for different strings: `foo|bar` searches for those "
+        "literal characters, not either name. Use for symbols, imports, configuration "
+        "keys, or call sites in a relevant file identified by retrieval or an exact "
+        "path supplied by the user or a skill. Do not use repository-wide grep as "
+        "a substitute for indexed retrieval. Works on virtual `/repos` and `/skills` paths; "
+        "shell grep cannot access those paths."
     ),
     "glob": (
-        "Find precise filename, extension, test, documentation, or generated-file "
-        "patterns. Do not use it for broad repository discovery."
+        "Find a filename pattern within a specific directory, for shared files or "
+        "a missing repository path after indexed retrieval fails or is unavailable. "
+        "Use search_docs_local or search_code_semantic for repository discovery."
     ),
     "write_file": (
-        "Create short disposable scratch files at new `/workspace` paths. Write to "
+        "Create shared working files under `/workspace`; use `/workspace/.scratch` for disposable scripts. Write to "
         "`/findings/<topic>.md` only when the objective asks you to record findings; "
-        "otherwise the report is the result. `/repos` and `/inputs` are read-only tool "
-        "routes, not execution paths."
+        "otherwise the report is the result. `/repos`, `/skills`, and `/inputs` "
+        "are read-only."
     ),
     "edit_file": (
-        "Revise a scratch file under `/workspace`, or extend an existing "
+        "Edit the shared working file at its `/workspace` path, or extend an existing "
         "`/findings/<topic>.md` rather than starting a second file on the same topic. "
         "`/repos` and `/inputs` are read-only."
+    ),
+    "execute": (
+        "Run scripts for a requested computation, simulation, or code test "
+        "in the isolated sandbox; returns stdout/stderr and the exit code. "
+        "Do not use it for file discovery, source inspection, text searches, "
+        "line counts, or exploratory environment probes. Include necessary version "
+        "checks in the requested script, not separate exploratory commands. "
+        "The working directory is `/workspace/.scratch`; `/workspace` is writable "
+        "and `/inputs` is mounted read-only. `/repos`, `/skills`, and `/findings` "
+        "DO NOT exist in this shell. Use read_file, grep, glob, or ls for those paths, "
+        "never shell commands, and do not retry a missing virtual path with another "
+        "command. Installed packages can be imported normally. "
+        "A documented how-to does not require execution. Do not install packages or "
+        "access the network. Use absolute workspace paths and the optional timeout "
+        "for commands that need it, never above the per-command limit stated under "
+        "Runtime capabilities."
     ),
 }
 

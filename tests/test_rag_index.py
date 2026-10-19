@@ -103,7 +103,7 @@ def test_a_hit_survives_the_tools_own_serialiser():
     serialised = _serialize_vector_hit(hit["repo_id"], hit)
 
     assert serialised["path"] == "/repos/jscatter/src/jscatter/dataarray.py"
-    assert serialised["preview"] == "def fit(self):"
+    assert serialised["content"] == "def fit(self):"
     assert serialised["distance"] == 0.25
     # Dropped: the model never used them and they were a third of the payload.
     for gone in ("id", "file_path", "chunk_index", "start_index", "end_index", "char_count"):

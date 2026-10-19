@@ -4,6 +4,8 @@ from typing import Dict
 from dotenv import load_dotenv
 
 import juena_core
+from juena_core.filesystem import ConversationFilesystem, configure_filesystem
+from juena_core.filesystem.storage import WorkspaceStore
 from juena_core.sandbox.config import SandboxRuntimeSettings, configure_sandbox
 
 from juena.core.paths import repo_root
@@ -12,7 +14,7 @@ from juena.core.paths import repo_root
 from juena_core.schema.llm_models import BlabladorModelName as _BlabladorModelName
 
 # Keep the built-in default in step with the enum the UI filters against.
-_BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.GPT_OSS.value
+_BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
 
 
 def _repo_data_dir(*parts: str) -> Path:
@@ -338,19 +340,14 @@ class Config:
                     "LANGFUSE_TRACING=true; remove LANGFUSE_TRACING_ENABLED"
                 )
 
+        if not cls.SANDBOX_IDENTITY_SECRET or len(cls.SANDBOX_IDENTITY_SECRET) < 32:
+            errors.append("SANDBOX_IDENTITY_SECRET must contain at least 32 characters for the conversation filesystem, even when execution is disabled")
+
         if cls.SANDBOX_ENABLED:
             if not cls.DATABASE_URL:
                 errors.append("DATABASE_URL is required when SANDBOX_ENABLED is true")
             if cls.SANDBOX_CONCURRENCY < 1:
                 errors.append("SANDBOX_CONCURRENCY must be at least 1")
-            if not cls.SANDBOX_IDENTITY_SECRET:
-                errors.append(
-                    "SANDBOX_IDENTITY_SECRET is required when SANDBOX_ENABLED is true"
-                )
-            elif len(cls.SANDBOX_IDENTITY_SECRET) < 32:
-                errors.append(
-                    "SANDBOX_IDENTITY_SECRET must contain at least 32 characters"
-                )
             if cls.SANDBOX_EXECUTION_TIMEOUT_SECONDS <= 0:
                 errors.append("SANDBOX_EXECUTION_TIMEOUT_SECONDS must be positive")
             if cls.SANDBOX_MAX_OUTPUT_BYTES <= 0:
@@ -455,6 +452,13 @@ class Config:
 global_config = Config.initialize()
 
 
+def _active_execution_workspaces() -> set[str]:
+    if not Config.SANDBOX_ENABLED:
+        return set()
+    from juena_core.sandbox.runtime import get_sandbox_jobs
+    return get_sandbox_jobs().active_workspaces()
+
+
 def _configure_core() -> None:
     """Hand the validated values to juena_core, once, at import time.
 
@@ -510,6 +514,13 @@ def _configure_core() -> None:
     # and its settings must not become fields every consumer of core carries.
     # Importing the `sandbox_jobs` model -- and so creating the table -- happens
     # inside this call, and only when it is enabled.
+    configure_filesystem(ConversationFilesystem(
+        WorkspaceStore(Config.SANDBOX_WORKSPACE_ROOT,
+                       limit_bytes=Config.SANDBOX_WORKSPACE_LIMIT_BYTES,
+                       idle_ttl_seconds=Config.SANDBOX_IDLE_TTL_SECONDS),
+        identity_secret=Config.SANDBOX_IDENTITY_SECRET,
+        active_workspaces=_active_execution_workspaces,
+    ))
     configure_sandbox(
         SandboxRuntimeSettings(
             enabled=Config.SANDBOX_ENABLED,

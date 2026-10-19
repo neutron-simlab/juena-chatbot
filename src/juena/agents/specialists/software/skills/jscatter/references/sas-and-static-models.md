@@ -72,7 +72,7 @@ mixing it with the examples below.
 
 ## Prepare one-dimensional SAS data
 
-Use the `data-and-fitting.md` reference for the complete `dataArray` contract. For a
+Use the `/skills/jscatter/references/data-and-fitting.md` reference for the complete `dataArray` contract. For a
 typical reduced dataset, create or verify rows in `(columns, points)` orientation:
 
 ```python
@@ -223,6 +223,8 @@ print(particle.I0, particle.fa0)
 For `js.ff.sphere`, `.Y` is the squared single-particle amplitude
 `contrast**2 * volume**2 * shape(q)**2`; row 2 is the signed amplitude. With q and
 radius in the units above, the result has units `nm^2`. Do not square `.Y` again.
+Scale and offset only `.Y`: arithmetic on the whole returned `dataArray` would also change
+`q` and the errors (see `/skills/jscatter/references/data-and-fitting.md`).
 
 Measured absolute intensity also needs a number density and any experimentally justified
 normalization:
@@ -296,7 +298,7 @@ normalization.
 Use physically justified starting values and limits. For example, keep radius and
 number density positive, but do not impose a narrow size limit merely to force an
 optimizer to converge. Apply the fitting workflow and residual checks from
-`data-and-fitting.md`.
+`/skills/jscatter/references/data-and-fitting.md`.
 
 ## Add a structure factor
 
@@ -430,7 +432,8 @@ for dataset, solvent_sld, concentration, beam_profile in experiments:
 Write the model so geometry can be shared while dataset attributes supply contrast,
 concentration, or resolution. In `dataList.fit`, a scalar starting value is shared, a
 one-element list creates one value per dataset, and `[start, "attribute_name"]` links
-one value per unique metadata group; verify the group ordering before fitting.
+one value per unique metadata group; verify the group ordering before fitting. A single
+`dataArray.fit` keeps only the first element of such a list.
 
 Share a radius or shell thickness only when sample preparation and physics justify it.
 Allow per-dataset backgrounds and profiles when instruments or configurations differ.
@@ -577,7 +580,7 @@ averaging, mosaicity, and instrumental smearing are distinct operations.
 
 ## Validate the physical result
 
-In addition to the fit checks in `data-and-fitting.md`, require:
+In addition to the fit checks in `/skills/jscatter/references/data-and-fitting.md`, require:
 
 - residuals without low-q aggregation trends, misplaced minima/maxima, or systematic
   high-q background errors;

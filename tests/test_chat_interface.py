@@ -233,6 +233,7 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=Mock(return_value=None),
+        container=lambda: _DummyContext(),
     )
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
@@ -250,7 +251,8 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
     assert session_state.messages == [existing_message]
 
 
-def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -> None:
+@pytest.mark.parametrize("mention_thread", [None, "thread-1", "other-thread"])
+def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, mention_thread) -> None:
     chat_interface = _import_chat_interface(monkeypatch)
     monkeypatch.setattr(
         chat_interface, "render_sandbox_interrupt", Mock(return_value=False)
@@ -272,7 +274,10 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -
         chat_message=lambda _role: _DummyContext(),
         empty=Mock(),
         chat_input=chat_input_mock,
+        container=lambda: _DummyContext(),
     )
+    if mention_thread:
+        session_state.filesystem_mention = {"thread_id": mention_thread, "path": "/workspace/analysis.py"}
 
     monkeypatch.setattr(chat_interface, "st", fake_st)
     monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
@@ -282,8 +287,14 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch) -
 
     chat_interface.render_chat_interface()
 
+    if mention_thread == "thread-1":
+        assert session_state.chat_prompt == "Please look at `/workspace/analysis.py`: "
+    else:
+        assert "chat_prompt" not in session_state
+    assert "filesystem_mention" not in session_state
     chat_input_mock.assert_called_once_with(
         placeholder="Type your message here...",
+        key="chat_prompt",
         max_chars=CHAT_INPUT_MAX_CHARS,
         accept_file="multiple",
         max_upload_size=CHAT_INPUT_MAX_UPLOAD_MB,
@@ -343,6 +354,82 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     render_chat_input_styles_mock.assert_called_once_with()
     assert stream_mock.call_args.args[:2] == ("please inspect", fake_st.empty.return_value)
     assert stream_mock.call_args.kwargs["attachments"] == [attachment]
+
+
+def test_a_new_turn_is_drawn_above_the_composer(monkeypatch) -> None:
+    """In the chat column the composer is drawn where it is called, not pinned
+    to the bottom of the window. The turn it submits arrives after that call,
+    so it has to go into a block made before the composer, or the box sits
+    above the message and the live reply until the stream ends."""
+    chat_interface = _import_chat_interface(monkeypatch)
+    monkeypatch.setattr(
+        chat_interface, "render_sandbox_interrupt", Mock(return_value=False)
+    )
+    events: list[tuple] = []
+    open_blocks: list[int] = []
+    created: list[int] = []
+
+    class _Block:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def __enter__(self):
+            open_blocks.append(self.index)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            open_blocks.pop()
+            return False
+
+    def container():
+        created.append(len(created))
+        events.append(("block", created[-1]))
+        return _Block(created[-1])
+
+    def chat_input(**_kwargs):
+        events.append(("composer",))
+        return "fit the SANS data"
+
+    def chat_message(role):
+        events.append(("bubble", role, tuple(open_blocks)))
+        return _DummyContext()
+
+    def render_message(message, **_kwargs):
+        events.append(("message", message.content, tuple(open_blocks)))
+
+    existing_message = ChatMessage(type="ai", content="Existing response")
+    session_state = _SessionState(
+        client=Mock(),
+        messages=[existing_message],
+        thread_id="thread-1",
+        user_id="user-1",
+        selected_provider="openai",
+        selected_model="gpt-4o-mini",
+        show_system_messages=False,
+    )
+    monkeypatch.setattr(
+        chat_interface,
+        "st",
+        SimpleNamespace(
+            session_state=session_state,
+            chat_message=chat_message,
+            empty=Mock(),
+            chat_input=chat_input,
+            container=container,
+            error=Mock(),
+        ),
+    )
+    monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
+    monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
+    monkeypatch.setattr(chat_interface, "render_message", render_message)
+    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+
+    chat_interface.render_chat_interface()
+
+    assert events.index(("block", 0)) < events.index(("composer",))
+    assert ("message", "Existing response", (0,)) in events
+    assert ("message", "fit the SANS data", (0,)) in events
+    assert ("bubble", "assistant", (0,)) in events
 
 
 def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -> None:
@@ -486,3 +573,24 @@ def test_a_pending_interrupt_replaces_the_composer(monkeypatch) -> None:
 
     interrupt_mock.assert_called_once_with()
     chat_input_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("state", "written"),
+    [("running", False), ("completed", False), ("timed_out", True), ("failed", True)],
+)
+def test_only_a_failed_sandbox_run_adds_a_line(monkeypatch, state, written) -> None:
+    """A run's own step says it worked; a failure needs the reason beside it."""
+    from juena_core.sandbox import backend
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(backend, "get_stream_writer", lambda: emitted.append)
+    backend.PodmanSandboxBackend._status(state, backend.STATUS_LABELS[state])
+    chat_interface = _import_chat_interface(monkeypatch)
+    activity = Mock()
+
+    chat_interface._render_sandbox_status(activity, emitted[0])
+
+    assert activity.write.called is written
+    if written:
+        activity.write.assert_called_once_with(backend.STATUS_LABELS[state])

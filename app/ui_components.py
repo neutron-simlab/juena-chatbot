@@ -38,12 +38,14 @@ __all__ = [
     # This application's
     "CHAT_INPUT_MIN_HEIGHT_REM",
     "CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM",
+    "FILES_PANEL_KEY",
     "LOGO_PATH",
     "HEADER_LOGO_WIDTH_PX",
     "HEADER_LOGO_PIXEL_DENSITY",
     "logo_data_uri",
     "render_header_with_logo",
     "render_chat_input_styles",
+    "render_files_panel_styles",
     # Core's, re-exported
     "PLOT_PREVIEW_WIDTH_PX",
     "RENDERED_ARTIFACTS_KEY",
@@ -60,6 +62,10 @@ __all__ = [
 
 CHAT_INPUT_MIN_HEIGHT_REM = 7.5
 CHAT_INPUT_TEXTAREA_MIN_HEIGHT_REM = 5.5
+
+# The container holding the file browser. Streamlit turns a container key into
+# the CSS class ``st-key-<key>``, which is how the styles below find its column.
+FILES_PANEL_KEY = "files_panel"
 
 # The JüNA mark, shown above the chat title. The source is square and has an
 # alpha channel, so it sits directly on the themed background with no plate.
@@ -134,4 +140,35 @@ def render_chat_input_styles() -> None:
         </style>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def render_files_panel_styles() -> None:
+    """Keep the file browser's column in view while the chat scrolls.
+
+    The column sticks just below Streamlit's top bar. ``align-self`` stops it
+    stretching to the chat's height, which would leave it no room to move. A
+    browser taller than the window scrolls inside itself instead of being cut
+    off. Below 640px Streamlit stacks the columns, so the rule stays off there.
+
+    ``--juena-files-height`` is the height core's file browser grows to with a
+    file open, so the file fills the column instead of stopping at 340px.
+
+    ``st.html`` with only a ``<style>`` tag takes no space on the page.
+    """
+    st.html(
+        f"""
+        <style>
+        @media (min-width: 641px) {{
+            div[data-testid="stColumn"]:has(.st-key-{FILES_PANEL_KEY}) {{
+                position: sticky;
+                top: 4rem;
+                align-self: flex-start;
+                max-height: calc(100vh - 5rem);
+                overflow-y: auto;
+                --juena-files-height: calc(100vh - 5rem);
+            }}
+        }}
+        </style>
+        """
     )

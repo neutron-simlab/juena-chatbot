@@ -69,7 +69,8 @@ def test_container_context_keeps_prompts_and_future_specialist_skills() -> None:
 
 def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
     skill_text = (JSCATTER_SKILL / "SKILL.md").read_text(encoding="utf-8")
-    reference_paths = set(re.findall(r"\]\((references/[^)]+)\)", skill_text))
+    # Absolute paths, because models resolved relative links against /repos.
+    reference_paths = set(re.findall(r"`/skills/jscatter/(references/[^`]+)`", skill_text))
 
     assert reference_paths == {
         "references/data-and-fitting.md",

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -22,6 +22,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from juena_core.agents.findings import FindingsMap, findings_delta, fingerprint
 from juena_core.agents.specialist_outcome import outcome_verified
 from juena_core.log import get_logger
+from juena_core.filesystem import get_filesystem
+
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
 from juena.server.database.models import ResearchJob
@@ -76,21 +78,25 @@ async def _invoke(runnable: Any, job: ResearchJob) -> dict[str, Any]:
         "messages": [HumanMessage(content=job.objective)],
         "files": job.run_input["files"],
     }
-    async with asyncio.timeout(remaining):
-        return await runnable.ainvoke(
-            initial,
-            config=config,
-            context=RuntimeModelContext(
-                provider=job.run_input["provider"],
-                model=job.run_input["model"],
-                thread_id=job.thread_id,
-                user_id=str(job.user_id),
-                run_id=f"research:{job.id}",
-            ),
-            # Persist each step before beginning the next. A running search may
-            # repeat after a crash; completed checkpointed steps are retained.
-            durability="sync",
-        )
+    filesystem = get_filesystem()
+    lease = (filesystem.for_thread(str(job.user_id), job.thread_id).aguard(operation=True, shared=True)
+             if filesystem is not None else nullcontext())
+    async with lease:
+        async with asyncio.timeout(remaining):
+            return await runnable.ainvoke(
+                initial,
+                config=config,
+                context=RuntimeModelContext(
+                    provider=job.run_input["provider"],
+                    model=job.run_input["model"],
+                    thread_id=job.thread_id,
+                    user_id=str(job.user_id),
+                    run_id=f"research:{job.id}",
+                ),
+                # Persist each step before beginning the next. A running search may
+                # repeat after a crash; completed checkpointed steps are retained.
+                durability="sync",
+            )
 
 
 async def _run(job_id: UUID) -> None:
