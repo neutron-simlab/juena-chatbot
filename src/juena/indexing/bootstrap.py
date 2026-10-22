@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from juena_core.log import get_logger
+from juena.indexing.rag_index import build_search_index
 from juena.indexing.repo_config import load_repo_configs
 from juena.indexing.repo_manager import RepoManager
 
@@ -22,20 +23,46 @@ logger = get_logger(__name__)
 BOOTSTRAP_DONE_ENV = "JUENA_BOOTSTRAP_DONE"
 
 
+def indexed_revisions() -> dict[str, str]:
+    """The commit juena-rag indexed each repository at. Empty if it cannot say.
+
+    Empty leaves every clone on its branch head, as before: the files may then be
+    newer than what search read, which is logged rather than fatal -- search is
+    unreachable in that case anyway.
+    """
+    try:
+        return build_search_index().indexed_revisions()
+    except Exception:
+        logger.warning(
+            "juena-rag could not say which revisions it indexed; clones follow their "
+            "branch heads, so files may be newer than what search read",
+            exc_info=True,
+        )
+        return {}
+
+
 def clone_repositories(config_path: Path | None = None) -> dict[str, str]:
-    """Clone or refresh every configured repository. No indexing.
+    """Clone or refresh every configured repository, at the revision juena-rag indexed.
 
     Search comes over HTTP, but the model still opens the real file through
-    ``/repos/`` to quote real line numbers, and that needs the bytes here.
+    ``/repos/`` to quote real line numbers. Those are the indexed file's lines only
+    if the clone is at the indexed commit; the branch head moves on between
+    ingests. Running this again after an ingest re-pins without a restart.
     """
     repo_manager = RepoManager(load_repo_configs(config_path))
+    indexed = indexed_revisions()
     revisions: dict[str, str] = {}
 
     for repo_id in repo_manager.repo_ids:
         try:
-            repo_manager.resolve_root(repo_id)
+            repo_manager.resolve_root(repo_id, revision=indexed.get(repo_id))
             revisions[repo_id] = repo_manager.current_revision(repo_id)
-            logger.info("Repository %s at %s", repo_id, revisions[repo_id][:12])
+            logger.info(
+                "Repository %s at %s (%s)",
+                repo_id,
+                revisions[repo_id][:12],
+                "the indexed revision" if repo_id in indexed else "its branch head",
+            )
         except Exception:
             logger.warning("Could not clone or refresh %s", repo_id, exc_info=True)
 

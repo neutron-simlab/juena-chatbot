@@ -260,9 +260,12 @@ Case 1 is handled by the normal workflow above.
 Case 2 is entirely juena-rag's business. There is no index on this side to
 delete and no cache to clear: re-ingest the source there, which replaces its
 chunks atomically, and this application sees the new content on its next search
-with no restart. Restarting the chatbot refreshes the *clone*, which is what
-`read_file` and `grep` see — a different thing from what search returns, and
-worth keeping straight when the two disagree.
+with no restart. Then restart the chatbot anyway. The *clone*, which is what
+`read_file` and `grep` see, is checked out at the commit juena-rag indexed, and
+it moves to the new one only when startup runs again.
+
+New commits upstream are the same case and are not picked up automatically; the
+README's maintainer section says how often to re-ingest.
 
 ## Useful Environment Variables
 
@@ -281,7 +284,7 @@ worth keeping straight when the two disagree.
 | Wrong branch error | `source.branch` is wrong | Check the repo's default branch and update the config |
 | Service startup is slow | A large repository is cloning | Watch the bootstrap log and wait for the health check |
 | Repo is listed but search finds nothing | It was never ingested into juena-rag | Add it there and run the ingest; `list_indexed_repositories` confirms |
-| Search is stale but files look right | The clone refreshed; the store did not | Re-ingest in juena-rag — restarting this application will not do it |
+| Search misses recent code | The repository has commits that were never ingested | Re-ingest in juena-rag, then restart (see the README's maintainer section) — restarting alone will not do it |
 | Docs search misses files | `docs_paths` does not match the repo layout | Fix it in **juena-rag's** config, not this one, then re-ingest |
 
 ## Short Version

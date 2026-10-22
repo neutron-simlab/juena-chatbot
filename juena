@@ -421,7 +421,7 @@ cmd_sandbox_stop() { ## Stop JüNA and the worker but leave PostgreSQL running
     echo "Use 'juena postgres-down' to stop PostgreSQL too."
 }
 
-cmd_bootstrap() { ## Clone/refresh repositories and rebuild stale vector indices
+cmd_bootstrap() { ## Clone/refresh repositories at the commits juena-rag indexed
     uv run python -m juena.indexing.bootstrap "$@"
 }
 
