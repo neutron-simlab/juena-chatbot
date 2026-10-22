@@ -607,6 +607,59 @@ cmd_rag_logs() { ## Follow the juena-rag service log
     tail -f "$RAG_LOG_FILE"
 }
 
+cmd_repos_ingest() { ## Ingest the repositories in config/repositories.yaml into juena-rag, then re-pin
+    require_rag_repo
+    # This repository's list is the only one: juena-rag ingests from it rather
+    # than from a copy of its own. Absolute, because the ingest runs over there.
+    local config="${REPO_CONFIG_PATH:-config/repositories.yaml}"
+    case "$config" in /*) ;; *) config="$REPO_ROOT/$config" ;; esac
+    [ -f "$config" ] || die "no repository list at $config"
+
+    local ids=() flags=() argument
+    for argument in "$@"; do
+        case "$argument" in
+            -*) flags+=("$argument") ;;
+            *) ids+=("$argument") ;;
+        esac
+    done
+
+    ( rag_repo_env && docker compose up -d --wait pgvector ) \
+        || die "juena-rag's pgvector did not start; check $JUENA_RAG_REPO/.env"
+
+    if [ "${#ids[@]}" -eq 0 ]; then
+        # Read with juena-rag's own loader: the ids are what the ingest will find.
+        read -r -a ids <<<"$(rag_repo_env && uv run --extra ingest python -c \
+            'import sys; from pathlib import Path; from juena_rag.ingest.code.repository import load_repositories; print(" ".join(load_repositories(Path(sys.argv[1]))))' \
+            "$config")"
+    fi
+
+    # An unchanged repository is skipped by the ingest itself, so running every
+    # id costs a clone each and an embedding only where there are new commits.
+    local failed=() id
+    for id in "${ids[@]}"; do
+        echo "== $id"
+        ( rag_repo_env && uv run --extra ingest juena-rag ingest-repo "$id" \
+            --config "$config" ${flags[@]+"${flags[@]}"} ) || failed+=("$id")
+    done
+
+    case " ${flags[*]-} " in
+        *" --dry-run "*) ;;
+        *)
+            # The clones follow the commits just ingested. A running stack is
+            # re-pinned in place; otherwise its next start does it.
+            if "${COMPOSE_DEV[@]}" ps --status running --services 2>/dev/null \
+                    | grep -qx juena-chatbot; then
+                "${COMPOSE_DEV[@]}" exec -T juena-chatbot python -m juena.indexing.bootstrap \
+                    || echo "warning: could not re-pin the clones; './juena down' and './juena up' will" >&2
+            else
+                echo "JüNA is not running; its clones move to these commits on its next start."
+            fi
+            ;;
+    esac
+
+    [ "${#failed[@]}" -eq 0 ] || die "ingest failed for: ${failed[*]}"
+}
+
 # `juena up` must not fail because a sibling repository is missing or its key has
 # expired. The chatbot already degrades in exactly this case -- it keeps the
 # tools attached and reports the outage per request -- so the stack comes up and

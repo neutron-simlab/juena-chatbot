@@ -28,3 +28,22 @@ def test_unit_gate_fails_closed_when_core_cannot_be_checked(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "cannot check the import direction" in result.stderr
     assert "pytest" not in result.stdout
+
+
+def test_repos_ingest_says_where_it_looked_for_juena_rag(tmp_path: Path) -> None:
+    """A missing checkout ends in a sentence, not in a uv or docker error."""
+
+    env = os.environ.copy()
+    env["JUENA_RAG_REPO"] = str(tmp_path / "missing-rag")
+
+    result = subprocess.run(
+        [str(ROOT / "juena"), "repos-ingest", "--dry-run"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert f"juena-rag is not at {tmp_path / 'missing-rag'}" in result.stderr
