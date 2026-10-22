@@ -66,8 +66,13 @@ class RepoManager:
         root = self.local_root(repo_id)
         return root.is_dir() and (root / ".git").is_dir()
 
-    def resolve_root(self, repo_id: str) -> Path:
-        """Return the absolute root directory for *repo_id*."""
+    def resolve_root(self, repo_id: str, revision: str | None = None) -> Path:
+        """Return the absolute root directory for *repo_id*.
+
+        With *revision*, the working tree is left at that commit rather than at
+        the branch head: the commit juena-rag indexed, so a hit's line numbers are
+        the lines of the file the model opens.
+        """
         if repo_id in self._roots:
             return self._roots[repo_id]
 
@@ -96,6 +101,8 @@ class RepoManager:
             self._git_clone(url, dest, cfg.source.branch)
         else:
             self._git_clone(url, dest, cfg.source.branch)
+        if revision:
+            self._git_checkout_revision(dest, revision)
         logger.info("Resolved git repo %s -> %s", cfg.id, dest)
 
         self._roots[repo_id] = dest
@@ -158,5 +165,18 @@ class RepoManager:
         RepoManager._run_git(
             ["git", "-C", str(dest), "reset", "--hard", f"origin/{branch}"],
             f"reset {dest.name}",
+        )
+
+    @staticmethod
+    def _git_checkout_revision(dest: Path, revision: str) -> None:
+        # Fetched by sha, since a shallow clone holds only the branch tip and the
+        # indexed commit is usually behind it.
+        RepoManager._run_git(
+            ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", revision],
+            f"fetch {dest.name}@{revision[:12]}",
+        )
+        RepoManager._run_git(
+            ["git", "-C", str(dest), "reset", "--hard", "FETCH_HEAD"],
+            f"reset {dest.name}@{revision[:12]}",
         )
 

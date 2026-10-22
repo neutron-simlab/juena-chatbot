@@ -115,6 +115,18 @@ class RagVectorIndex:
             for source in self._store.list_sources()
         ]
 
+    def indexed_revisions(self) -> dict[str, str]:
+        """The commit each repository was indexed at, by repository.
+
+        What the clones are checked out at, so the file the model opens is the
+        file the search read -- not the branch head, which moves on between
+        ingests.
+        """
+        return {
+            source.source_id: source.active_revision
+            for source in self._store.list_sources()
+        }
+
     def ping(self) -> None:
         """Reach the service. Raises if it or its database cannot be reached."""
         self._store.ping()

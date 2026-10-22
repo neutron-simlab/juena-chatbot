@@ -53,6 +53,7 @@ class FakeHit:
 class FakeSource:
     source_id: str
     chunk_count: int
+    active_revision: str = "0" * 40
 
 
 @dataclass
@@ -73,8 +74,8 @@ class FakeStore:
 
     def list_sources(self):
         return [
-            FakeSource(source_id="jscatter", chunk_count=1641),
-            FakeSource(source_id="datreat", chunk_count=12362),
+            FakeSource(source_id="jscatter", chunk_count=1641, active_revision="254a958"),
+            FakeSource(source_id="datreat", chunk_count=12362, active_revision="28dd927"),
             FakeSource(source_id="declared-only", chunk_count=0),
         ]
 
@@ -227,6 +228,15 @@ def test_the_catalogue_reports_every_repository_with_its_chunk_count(index):
         {"repo_id": "datreat", "chunks": 12362},
         {"repo_id": "declared-only", "chunks": 0},
     ]
+
+
+def test_the_indexed_revisions_come_from_the_catalogue(index):
+    """What each clone is checked out at, so files match what search read."""
+    assert index.indexed_revisions() == {
+        "jscatter": "254a958",
+        "datreat": "28dd927",
+        "declared-only": "0" * 40,
+    }
 
 
 def test_the_repository_list_says_what_each_one_is_for(index):
