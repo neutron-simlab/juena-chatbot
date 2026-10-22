@@ -98,13 +98,11 @@ with psycopg.connect(os.environ['JUENA_RAG_DSN']) as connection:
 PYTHON
 ```
 
-Add jscatter to the search library, then return to the chatbot folder:
+Return to the chatbot folder and add jscatter to the search library:
 
 ```bash
-set -a; source .env; set +a
-uv run --extra ingest juena-rag ingest-repo jscatter \
-    --config use-cases/code-repository/repositories.yaml
 cd ../juena-chatbot
+./juena repos-ingest jscatter
 ```
 
 Wait for this command to finish. Downloading repositories alone does not make
@@ -165,28 +163,22 @@ never re-indexes it and never loses it.
 after a release people will ask about. On 2026-10-22, six of the eight repositories
 had new commits since their last ingest two months earlier.
 
-From `juena-chatbot`, with search running (`./juena rag-up`):
+From `juena-chatbot`:
 
 ```bash
-cd ../juena-rag
-set -a; source .env; set +a
-for repo in datreat jscatter mdanse sasdata sasmodels sasview silx vitess; do
-    uv run --extra ingest juena-rag ingest-repo "$repo" \
-        --config use-cases/code-repository/repositories.yaml
-done
-cd ../juena-chatbot
-./juena down
-./juena up
+./juena repos-ingest
 ```
 
-The list is the ids in juena-rag's `use-cases/code-repository/repositories.yaml`.
-A repository with no new commits prints `already at …; nothing to do` and costs
+It ingests every repository in `config/repositories.yaml`, the one list of what
+JüNA covers, or only the ids you name (`./juena repos-ingest jscatter silx`). A
+repository with no new commits prints `already at …; nothing to do` and costs
 nothing. A changed one is re-embedded in full, a few minutes each. Search keeps
 answering from the old data until each repository's new data is complete.
+`--dry-run` only counts.
 
-Do not skip the restart at the end. It moves JüNA's copies of the repositories to
-the commits just ingested, so the lines the model quotes are the lines search found.
-Between the ingest and the restart, the two disagree.
+At the end it moves JüNA's copies of the repositories to the commits just
+ingested, so the lines the model quotes are the lines search found. If JüNA is not
+running, its next `./juena up` does that.
 
 ## If something goes wrong
 
