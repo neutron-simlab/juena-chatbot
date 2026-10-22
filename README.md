@@ -101,7 +101,9 @@ PYTHON
 Add jscatter to the search library, then return to the chatbot folder:
 
 ```bash
-uv run --group use-cases python use-cases/code-repository/ingest.py jscatter
+set -a; source .env; set +a
+uv run --extra ingest juena-rag ingest-repo jscatter \
+    --config use-cases/code-repository/repositories.yaml
 cd ../juena-chatbot
 ```
 
@@ -150,6 +152,41 @@ Run these from `juena-chatbot`:
 | Watch search errors | `./juena rag-logs` |
 
 Press **Ctrl+C** to stop watching logs; JüNA keeps running.
+
+## Keeping repository search up to date (maintainer)
+
+Repository search does not update itself. JüNA searches what juena-rag ingested,
+and nothing ingests new commits automatically. That is on purpose: indexing at
+every start used to make startup take minutes and up to 12 GB. The search data
+lives in juena-rag's database volume, so starting, stopping or rebuilding JüNA
+never re-indexes it and never loses it.
+
+**The maintainer re-ingests every two weeks, and at least once a month**, or sooner
+after a release people will ask about. On 2026-10-22, six of the eight repositories
+had new commits since their last ingest two months earlier.
+
+From `juena-chatbot`, with search running (`./juena rag-up`):
+
+```bash
+cd ../juena-rag
+set -a; source .env; set +a
+for repo in datreat jscatter mdanse sasdata sasmodels sasview silx vitess; do
+    uv run --extra ingest juena-rag ingest-repo "$repo" \
+        --config use-cases/code-repository/repositories.yaml
+done
+cd ../juena-chatbot
+./juena down
+./juena up
+```
+
+The list is the ids in juena-rag's `use-cases/code-repository/repositories.yaml`.
+A repository with no new commits prints `already at …; nothing to do` and costs
+nothing. A changed one is re-embedded in full, a few minutes each. Search keeps
+answering from the old data until each repository's new data is complete.
+
+Do not skip the restart at the end. It moves JüNA's copies of the repositories to
+the commits just ingested, so the lines the model quotes are the lines search found.
+Between the ingest and the restart, the two disagree.
 
 ## If something goes wrong
 
