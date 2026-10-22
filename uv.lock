@@ -1441,7 +1441,7 @@ dev = [
 [[package]]
 name = "juena-rag"
 version = "0.0.1"
-source = { git = "https://github.com/neutron-simlab/juena-rag.git#b7b72954477e781c1bda0828e24c4ecf0ffbccd0" }
+source = { git = "https://github.com/neutron-simlab/juena-rag.git#870d74c2865678273c919ad58b05983db7c29ee2" }
 dependencies = [
     { name = "pydantic" },
     { name = "tree-sitter" },

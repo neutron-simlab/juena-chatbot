@@ -99,10 +99,10 @@ class Config:
     # Tavily web search (optional external web search tool)
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
-    # juena-rag, the shared retrieval service. Setting this is the switch: the
-    # repository tools search pgvector over HTTP instead of the Chroma index
-    # inside this pod. Unset, everything behaves exactly as before, which is what
-    # makes the cutover reversible without a deploy.
+    # juena-rag, the shared retrieval service, and the only search backend: the
+    # repository tools search pgvector over HTTP. Required -- the Chroma index
+    # this replaced is deleted, so unset, `build_search_index()` refuses to start
+    # rather than serve from nothing.
     JUENA_RAG_URL = os.getenv("JUENA_RAG_URL", "").strip() or None
 
     # Sandboxed scientific execution. The `sandbox_jobs` table is the only

@@ -82,8 +82,8 @@ async def create_juena_agent(
     if bootstrap_problems:
         logger.warning(
             "Repository research is degraded (%d repository(s) usable): %s. "
-            "A missing clone is fixed by `python -m juena.indexing.bootstrap "
-            "--clone-only`; a missing index is the ingestion job's business.",
+            "A missing clone is fixed by `python -m juena.indexing.bootstrap`; "
+            "a missing index is the ingestion job's business.",
             len(survey.searchable),
             "; ".join(bootstrap_problems),
         )
