@@ -218,6 +218,126 @@ def test_prod_config_is_quiet_by_default(tmp_path: Path) -> None:
     assert commands[-1].endswith("config --quiet")
 
 
+@pytest.mark.parametrize("shared", [False, True], ids=["standalone", "shared"])
+def test_reset_chat_builds_before_deleting_and_redeploys(tmp_path: Path, shared: bool):
+    env = _production_launcher(tmp_path, shared=shared)
+    env["TEST_WORKER_INSTALLED"] = "true"
+    result, commands = _production_run(tmp_path, env, "prod", "reset-chat", "--confirm")
+    assert result.returncode == 0, result.stderr
+    build = next(i for i, c in enumerate(commands) if c.endswith("build juena-chatbot"))
+    stop = next(i for i, c in enumerate(commands) if c.endswith("stop juena-chatbot"))
+    drop = next(i for i, c in enumerate(commands) if " dropdb " in c)
+    create = next(i for i, c in enumerate(commands) if " createdb " in c)
+    up = next(i for i, c in enumerate(commands) if "up -d --build" in c)
+    assert build < commands.index("worker-stop") < stop < drop < create < up
+    assert commands[drop].endswith("dropdb --username=juena --maintenance-db=postgres --if-exists --force juena")
+    assert not any(" down" in c or "volume rm" in c or "exec -T rag-db" in c for c in commands)
+
+
+def test_reset_chat_requires_explicit_confirmation(tmp_path: Path):
+    env = _production_launcher(tmp_path)
+    result = subprocess.run([str(tmp_path / "juena"), "prod", "reset-chat"],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "--confirm" in result.stderr
+    assert not (tmp_path / "commands").exists()
+
+
+@pytest.mark.parametrize("failure", ["build juena-chatbot", "pg_isready", "dropdb"])
+def test_reset_chat_stops_on_failure(tmp_path: Path, failure: str):
+    env = _production_launcher(tmp_path)
+    docker = tmp_path / "bin/docker"
+    docker.write_text(docker.read_text().replace(
+        'case "$*" in', f'case "$*" in *"{failure}"*) exit 1 ;;', 1))
+    result, commands = _production_run(tmp_path, env, "prod", "reset-chat", "--confirm")
+    assert result.returncode != 0
+    assert not any(" createdb " in c or "up -d --build" in c for c in commands)
+    if failure != "dropdb":
+        assert not any("stop juena-chatbot" in c or " dropdb " in c for c in commands)
+
+
+@pytest.mark.parametrize("setting", ["POSTGRES_HOST=external", "POSTGRES_DB=postgres", "AUTH_DEV_BYPASS=true"])
+def test_reset_chat_rejects_unsafe_targets_before_mutating(tmp_path: Path, setting: str):
+    env = _production_launcher(tmp_path)
+    docker = tmp_path / "bin/docker"
+    docker.write_text(docker.read_text().replace(
+        "printf 'ENVIRONMENT=production", f"printf '{setting}\\nENVIRONMENT=production", 1))
+    result, commands = _production_run(tmp_path, env, "prod", "reset-chat", "--confirm")
+    assert result.returncode != 0
+    assert not any("build juena-chatbot" in c or "stop juena-chatbot" in c or " dropdb " in c for c in commands)
+
+
+def _profile_setup(tmp_path: Path, values: dict, *, shared: bool = True):
+    import json
+
+    env = _production_launcher(tmp_path, shared=shared)
+    serialized = {name: value.replace("$", "$$") for name, value in values.items()}
+    env["PROFILE_VALUES"] = json.dumps({"services": {"settings": {"environment": serialized}}})
+    docker = tmp_path / "bin/docker"
+    docker.write_text(docker.read_text().replace('case "$*" in', '''case "$*" in
+  *'config --format json') cat > "$PROFILE_TEMPLATE"; printf '%s' "$PROFILE_VALUES"; exit 0 ;;
+  *'config --quiet') exit "${TEST_CONFIG_FAILURE:-0}" ;;
+''', 1))
+    env["PROFILE_TEMPLATE"] = str(tmp_path / "settings-template.yml")
+    config = Path(env["PROD_ENV_FILE"])
+    original = "POSTGRES_PASSWORD=test\nBLABLADOR_API_KEY='fake-old-rag'\nTAVILY_API_KEY='fake-old-tool'\nSANDBOX_IDENTITY_SECRET=stable\n"
+    config.write_text(original)
+    return env, config, original
+
+
+@pytest.mark.parametrize("shared", [False, True], ids=["standalone", "shared"])
+def test_profile_setup_prepares_secrets_without_deploying_or_printing_them(tmp_path: Path, shared: bool):
+    import base64
+
+    env, config, original = _profile_setup(tmp_path, {"BLABLADOR_API_KEY": "fake-old-rag"}, shared=shared)
+    result, commands = _production_run(tmp_path, env, "prod", "profile-setup")
+    assert result.returncode == 0, result.stderr
+    updated = config.read_text()
+    assert "RAG_BLABLADOR_API_KEY='fake-old-rag'" in updated
+    assert "\nBLABLADOR_API_KEY=" not in updated and "TAVILY_API_KEY=" not in updated
+    assert "SANDBOX_IDENTITY_SECRET=stable" in updated
+    secret = next(line.split("=", 1)[1].strip("'") for line in updated.splitlines() if line.startswith("JUENA_SECRET_KEY="))
+    assert len(base64.urlsafe_b64decode(secret)) == 32
+    assert secret not in result.stdout + result.stderr and "fake-old-rag" not in result.stdout + result.stderr
+    backup, = tmp_path.glob("server.env.before-profile.*")
+    assert backup.read_text() == original
+    assert config.stat().st_mode & 0o777 == backup.stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob("server.env.profile*"))
+    assert not any(" up " in c or " stop " in c or "exec -T" in c for c in commands)
+    assert any(("docker-compose.shared.yml" if shared else "--profile server") in c for c in commands)
+
+
+def test_profile_setup_preserves_existing_secret_and_dedicated_rag_key_on_repeat(tmp_path: Path):
+    values = {"JUENA_SECRET_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+              "RAG_BLABLADOR_API_KEY": "fake-dedicated-$token", "BLABLADOR_API_KEY": "fake-old-rag"}
+    env, config, _ = _profile_setup(tmp_path, values)
+    for _ in range(2):
+        result, _ = _production_run(tmp_path, env, "prod", "profile-setup")
+        assert result.returncode == 0, result.stderr
+        assert f"JUENA_SECRET_KEY='{values['JUENA_SECRET_KEY']}'" in config.read_text()
+        assert "RAG_BLABLADOR_API_KEY='fake-dedicated-$token'" in config.read_text()
+        assert config.read_text().count("JUENA_SECRET_KEY=") == 1
+
+
+@pytest.mark.parametrize("values", [{}, {"BLABLADOR_API_KEY": "fake", "JUENA_SECRET_KEY": "invalid"},
+                                   {"BLABLADOR_API_KEY": "line\nbreak"}])
+def test_profile_setup_refuses_missing_or_invalid_secrets_without_changing_file(tmp_path: Path, values: dict):
+    env, config, original = _profile_setup(tmp_path, values)
+    result, _ = _production_run(tmp_path, env, "prod", "profile-setup")
+    assert result.returncode != 0
+    assert config.read_text() == original
+    assert not list(tmp_path.glob("server.env.profile*"))
+
+
+def test_profile_setup_keeps_original_when_complete_compose_validation_fails(tmp_path: Path):
+    env, config, original = _profile_setup(tmp_path, {"BLABLADOR_API_KEY": "fake-old-rag"})
+    env["TEST_CONFIG_FAILURE"] = "1"
+    result, _ = _production_run(tmp_path, env, "prod", "profile-setup")
+    assert result.returncode != 0
+    assert config.read_text() == original
+    assert not list(tmp_path.glob("server.env.profile*"))
+
+
 def test_prod_doctor_uses_running_app_without_rebuild_or_secret_dump(tmp_path: Path) -> None:
     env = _production_launcher(tmp_path)
     diagnostic = tmp_path / "src/juena/deployment/doctor.py"

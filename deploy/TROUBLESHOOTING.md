@@ -54,6 +54,32 @@ This is an application/IdP compatibility fix. On a dedicated host, configure the
 new public origin, SAML URLs and TLS certificate and coordinate updated metadata
 with IFFLogin; no shared-nginx-specific authentication code is required.
 
+## IFFLogin says to sign out manually after JüNA logout
+
+First open JüNA in a new tab without signing in again. A sign-in prompt confirms
+the local app session was revoked; the IdP status page can still report a failed
+SAML logout exchange.
+
+IFFLogin performs logout from its status page using background browser requests
+([implementation paper, §3.4](https://pgi-jcns.fz-juelich.de/pub/doc/Seminararbeiten/Seminararbeit_MaximilianHeuwes.pdf)).
+The browser must be allowed to read the `/auth/sls` reply before following its
+redirect back to the IdP. A 303 in server logs alone does not prove this worked:
+without `Access-Control-Allow-Origin`, the browser can block the exchange after
+the app has already revoked the session.
+
+The application now permits the exact configured IdP metadata origin on
+`/auth/sls` only. It handles GET/POST preflights and includes CORS headers on
+signed replies and validation errors. Do not add the IdP to the global API
+origin list, use wildcard origins, or disable signature checking.
+
+Deploy with `sudo ./juena prod up`, then start a fresh login before testing
+logout, since deployment replaces the in-memory SAML request/session cache.
+Check both the local sign-in prompt and the IdP's logout status. If `/auth/sls`
+returns 401, inspect the safe `SAML logout request rejected (...)` or
+`SAML logout response rejected (...)` diagnostic. A 401 is a validation or
+correlation failure and needs investigation separately from CORS. Share those
+labels and status codes, not raw SAML query strings.
+
 ## RAG is healthy but repositories or search tools are missing
 
 **Symptom:** the service has indexed chunks, while the chatbot reports

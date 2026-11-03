@@ -39,6 +39,21 @@ URLs must use HTTPS. Personal keys are stored in PostgreSQL, never in `.env`.
 
 ## Upgrade an existing installation
 
+For the bundled server, prepare the installed environment without displaying
+secrets:
+
+```bash
+sudo ./juena prod profile-setup
+sudo ./juena prod up
+```
+
+`profile-setup` preserves an existing valid `JUENA_SECRET_KEY` or generates it
+once. It keeps an existing `RAG_BLABLADOR_API_KEY`, or reuses the old
+`BLABLADOR_API_KEY` for RAG only. It removes obsolete shared chat/tool settings,
+validates the complete Compose configuration, and retains a protected copy of
+the previous environment beside it. It does not modify the database, import
+personal keys, or restart services. Both gateway modes use the same command.
+
 1. Build with the updated, pinned juena-core revision. Publish that core commit
    before building from a remote checkout.
 2. Back up the existing database. Add the persistent `JUENA_SECRET_KEY` and rename
@@ -53,6 +68,29 @@ URLs must use HTTPS. Personal keys are stored in PostgreSQL, never in `.env`.
 5. Verify two IFFLogin users independently: save, replace and remove keys; check
    their display name/email; send a chat; exercise optional tools; sign out and
    sign in again. Check RAG retrieval separately using its server credential.
+
+### Start with an empty chat database
+
+If existing chat data can be discarded, use this sequence instead:
+
+```bash
+sudo ./juena prod profile-setup
+sudo ./juena prod reset-chat --confirm
+sudo ./juena prod health
+```
+
+`reset-chat` **permanently deletes all users, login sessions, chats, personal
+keys, memories, checkpoints and jobs in the bundled chat database**. It builds
+the current checkout first, stops the application and host worker, drops and
+recreates that database, then deploys the new app and schema. There is no
+automatic database backup. A failed build leaves the running app and data alone;
+a failure after the reset requires fixing the reported error and running
+`sudo ./juena prod up` again.
+
+The separate RAG corpus, SAML/TLS material, filesystem volumes and shared gateway
+are retained. This is a database reset, not a filesystem erasure. Other services
+on a shared host are not stopped. External chat databases are refused. Everyone
+must sign in again and add their own Blablador key in **My profile**.
 
 A key change applies to the next outbound model/tool request, including requests
 inside background research. Requests already sent can finish. Logout keeps the
