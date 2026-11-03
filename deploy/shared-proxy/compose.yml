@@ -12,7 +12,7 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: /etc/elabftw/jcns-elabs-cert
+        source: /etc/elabftw/tls
         target: /etc/nginx/tls/elabftw
         read_only: true
         bind: {create_host_path: false}

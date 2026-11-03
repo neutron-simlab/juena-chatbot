@@ -223,7 +223,7 @@ class Config:
     # Development-only authentication bypass, for use while SP registration
     # with the FZJ IdP is pending. Refused outright outside development: the
     # process will not start rather than silently exposing an unauthenticated
-    # login route. See SAML-IFFLOGIN.md.
+    # login route. See deploy/SAML-IFFLOGIN.md.
     _auth_dev_bypass = os.getenv("AUTH_DEV_BYPASS", "false").lower() == "true"
     if _auth_dev_bypass and not _development:
         raise RuntimeError(

@@ -1,152 +1,171 @@
-# JueNA and eLabFTW on the shared gateway
+# Share an HTTPS gateway with another application
 
-The iff1122 VM has one independent Docker Compose project, `juena-edge`, serving
-both HTTPS names on port 443. It forwards `iff1122.iff.kfa-juelich.de` to JueNA
-and `jcns-elabs.fz-juelich.de` to eLabFTW over the external `juena-edge` network.
-The app databases remain on their private networks.
-For a dedicated server, use the standalone gateway in [SERVER.md](SERVER.md).
-Authentication, repository indexing and sandbox execution do not depend on this
-shared project. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) covers their common fixes.
+Use this topology when JüNA and another application, such as eLabFTW, share
+one host and port 443. An independent `juena-edge` Compose project routes by
+hostname over an external Docker network. Each application's databases stay
+on its private network. For a dedicated JüNA server, use the standalone gateway
+in [SERVER.md](SERVER.md); no shared project is needed.
 
-## Normal operation
+All domains and certificate paths in `shared-proxy/` are examples. Keep actual
+host mappings, migration commands, backup locations and acceptance results in
+ignored `DOCS/`. The launcher reads installed configuration under
+`/etc/juena-edge`, not these templates directly.
 
-Use the existing launcher from the checkout you intend to build:
+## Prepare a new shared gateway
+
+1. Choose separate public HTTPS names for the applications. The templates use
+   `juena.example.org` and `elab.example.org`. Install matching TLS material.
+2. Review the existing application's routing and storage. If port 443 is already
+   occupied, plan its migration before starting another listener. Preserve its
+   configuration and a consistent database backup in a protected location.
+3. Install the templates only into a new configuration directory:
+
+   ```bash
+   sudo install -d -m 0750 /etc/juena-edge
+   sudo install -m 0644 deploy/shared-proxy/*.yml deploy/shared-proxy/*.conf /etc/juena-edge/
+   ```
+
+   Do not overwrite an existing gateway's configuration with example files.
+   Edit the installed copies for the intended domains, TLS mounts, backend
+   names/ports and passphrase handling before running them.
+4. Create the external network if it does not already exist:
+
+   ```bash
+   sudo docker network create juena-edge
+   ```
+
+   Attach the existing application's web container to this network using its
+   own managed configuration. The example expects alias `elabftw-web` on port
+   8080; change it to the actual backend. Do not attach its database. JüNA's
+   shared overlay adds alias `juena-app` automatically during deployment.
+5. Validate and start the independent gateway using the appropriate selection
+   below. It must already be running before `./juena prod up` can activate JüNA.
+
+The example eLabFTW TLS mount is `/etc/elabftw/tls`, containing `fullchain.pem`
+and `privkey.pem`. The JüNA mount is `/etc/juena/tls` with the same filenames.
+The templates also show `ssl_password_file` for encrypted keys and a separate
+eLabFTW password-file mount. Supply protected password files if required;
+remove the matching directive and mount when the key is unencrypted. Keep key
+and password bytes outside Git.
+
+## Configuration selections
+
+| Installed files | Behavior |
+| --- | --- |
+| `compose.yml` | Serve the existing application using `nginx.conf` |
+| `compose.yml` + `compose.metadata.yml` | Also publish only JüNA's public SP metadata |
+| `compose.yml` + `compose.juena.yml` | Route JüNA API/UI traffic using `nginx.with-juena.conf` |
+
+For a new gateway serving only the existing application initially:
 
 ```bash
-cd /home/administrator/juena-chatbot
+sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml run --rm --no-deps edge nginx -t
+sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml up -d edge
+```
+
+Confirm the existing application remains reachable before adding JüNA.
+Recreating the independent gateway briefly interrupts all applications it serves.
+
+## Metadata before app startup
+
+When the IdP requires a public metadata URL before registration, follow the
+[offline SAML export workflow](SAML-IFFLOGIN.md#4-export-and-register-sp-metadata).
+After verifying the XML signature, install the public document at
+`/etc/juena/sp-metadata/sp.xml` and select the metadata-only overlay:
+
+```bash
+sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml -f /etc/juena-edge/compose.metadata.yml run --rm --no-deps edge nginx -t
+sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml -f /etc/juena-edge/compose.metadata.yml up -d edge
+```
+
+It serves `/auth/metadata` while other JüNA routes return 503. It mounts only
+public XML, not the SP private key. Confirm the public HTTPS response and its
+signature before completing registration. Once app configuration and IdP trust
+are ready, `prod up` switches to the full routing selection.
+
+## Deploy and operate JüNA
+
+Run from the checkout selected for deployment:
+
+```bash
 sudo ./juena prod config
 sudo ./juena prod up
 sudo ./juena prod ps
 sudo ./juena prod health
+sudo ./juena prod doctor
 sudo ./juena prod logs
 ```
 
-`prod up` builds from this checkout, starts JueNA and its dependencies, and waits
-for API/UI health. It validates the installed combined nginx configuration and
-TLS keys before activating routing. An app startup or nginx validation failure
-leaves the current gateway configuration in place. Failed public HTTPS health
-checks restore the previous gateway Compose selection. This restores proxy
-routing only; it does not roll back application images or databases.
+`prod up` builds this checkout, starts JüNA and its dependencies, and waits for
+API/UI health. It validates the installed combined nginx configuration and TLS
+keys before activating routing. App startup or nginx validation failure leaves
+the current gateway configuration in place. Failed public HTTPS health checks
+restore its previous Compose selection. This restores routing only; it does
+not roll back application images or databases.
 
-When already using the combined configuration, Compose leaves an unchanged
-gateway running. The first switch from metadata-only routing briefly recreates
-it, affecting both HTTPS services. The running container's Compose labels are
-the authority for its current configuration selection.
+When the combined configuration is unchanged, Compose leaves the gateway
+running. Switching from metadata-only routing recreates it. The running
+container's Compose labels identify its current configuration selection; the
+launcher refuses an unrecognized selection instead of guessing how to restore it.
 
-To stop JueNA and retain its data:
+`sudo ./juena prod down` stops the sandbox worker before JüNA's database and
+keeps its data volumes. The shared gateway and other application keep running;
+JüNA's hostname may return an upstream error while JüNA is stopped. Resume with
+`sudo ./juena prod up`. A whole-host shutdown affects every hosted service.
 
-```bash
-sudo ./juena prod down
-```
-
-This stops the sandbox worker before JueNA's database and leaves the shared
-gateway and eLabFTW running. JueNA's hostname returns an
-upstream error while its app is stopped. Use `sudo ./juena prod up` to start it
-again. Do not use `--volumes` when stopping a deployment whose data you need.
-
-Additional commands:
-
-```bash
-sudo ./juena prod build                         # build only
-sudo ./juena prod doctor                        # safe RAG/worker diagnostics
-sudo ./juena prod logs juena-rag                # retrieval logs
-sudo ./juena prod repos-ingest jscatter         # explicit ingestion
-sudo ./juena prod repos-ingest jscatter --dry-run --limit 10
-```
-
-Ingestion builds the same image and initializes the retrieval schema if empty.
-It uses Blablador's embedding API; normal startup does not re-ingest. On this VM,
-schedule ingestion away from heavy interactive/worker workloads.
-
-Use [the RAG diagnostic guide](TROUBLESHOOTING.md#rag-is-healthy-but-repositories-or-search-tools-are-missing)
-to distinguish configured, cloned and indexed repositories. The wheel-path fix
-and retained repository tools apply equally to standalone deployments.
-
-## Source, configuration and secrets
+## Source and installed settings
 
 | Location | Purpose |
 | --- | --- |
-| `juena` | Bash launcher for development and production commands |
-| `docker-compose.yml` | App, databases, retrieval and optional standalone gateway |
-| `docker-compose.shared.yml` | App's shared network attachment; disables standalone gateway |
-| `deploy/shared-proxy/` | Public gateway configuration templates for this VM |
-| `/etc/juena/juena.env` | Installed production settings and credentials, mode 0600 |
-| `/etc/juena/saml/` | Registered SP keypair and confirmed IFFLogin trust certificate |
-| `/etc/juena/tls/` | HTTPS certificate chain, private key and optional password file |
+| `juena` | Launcher for app lifecycle, ingestion and sandbox operations |
+| `docker-compose.shared.yml` | JüNA's external network attachment and gateway override |
+| `deploy/shared-proxy/` | Generic gateway examples to customize during installation |
+| `/etc/juena/juena.env` | Installed production settings, mode 0600 |
+| `/etc/juena/saml/` | Persistent SP pair and independently confirmed IdP trust certificate |
+| `/etc/juena/tls/` | JüNA HTTPS certificate chain, key and optional password file |
 | `/etc/juena-edge/` | Installed independent gateway configuration |
 
-The launcher always uses the checkout it belongs to, even when invoked through
-a symlink or from another directory. It does not clone, copy or synchronize a
-second source tree. The initial installation created `/opt/juena/juena-chatbot`;
-retain it as an installation snapshot. Subsequent commands from the working
-checkout use the same `juena-chatbot` project and named data volumes. Avoid
-running lifecycle commands from both checkouts concurrently.
+The launcher uses its own checkout and does not clone or synchronize a second
+source tree. Production settings come from `/etc/juena/juena.env`, not `.env`.
+Use `sudoedit /etc/juena/juena.env` followed by `prod up` for app settings;
+worker configuration changes require `prod sandbox-setup`. Keep database
+passwords, the filesystem identity secret and registered SP keys stable.
 
-The installed `/etc/juena/juena.env` is authoritative. Editing the working
-checkout's `.env` does not change production; use `sudoedit /etc/juena/juena.env`
-and then `sudo ./juena prod up`. Keep existing database passwords, filesystem
-identity secret and registered SAML keys stable across updates.
-
-No deployment command depends on `.sandbox` or a separate Python installer.
-Old migration artifacts are retained for recovery, outside the ongoing workflow.
+Templates are not automatically copied onto the live gateway. Review changes
+before installing them, preserving the existing application's configuration
+and rollback material. Do not run competing lifecycle commands from multiple
+checkouts against the same Compose project.
 
 ## Proxy selection
 
-`PROD_PROXY_MODE=auto` is the default: the presence of `/etc/juena-edge` selects
-shared mode; otherwise the launcher enables JueNA's standalone `server` profile.
-An unreadable installed environment/configuration is an error, not a fallback.
-Shared mode requires Compose 2.24.4+ for the overlay tags (this VM has 2.29.7).
-
-For a different installation, explicit shell settings are available:
+`PROD_PROXY_MODE=auto` selects shared mode when `/etc/juena-edge` exists and
+standalone mode otherwise. Unreadable installed settings are an error. Shared
+mode requires Compose 2.24.4+ for the overlay tags.
 
 ```bash
 sudo env PROD_PROXY_MODE=shared PROD_EDGE_DIR=/etc/juena-edge ./juena prod config
 ```
 
-`PROD_ENV_FILE` can select a different production environment. These are launcher
-options supplied in the shell, not settings read from the application's env file.
-Do not select standalone mode on this VM while the shared gateway owns port 443.
+`PROD_ENV_FILE` can select a different production environment. These are shell
+options for the launcher, not settings read from the app's env file. Do not
+select standalone mode while another gateway owns its HTTPS port.
 
-## Installed gateway and certificate renewal
+## Renewal, diagnostics and recovery
 
-The full gateway uses `/etc/juena-edge/compose.yml` followed by
-`compose.juena.yml`; the latter selects `nginx.with-juena.conf` and mounts JueNA's
-TLS directory. Base-only recreation selects eLabFTW-only routing. The installed
-metadata-only files remain available as a fallback before app activation.
-
-Public templates under `deploy/shared-proxy/` preserve these same configurations
-for review. They contain the VM's hostnames and paths, not certificate/key bytes.
-They are not read directly by the live container or automatically copied over
-installed administrator configuration. Review and install intended gateway
-changes under `/etc/juena-edge`, then validate them before reload/recreation.
-
-After renewing certificates in their mounted directories:
+After renewing certificates in mounted directories, validate and reload:
 
 ```bash
 sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml exec edge nginx -t
 sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml exec edge nginx -s reload
-```
-
-Gateway logs are independent of the app:
-
-```bash
 sudo docker compose -p juena-edge -f /etc/juena-edge/compose.yml logs --tail 100 edge
 ```
 
-The original eLabFTW migration backup is
-`/var/backups/juena-edge/20261103T121100Z-7163`. Its configuration and consistent
-MySQL dump remain protected. eLabFTW still uses `/etc/elabftw.yml` and `elabctl`;
-changing JueNA source or stopping JueNA does not edit that configuration.
+These `exec`/`logs` commands address the running edge container. For `up` or
+`run`, include the overlay corresponding to the intended routing selection;
+base-only recreation removes JüNA routing. Test both public hostnames after
+changes and preserve the previous installed configuration for recovery.
 
-## Current acceptance
-
-The initial 3 November 2026 installation established public API/UI health,
-metadata and the login redirect while preserving eLabFTW. Later work fixed the
-ACS signature/PySAML2 issue, registry paths and worker startup. At 18:03 UTC, the
-user's `prod doctor` output reported all sandbox flags true, all eight repository
-IDs configured/cloned, and jscatter indexed. Ingestion of the remaining seven
-was subsequently started; its completion has not yet been recorded.
-
-See [the deployment record](BUILD-RECORD.md#2026-11-03--auth-retrieval-and-sandbox-recovery)
-for evidence and remaining browser/SLO/plot checks. A shared-gateway health check
-does not establish those application behaviors.
+Use [application troubleshooting](TROUBLESHOOTING.md) for SAML, RAG and worker
+failures. Their fixes apply to both gateway modes. Record actual login/logout,
+repository catalogue and plot-delivery results using the
+[deployment record checklist](BUILD-RECORD.md#record-runtime-acceptance).

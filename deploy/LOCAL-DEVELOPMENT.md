@@ -187,7 +187,7 @@ Press **Ctrl+C** to stop watching logs; JüNA keeps running.
   reuses the application's built dependencies.
 - **OpenAI for chat:** use the OpenAI settings in [env.example](../env.example).
   Repository search still needs the Blablador key in the chatbot `.env`.
-- **FZJ login or a shared server:** use the [login setup guide](../SAML-IFFLOGIN.md)
+- **FZJ login or a shared server:** use the [login setup guide](SAML-IFFLOGIN.md)
   and [sandbox deployment guide](SANDBOX.md).
 - **Tracing every chat:** set `LANGFUSE_TRACING=true`, then run `./juena langfuse-up` for a Langfuse server on
   <http://localhost:3000>; see the [Langfuse guide](LANGFUSE.md).

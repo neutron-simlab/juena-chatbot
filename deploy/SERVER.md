@@ -5,19 +5,17 @@ This deployment targets a full Linux VM on Proxmox, Docker Engine with Compose
 Podman. Only the chatbot repository is cloned. `uv.lock` fixes the published
 core/RAG revisions; Docker builds core's Files frontend with Node.js 24.
 
-The iff1122 VM uses an independent gateway shared with eLabFTW. Follow
-[SHARED-PROXY.md](SHARED-PROXY.md) for this installed topology. Its normal entry
-point is `sudo ./juena prod up` from `/home/administrator/juena-chatbot`;
-production commands always use the source checkout containing that launcher.
-The standalone gateway setup below applies to VMs dedicated to JueNA.
+Choose a standalone gateway for a dedicated JüNA host, or follow
+[SHARED-PROXY.md](SHARED-PROXY.md) when sharing HTTPS with another application.
+Production commands always build the checkout containing the invoked launcher.
 
-Although this is a development server, it runs with `ENVIRONMENT=production`
-and real IFFLogin authentication. Use `./juena prod ...` and the installed
-`/etc/juena/juena.env`; the checkout's `.env` and commands without `prod` are
-for local development. This guide covers both server topologies. See
-[troubleshooting](TROUBLESHOOTING.md) for the failures encountered and
-[the deployment record](BUILD-RECORD.md#2026-11-03--auth-retrieval-and-sandbox-recovery)
-for the last reported checks and remaining acceptance work.
+Even a development server with real users runs with `ENVIRONMENT=production`
+and IFFLogin authentication. Use `./juena prod ...` and the installed
+`/etc/juena/juena.env`; `.env` and commands without `prod` are for local
+workstations. See [troubleshooting](TROUBLESHOOTING.md) for known failures and
+[deployment records](BUILD-RECORD.md) for what to record at each installation.
+Keep site-specific hostnames, paths, capacity and acceptance evidence in ignored
+`DOCS/`, outside the reusable runbooks and templates.
 
 SAML validation, repository discovery and sandbox execution use the same
 application code in both deployments. Only gateway selection and routing
@@ -34,10 +32,10 @@ sudo env PROD_PROXY_MODE=standalone ./juena prod sandbox-setup
 sudo env PROD_PROXY_MODE=standalone ./juena prod doctor
 ```
 
-These examples are for the dedicated server; the current shared server already
-uses port 443 for both services. `PROD_PROXY_MODE` is a launcher environment
-option, not a setting loaded from `/etc/juena/juena.env`. Sandbox activation
-passes the selected mode through its redeployment automatically.
+Use these examples on a dedicated server. Do not start a second gateway on
+port 443 when an existing shared gateway owns it. `PROD_PROXY_MODE` is a launcher
+environment option, not a setting loaded from `/etc/juena/juena.env`. Sandbox
+activation passes the selected mode through its redeployment automatically.
 
 For a different public hostname, update `JUENA_PUBLIC_URL`, `UI_PUBLIC_URL`
 and the `SAML_SP_*` entity/endpoint URLs in the installed production environment,
@@ -64,8 +62,7 @@ The production sandbox setup below installs rootless Podman, its prerequisites,
 and a dedicated unprivileged `juena-sandbox` account with subordinate UID/GID
 ranges and lingering. It does not give that account Docker-group membership.
 
-Choose one checkout for deployment (for example `/opt/juena/juena-chatbot` on a
-fresh server; the iff1122 working checkout is `/home/administrator/juena-chatbot`).
+Choose one checkout for deployment, for example `/opt/juena/juena-chatbot`.
 The launcher does not copy source to another directory. As administrator, create:
 
 ```bash
@@ -144,47 +141,18 @@ with the same Compose selection (`exec gateway nginx -t`, then
 agree that topology first and adapt the gateway and forwarded-header trust;
 this template does not configure that alternative.
 
-Use a separate, persistent SAML SP keypair in `/etc/juena/saml/sp.key` and `sp.crt`.
-For the iff1122 pilot, the user authorized a self-signed RSA-4096 certificate
-using SHA-256 and three-year validity on 3 November 2026, following the observed
-IFFLogin signing-certificate approach. Daniel has confirmed SP registration
-after receiving the metadata, as reported by the user on 3 November 2026. Keep this
-keypair stable across container rebuilds and coordinate future changes with
-IFFLogin. The SP public certificate is included in `/auth/metadata`; the
-private key stays on the VM. The current application separately requires a
-pinned IdP metadata-signing certificate; this is a deployment trust requirement,
-not another SP registration requirement. Obtain that verification certificate through
-an independently trusted administrator channel and save it as `idp-metadata.crt`.
-It verifies the metadata document; assertion verification then uses the keys
-in that verified document. IFFLogin currently publishes the same certificate
-for both roles.
+## Register SAML authentication
 
-Daniel requires proper SP metadata at the HTTPS URL before IdP registration.
-The offline exporter `src/juena/server/auth/sp_metadata.py` generates that XML
-without loading app configuration, connecting to a database or fetching IdP
-metadata. It shares SP endpoints and signature settings with the runtime.
-Both exporters sign the metadata XML using the persistent SP key with
-RSA-SHA256 and SHA-256 digests. Preserve the resulting bytes; pretty-printing
-after signing would invalidate the signature. The publisher checks the XML
-signature against the known SP certificate before serving it. The
-initial iff1122 bootstrap exposed only this public document through the
-existing shared gateway while the application remained offline. That migration
-is complete; the running app now provides the metadata endpoint. Current
-gateway operation is documented in [SHARED-PROXY.md](SHARED-PROXY.md).
-This bootstrap does not relax the following production trust requirements.
+Follow [SAML-IFFLOGIN.md](SAML-IFFLOGIN.md) to agree the public URLs and access
+scope, install a persistent SP keypair and independently confirmed IdP trust
+certificate, export signed metadata and complete registration. The guide also
+covers metadata publication before app startup and browser acceptance.
 
-For the iff1122 pilot, the IdP metadata-signing fingerprint and SP registration
-were confirmed on 3 November 2026. The application is running, and the user
-reported the ACS login issue resolved after the signature-policy/PySAML2 fix.
-The latest supplied diagnostic also reports sandbox execution enabled and its
-worker connected. Full browser login/logout acceptance and a plot delivered in
-chat remain separate checks; see the deployment record linked above.
-
-Production requires HTTPS metadata and verifies its signature with that trust
-certificate. Refresh runs every six hours by default, earlier as expiry
-approaches. A failed refresh retains the previous verified document only until
-its `validUntil`; expired metadata blocks new SAML operations with 503. Startup
-requires a successful fresh fetch. There is no disk fallback to stale metadata.
+Keep the SP key stable across rebuilds and coordinate replacement with the
+IdP. HTTPS credentials and the SAML signing pair have separate roles. The app
+requires fresh, signed IdP metadata at startup and refreshes it periodically;
+expired metadata blocks SAML operations. Do not copy a fingerprint, certificate
+or registration status from another installation's history.
 
 ## Initialize and deploy
 
@@ -251,8 +219,7 @@ is mounted at `/var/lib/postgresql`, as required by the PG18 image layout.
 
 ## Install the worker
 
-With the application running, prepare and activate the approved pilot worker
-from this checkout:
+With the application running, install and activate the worker from this checkout:
 
 ```bash
 sudo ./juena prod sandbox-setup
@@ -282,7 +249,7 @@ container users need traversal permission during mount setup. This grants
 other users neither directory listing nor write access. The worker home and
 workspace tree retain their restricted permissions.
 Both the worker container and execution jobs explicitly use `crun`. The
-installed `runc 1.2.2` attempts to create/check the job's working directory
+`runc 1.2.2` runtime attempts to create/check the job's working directory
 before switching to its UID/GID, which fails for app-owned `2770` workspaces.
 `crun` retries access after switching to the job's user. Setup installs it even
 when Podman is already present, and writes `SANDBOX_OCI_RUNTIME=crun` into the
@@ -355,10 +322,10 @@ coordinate that separately. Avoid `down --volumes` on retained data.
 
 ## Capacity, persistence and rollback
 
-The pilot VM was increased from 8 GB to **12 GB allocated** on 3 November 2026;
-the host subsequently reported about **11 GiB total** with `free -h`. Available
-memory changes with services and caches. Recheck before ingestion or additional
-workloads; increasing VM memory does not raise container limits automatically.
+Measure the target host's memory with `free -h` and account for every service
+sharing it. Available memory changes with workloads and caches. Increasing VM
+memory does not raise container limits automatically. Keep actual capacity and
+measurement results in the private deployment record.
 
 Start with tracing off, one sandbox slot at 1 CPU/1 GiB, chatbot at 3 GiB,
 chat Postgres at 512 MiB, RAG at 768 MiB, pgvector at 1 GiB, and gateway at
@@ -386,7 +353,7 @@ back application images or data.
 
 Configure certificate renewal with an nginx reload, disk/log monitoring,
 metadata-refresh alerts, and a real VM reboot test. Use the tracked
-[SAML acceptance checklist](../SAML-IFFLOGIN.md#8-acceptance-status) and
+[SAML acceptance checklist](SAML-IFFLOGIN.md#acceptance-checklist) and
 [sandbox rollout checks](SANDBOX.md#broader-rollout-acceptance).
 
 References: [PySAML2 configuration](https://pysaml2.readthedocs.io/en/latest/howto/config.html),

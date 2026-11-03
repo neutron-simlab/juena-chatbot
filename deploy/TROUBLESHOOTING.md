@@ -47,7 +47,7 @@ persistent NameID checks remain enforced.
 Deploy the fixed checkout with `sudo ./juena prod up`, then begin a **new** login
 from JueNA. Do not replay an old ACS form: it belongs to an earlier request.
 Verify the signed-in identity, logout and repeat login using
-[the SAML checklist](../SAML-IFFLOGIN.md#8-acceptance-status). A 303 login redirect
+[the SAML checklist](SAML-IFFLOGIN.md#acceptance-checklist). A 303 login redirect
 alone is not an end-to-end login test.
 
 This is an application/IdP compatibility fix. On a dedicated host, configure the
@@ -56,8 +56,8 @@ with IFFLogin; no shared-nginx-specific authentication code is required.
 
 ## RAG is healthy but repositories or search tools are missing
 
-**Observed:** the service held 1,676 jscatter chunks, while the chatbot reported
-no configured/cloned repositories. Its warning named a registry path under
+**Symptom:** the service has indexed chunks, while the chatbot reports
+no configured/cloned repositories. Its warning names a registry path under
 `site-packages/juena/core/config/`.
 
 **Cause and fix:** an installed wheel was treated as a source checkout when
@@ -130,7 +130,7 @@ both app and worker errors; an enabled switch alone is not evidence of success.
 
 ## Rootless worker setup failures encountered
 
-### `cannot chdir to /home/administrator/juena-chatbot: Permission denied`
+### `cannot chdir to /home/operator/juena-chatbot: Permission denied`
 
 The dedicated worker inherited the administrator's private checkout as its
 working directory. The helper now changes to `/` before switching accounts.
@@ -148,9 +148,9 @@ Setup now sets **only that parent** to `0711` (`rwx--x--x`): the owner can
 list/write/traverse, while other users can traverse a known path but cannot list
 or write the parent. Child permissions still decide access to their contents.
 The workspace root stays `2770`, and workspace files normally use `0660`.
-This was explicitly approved for the pilot. Do not apply `0711` recursively or
-make conversation files world-readable. The preflight tests the real rootless
-mount with read-only workspace access before starting the worker.
+Do not apply `0711` recursively or make conversation files world-readable.
+The preflight tests the real rootless mount with read-only workspace access
+before starting the worker.
 
 ### `mkdir /workspace/.scratch: permission denied`
 

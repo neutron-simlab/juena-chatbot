@@ -270,8 +270,8 @@ repositories:
 
 The agent will discover both through `list_repositories`.
 Ingest both with `./juena repos-ingest repo-a repo-b`, or omit IDs to process
-the entire registry sequentially. On the pilot server, the seven entries after
-the initial jscatter ingest are:
+the entire registry sequentially. For example, if only jscatter has already
+been ingested, add the seven remaining entries with:
 
 ```bash
 sudo ./juena prod repos-ingest datreat mdanse sasview sasmodels sasdata silx vitess
