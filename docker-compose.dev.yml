@@ -6,19 +6,21 @@ services:
   postgres:
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-juena-development-only}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
 
   juena-chatbot:
     volumes:
       - ./.env:/app/.env:ro
+      - chatbot-saml:/data/saml:rw
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+      - "127.0.0.1:${UI_PORT:-9501}:9501"
     environment:
       - ENVIRONMENT=development
       # The launcher starts the host-side rootless-Podman worker after the app
       # has created the sandbox_jobs table.
-      - SANDBOX_ENABLED=true
+      - SANDBOX_ENABLED=${SANDBOX_ENABLED:-true}
       - SANDBOX_IDENTITY_SECRET=${SANDBOX_IDENTITY_SECRET:-juena-local-sandbox-identity-secret-development}
-      - SANDBOX_CONCURRENCY=${SANDBOX_CONCURRENCY:-2}
+      - SANDBOX_CONCURRENCY=${SANDBOX_CONCURRENCY:-1}
       # DATABASE_URL is not repeated here: the base file already builds the
       # container DSN from POSTGRES_* against the `postgres` service.
       - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-http://localhost:8080/auth/metadata}
@@ -28,3 +30,8 @@ services:
       - JUENA_PUBLIC_URL=${JUENA_PUBLIC_URL:-http://localhost:8080}
       - UI_PUBLIC_URL=${UI_PUBLIC_URL:-http://localhost:9501}
       - SESSION_COOKIE_SECURE=false
+
+  # Only native API/UI development needs a host endpoint for retrieval.
+  juena-rag:
+    ports:
+      - "127.0.0.1:${RAG_PORT:-8100}:8100"

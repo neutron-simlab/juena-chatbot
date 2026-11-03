@@ -20,7 +20,8 @@ Install and open **Docker Desktop**. Wait until it says Docker is running.
 With **Homebrew** installed, run this in Terminal:
 
 ```bash
-brew install git uv podman
+brew install git uv node@24 podman
+export PATH="$(brew --prefix node@24)/bin:$PATH"
 podman machine init --memory 8192
 ```
 
@@ -33,13 +34,12 @@ Run these commands in the folder where you keep your projects:
 
 ```bash
 git clone https://github.com/neutron-simlab/juena-chatbot.git
-git clone https://github.com/neutron-simlab/juena-core.git
-git clone https://github.com/neutron-simlab/juena-rag.git
 cd juena-chatbot
 ```
 
-Keep the three folders beside each other. If you already have them, skip the
-clone commands and open Terminal in `juena-chatbot`.
+Only the chatbot checkout is required. `pyproject.toml` and `uv.lock` pin
+published core and RAG commits. Docker builds their code and core's Files panel
+automatically; native `uv sync` also requires Node.js 24 and npm on PATH.
 
 ## 3. Add your settings
 
@@ -57,53 +57,20 @@ BLABLADOR_API_KEY=your-blablador-api-key
 ```
 
 Leave the other settings as supplied. They already set up Blablador, the
-sandbox, Langfuse tracing (its UI starts with `./juena langfuse-up`; chats work
-without it) and `AUTH_DEV_BYPASS=true`, which lets you sign in locally without
+sandbox, disabled tracing and `AUTH_DEV_BYPASS=true`, which lets you sign in locally without
 setting up FZJ login. Use that only on your own development computer.
 
 ## 4. Prepare repository search once
 
-Open the search folder and copy its settings template. If `.env` already
-exists, skip only the `cp` command:
+From the chatbot folder, run:
 
 ```bash
-cd ../juena-rag
-cp .env.example .env
-```
-
-Open **this folder's `.env`** and fill in `BLABLADOR_API_KEY` with the same key.
-Keep its other settings unchanged.
-
-Install the search tools and start its database:
-
-```bash
-uv sync
-docker compose up -d --wait pgvector
-```
-
-On your first setup only, copy and run this block to prepare the database.
-Skip it if you already prepared it:
-
-```bash
-docker compose exec -T pgvector createdb -U postgres juena_rag_corpus
-uv run python - <<'PYTHON'
-import os
-import psycopg
-from dotenv import load_dotenv
-from juena_rag.store import apply_ddl
-
-load_dotenv('.env')
-with psycopg.connect(os.environ['JUENA_RAG_DSN']) as connection:
-    apply_ddl(connection, dimension=4096, create_extension=True)
-PYTHON
-```
-
-Return to the chatbot folder and add jscatter to the search library:
-
-```bash
-cd ../juena-chatbot
 ./juena repos-ingest jscatter
 ```
+
+This builds the shared image, starts the bundled pgvector database, initializes
+an empty schema, and runs ingestion in a container. Repeating initialization
+preserves the existing corpus; incompatible schemas fail without changing data.
 
 Wait for this command to finish. Downloading repositories alone does not make
 them searchable. To add more software later, see [Adding repositories](HOW-TO-ADD-REPO.md).
@@ -185,11 +152,11 @@ running, its next `./juena up` does that.
 | Problem | What to check |
 | --- | --- |
 | Docker cannot connect | Open Docker Desktop and wait for it to finish starting. |
-| Build cannot find `juena-core` | Put `juena-core` beside `juena-chatbot`, as in step 2. |
+| Git dependency build fails | Check GitHub/npm access; native source installs need Node.js 24 and npm on PATH. |
 | Startup fails or the page does not open | Run `./juena logs` and check the error. |
 | The page asks for FZJ login | Set `AUTH_DEV_BYPASS=true` in the chatbot's `.env`, then run `./juena up` again. |
 | Repository search is unavailable or empty | Finish step 4, then run `./juena rag-up`. Check `./juena rag-logs` if it fails. |
-| The model reports an API key error | Check the key in both `.env` files, then run `./juena down` followed by `./juena up`. |
+| The model reports an API key error | Check the key in the chatbot `.env`, then run `./juena down` followed by `./juena up`. |
 
 ## Windows (WSL 2)
 
@@ -221,6 +188,7 @@ running, its next `./juena up` does that.
    podman info
    ```
 
+   Install Node.js 24 and npm on PATH as well for the host worker source build.
    If the `systemctl` command fails, follow
    [Microsoft's systemd setup](https://learn.microsoft.com/en-us/windows/wsl/systemd)
    and reopen Ubuntu. If Docker is unavailable, check the Ubuntu integration
@@ -233,35 +201,24 @@ running, its next `./juena up` does that.
    cd ~/projects
    ```
 
-   Follow **steps 2–4 above** to download the three repositories and prepare
-   the settings and search database. Keep the repositories under `~/projects`
+   Follow **steps 2–4 above** to download the chatbot repository and prepare
+   the settings and search database. Keep the checkout under `~/projects`
    so Docker and Podman can share the same files.
 
-5. From `~/projects/juena-chatbot`, start JüNA with Ubuntu's current address
-   for repository search:
-
-   ```bash
-   JUENA_RAG_URL="http://$(hostname -I | awk '{print $1}'):8100" \
-     JUENA_RAG_BIND=0.0.0.0 ./juena up
-   ./juena ps
-   ./juena health
-   ```
-
-   Use this startup command each time; WSL's address can change after a restart.
-   Open **<http://localhost:9501>** in your Windows browser and click
-   **Sign in (development)**. Stop the app from Ubuntu with `./juena down`.
+5. From `~/projects/juena-chatbot`, run `./juena up`, then `./juena ps`
+   and `./juena health`. Open **<http://localhost:9501>** in your Windows
+   browser and click **Sign in (development)**. Stop with `./juena down`.
 
 ## Other setups
 
 - **Linux:** install Docker with Compose, Git, uv, and rootless Podman. Enable the
   Podman socket with `systemctl --user enable --now podman.socket`. Follow steps
-  2–6, using `JUENA_RAG_BIND=0.0.0.0 ./juena up` in step 5 so the app can reach
-  search. Keep the search port accessible only to your local containers.
+  2–6. Native installs and the host worker also need Node.js 24 and npm on PATH.
 - **OpenAI for chat:** use the OpenAI settings in [env.example](env.example).
-  Repository search still needs the Blablador key in `juena-rag/.env`.
+  Repository search still needs the Blablador key in the chatbot `.env`.
 - **FZJ login or a shared server:** use the [login setup guide](SAML-IFFLOGIN.md)
   and [sandbox deployment guide](deploy/SANDBOX.md).
-- **Tracing every chat:** run `./juena langfuse-up` for a Langfuse server on
+- **Tracing every chat:** set `LANGFUSE_TRACING=true`, then run `./juena langfuse-up` for a Langfuse server on
   <http://localhost:3000>; see the [Langfuse guide](deploy/LANGFUSE.md).
 - **More settings:** see [env.example](env.example).
 - **Development checks:** run `./juena test`. Run `./juena test-integration`
@@ -270,3 +227,15 @@ running, its next `./juena up` does that.
 ## License
 
 MIT
+
+## Linux development server
+
+Use [deploy/SERVER.md](deploy/SERVER.md) for the single-Compose server setup.
+The gateway publishes HTTPS; chatbot and RAG communicate on a private network.
+The sandbox worker runs under a host systemd user service using rootless Podman.
+Core and RAG source checkouts are unnecessary. Tracing is opt-in.
+
+The administrator and IFFLogin confirmation checklist is maintained locally at
+`DOCS/DEV-SERVER-CHECKLIST.md`, ignored under this repository's DOCS policy.
+SAML acceptance requires a real browser login, authenticated session, logout,
+and repeat login against IFFLogin.

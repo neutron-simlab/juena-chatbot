@@ -1,0 +1,10 @@
+# Explicit opt-in, added by the launcher only when LANGFUSE_TRACING=true.
+services:
+  juena-chatbot:
+    networks:
+      - chatbot-network
+      - tracing-network
+networks:
+  tracing-network:
+    external: true
+    name: juena-tracing

@@ -26,20 +26,7 @@ def test_wheel_packages_the_complete_juena_source_tree() -> None:
 
 
 def test_container_context_keeps_prompts_and_future_specialist_skills() -> None:
-    """The build reads `Dockerfile.dockerignore`, and it excludes no Markdown.
-
-    Since the cutover the build context is the *parent* directory, so the
-    Dockerfile can copy the sibling juena-core source. Docker then looks for an
-    ignore file named after the Dockerfile and only falls back to one at the
-    context root -- which is the parent, and has none. This repository's
-    `.dockerignore` is therefore not consulted by any build, and asserting
-    against it would guard nothing.
-
-    The old file kept the prompts through four `!` exceptions to a blanket
-    `*.md` exclusion; a fifth prompt file in a new place would have been
-    dropped silently. The replacement excludes no Markdown at all, which is
-    what this asserts.
-    """
+    """The checkout-only allowlist retains all authored source resources."""
 
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -50,21 +37,19 @@ def test_container_context_keeps_prompts_and_future_specialist_skills() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
 
-    assert "context: .." in compose
-    assert "dockerfile: juena-chatbot/Dockerfile" in compose
+    assert "context: .\n" in compose
 
-    # Source paths are relative to the parent directory now.
-    assert "COPY juena-chatbot/src/ ./src/" in dockerfile
-    assert "COPY juena-core/ /juena-core/" in dockerfile
+    # Source paths are relative to the chatbot checkout.
+    assert "COPY src/ ./src/" in dockerfile
+    assert "COPY juena-core/" not in dockerfile
     assert "COPY skills/ ./skills/" not in dockerfile
 
-    # Deny everything, then re-admit exactly the two repositories the build reads.
+    # Admit build inputs; exclude credentials.
     assert patterns[0] == "*"
-    assert "!juena-chatbot" in patterns
-    assert "!juena-core" in patterns
-    assert not [item for item in patterns if item.startswith("!")][2:]
-
-    assert not [item for item in patterns if item.lstrip("!").endswith(".md")]
+    assert "!src" in patterns
+    assert "**/.env" in patterns
+    assert "**/*.key" in patterns
+    assert "*.md" not in patterns
 
 
 def test_jscatter_skill_resources_and_interface_metadata_are_complete() -> None:
@@ -123,6 +108,25 @@ def test_container_entrypoint_forwards_shutdown_to_both_servers() -> None:
     assert 'kill "$STREAMLIT_PID"' in entrypoint
     assert 'wait "$FASTAPI_PID"' in entrypoint
     assert 'wait "$STREAMLIT_PID"' in entrypoint
+
+
+def test_gateway_routes_every_application_api_path():
+    """New API endpoints must not silently fall through to Streamlit."""
+    from juena.server.service import app
+
+    nginx = (ROOT / "deploy/nginx.conf").read_text()
+    patterns = [re.compile(pattern) for pattern in re.findall(r"location ~ (\S+) \{", nginx)]
+    ui_prefixes = re.findall(r"location \^~ (\S+) \{\s+proxy_pass http://\$backend:9501;", nginx)
+
+    def routes_to_api(path):
+        return not any(path.startswith(prefix) for prefix in ui_prefixes) and any(
+            pattern.search(path) for pattern in patterns
+        )
+
+    for path in app.openapi()["paths"]:
+        assert routes_to_api(path), path
+    for path in ("/", "/_stcore/stream", "/static/app.js"):
+        assert not routes_to_api(path), path
 
 
 def test_sandbox_image_installs_repository_software_from_shared_manifest() -> None:

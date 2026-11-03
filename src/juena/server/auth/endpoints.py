@@ -6,7 +6,7 @@ from datetime import timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from saml2 import BINDING_HTTP_POST, BINDING_HTTP_REDIRECT
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from juena.server.auth.saml import (
     PERSISTENT_NAME_ID_FORMAT,
     SamlAuthenticationError,
     SamlIdentity,
+    SamlLogoutMessage,
     get_saml_service,
 )
 
@@ -220,16 +221,16 @@ async def logout(
     if token:
         await revoke_auth_session(session, token)
         await session.commit()
-    redirect_url: str | None = None
+    message: SamlLogoutMessage | None = None
     try:
-        redirect_url = get_saml_service().prepare_logout(user.subject)
+        message = get_saml_service().prepare_logout(user.subject)
     except Exception:
         # Local session revocation is authoritative and must succeed even when
         # the IdP has no SLO endpoint or rejects the logout request.
         logger.warning("FZJ single logout failed after local revocation", exc_info=True)
     response: Response
-    if redirect_url:
-        response = RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    if message:
+        response = _logout_message_response(message)
     else:
         # A browser-submitted logout should return to the UI even when the IdP
         # does not expose SLO (including the local development bypass).
@@ -239,6 +240,12 @@ async def logout(
         )
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return response
+
+
+def _logout_message_response(message: SamlLogoutMessage) -> Response:
+    if message.redirect_url:
+        return RedirectResponse(message.redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    return HTMLResponse(message.html or "", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/sls")
@@ -262,9 +269,12 @@ async def single_logout_service(
 
     if saml_response := params.get("SAMLResponse"):
         try:
-            saml_service.parse_logout_response(saml_response, binding)
-        except SamlAuthenticationError:
-            logger.warning("Discarding invalid SAML logout response", exc_info=True)
+            saml_service.parse_logout_response(
+                saml_response, binding, relay_state=relay_state,
+                sigalg=params.get("SigAlg"), signature=params.get("Signature"),
+            )
+        except SamlAuthenticationError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
         return _post_logout_redirect(relay_state)
 
     saml_request = params.get("SAMLRequest")
@@ -272,10 +282,12 @@ async def single_logout_service(
         raise HTTPException(status_code=400, detail="Missing SAMLRequest or SAMLResponse")
 
     try:
-        subject, redirect_url = saml_service.parse_logout_request(
+        subject, message = saml_service.parse_logout_request(
             saml_request,
             binding,
             relay_state=relay_state,
+            sigalg=params.get("SigAlg"),
+            signature=params.get("Signature"),
         )
     except SamlAuthenticationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -285,8 +297,8 @@ async def single_logout_service(
         await session.commit()
 
     response: Response = (
-        RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
-        if redirect_url
+        _logout_message_response(message)
+        if message
         else _post_logout_redirect(relay_state)
     )
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")

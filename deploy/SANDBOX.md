@@ -31,15 +31,14 @@ The launcher:
 2. builds `deploy/sandbox/Dockerfile`;
 3. starts JüNA and Postgres with Compose;
 4. waits for JüNA to create `sandbox_jobs`;
-5. starts `python -m juena_core.sandbox.worker` with two slots.
+5. starts `python -m juena_core.sandbox.worker` with one slot.
 
 Use `./juena logs`, `./juena ps`, `./juena sandbox-stop`, and `./juena down`.
 The worker PID and log are under `.sandbox/`.
 
 `SANDBOX_CONCURRENCY` must be the same for JüNA and the worker: JüNA admits that
 many active jobs before reporting `busy`, and the worker runs that many
-containers. The Compose files and the launcher both default it to two in
-development; production uses four in both places.
+containers. The Compose files, launcher and 8 GiB server template default to one.
 
 ## Production host
 
@@ -59,8 +58,11 @@ development; production uses four in both places.
 7. Copy `deploy/sandbox-worker.env.example` to `/etc/juena/sandbox-worker.env`,
    set the database credentials, and make it readable only by the service
    account and administrator.
-8. Install `deploy/juena-sandbox-worker.service`, then enable and start it only
-   after the JüNA application has created the database schema.
+8. Install `deploy/juena-sandbox-worker.service` in the service account's
+   `~/.config/systemd/user/`, reload its user manager, and enable the unit with
+   `systemctl --user enable --now juena-sandbox-worker` only after JüNA has
+   created the database schema. The unit uses that user's `%t/podman/podman.sock`.
+   Follow [SERVER.md](SERVER.md) for the pinned host environment and permissions.
 
 ## Shared workspace ownership
 
@@ -105,8 +107,9 @@ Set `SANDBOX_WORKSPACE_HOST_ROOT` to the host path,
 
 Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
 
-1. Four tenants complete concurrent jobs and a second job for one tenant is busy.
-2. A fifth concurrent job returns `busy` immediately and inserts no row.
+1. A tenant completes a job and a second concurrent job for that tenant is busy.
+2. With the one-slot pilot, another tenant also receives `busy` while that slot
+   is occupied, without inserting a row.
 3. A second worker process exits without claiming anything.
 4. An endless job times out while other tenants continue.
 5. Killing the worker mid-job leaves no container and fails that job without
@@ -116,8 +119,8 @@ Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
 8. JüNA starts and normal chat works with no worker running.
 9. Old terminal job rows and idle `/workspace/.scratch` contents are removed by
    the hourly pass; ordinary workspace files survive until conversation deletion.
-10. The host has capacity for four configured sandbox CPU/memory limits plus
-    JüNA, Postgres, and the operating system.
+10. The host has measured capacity for its configured sandbox slot plus JüNA,
+    RAG, both databases, the gateway and the operating system.
 11. Generated code cannot reach networks, credentials, application data,
     container sockets, another tenant workspace, or arbitrary host paths.
 
@@ -126,8 +129,8 @@ Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
 Deploy the API, UI, and host worker from matching versions of `juena-core`.
 Stop the old worker before upgrading: its cleanup loop deletes whole idle
 workspaces. Start the updated API and worker together after the update.
-The launcher installs its sibling core package; for native development run
-`uv sync --extra dev --reinstall-package juena-core` in `juena-chatbot`.
+The lockfile pins the same published core commit for the container and worker.
+Run `uv sync --frozen --no-dev` in `juena-chatbot` before restarting the host worker.
 
 Keep the existing workspace root and identity secret unchanged. A stable secret of
 at least 32 characters is now required even when sandbox execution is disabled.

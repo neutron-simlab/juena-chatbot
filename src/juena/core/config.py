@@ -192,6 +192,12 @@ class Config:
         "SAML_IDP_METADATA_URL",
         "https://ifflogin.fz-juelich.de/saml/idp.xml",
     )
+    SAML_IDP_METADATA_CERT_FILE = os.getenv("SAML_IDP_METADATA_CERT_FILE", "")
+    SAML_METADATA_REFRESH_SECONDS = int(os.getenv("SAML_METADATA_REFRESH_SECONDS", "21600"))
+    SAML_ORGANIZATION_NAME = os.getenv("SAML_ORGANIZATION_NAME", "")
+    SAML_ORGANIZATION_URL = os.getenv("SAML_ORGANIZATION_URL", "")
+    SAML_CONTACT_NAME = os.getenv("SAML_CONTACT_NAME", "")
+    SAML_CONTACT_EMAIL = os.getenv("SAML_CONTACT_EMAIL", "")
     SAML_SP_ENTITY_ID = os.getenv(
         "SAML_SP_ENTITY_ID",
         "http://localhost:8080/auth/metadata" if _development else None,
@@ -374,6 +380,10 @@ class Config:
             )
 
         if not cls._development:
+            if not cls.SAML_IDP_METADATA_CERT_FILE:
+                errors.append("SAML_IDP_METADATA_CERT_FILE is required in production")
+            if not cls.SAML_IDP_METADATA_URL.lower().startswith("https://"):
+                errors.append("SAML_IDP_METADATA_URL must use HTTPS in production")
             if not cls.JUENA_PUBLIC_URL:
                 errors.append("JUENA_PUBLIC_URL is required in production")
             elif not cls.JUENA_PUBLIC_URL.lower().startswith("https://"):
@@ -491,7 +501,6 @@ def _configure_core() -> None:
             DATABASE_URL=Config.DATABASE_URL,
             DATABASE_POOL_MAX_SIZE=Config.DATABASE_POOL_MAX_SIZE,
             SESSION_TTL_HOURS=Config.SESSION_TTL_HOURS,
-            SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE,
             FALLBACK_PROVIDER=Config.FALLBACK_PROVIDER,
             # Core names this after what it times, not after where it runs:
             # a specialist's execution tool, whichever backend serves it.
@@ -499,7 +508,6 @@ def _configure_core() -> None:
             ARTIFACT_ROOT=Config.SANDBOX_ARTIFACT_ROOT,
             AUDIT_FILE=Config.SANDBOX_AUDIT_FILE,
             LOG_LEVEL=Config.LOG_LEVEL,
-            LOG_DIR=Path(Config.LOG_DIR),
             # Both are facts about this deployment, and both are true: the API
             # binds SERVER_HOST and Compose publishes 8080. They exist so core
             # can refuse to pair a fixed, unauthenticated principal with a
