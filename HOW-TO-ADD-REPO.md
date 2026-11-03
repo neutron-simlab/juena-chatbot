@@ -7,7 +7,13 @@ You do not need to create a new agent or change `main.py`. You only need to:
 
 1. Add the repo to `config/repositories.yaml`
 2. Rebuild/restart the application so startup bootstrap runs
-3. Verify the repository appears in the authenticated discovery endpoint
+3. Ingest the repository into juena-rag
+4. Verify registration and a nonzero indexed chunk count
+
+Examples below use the local launcher. On the Linux development server, use
+`sudo ./juena prod ...` so commands read `/etc/juena/juena.env`. The checkout's
+`.env` is for local development. Both shared and standalone gateways use the
+same repository workflow.
 
 ## What Actually Happens
 
@@ -144,10 +150,16 @@ Local run:
 uv run python main.py
 ```
 
-Docker run:
+Local Docker run:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+./juena up
+```
+
+Linux server:
+
+```bash
+sudo ./juena prod up
 ```
 
 Why `--build` is needed in Docker:
@@ -167,7 +179,10 @@ First verify that the app loaded the repo config:
 curl --cookie "juena_session=<opaque-session>" http://localhost:8080/repositories
 ```
 
-You should see your new repo in the JSON response.
+This is a local API example. The server does not publish port 8080; use
+`sudo ./juena prod doctor` and check `rag.configured`, or ask the signed-in
+agent to list configured repositories. You should see the new ID. A registered
+ID alone does not establish that it has been indexed.
 
 ## Step 5: Trigger the Clone
 
@@ -177,8 +192,10 @@ working tree is on disk once the container is healthy. Nothing is indexed here.
 To watch it in Docker:
 
 ```bash
-docker compose logs -f juena-chatbot
+./juena logs
 ```
+
+On the server, use `sudo ./juena prod logs`; Ctrl+C stops following logs.
 
 The logs report each repository's revision as it is cloned or refreshed, then a
 survey line naming any repository that is cloned but **not** in the store — that
@@ -187,7 +204,7 @@ is the one to take to juena-rag.
 ## Step 6: Ingest It Into juena-rag
 
 Until this runs, the repository is readable file by file and invisible to
-search. From this folder, with juena-rag checked out beside it:
+search. From this chatbot checkout (no sibling core/RAG checkout is needed):
 
 ```bash
 ./juena repos-ingest my-library --dry-run   # split the files and count only
@@ -195,6 +212,22 @@ search. From this folder, with juena-rag checked out beside it:
 ```
 
 It reads the entry you added in Step 2; there is nothing to add in juena-rag.
+
+For the server:
+
+```bash
+sudo ./juena prod repos-ingest my-library --dry-run
+sudo ./juena prod repos-ingest my-library
+sudo ./juena prod doctor
+```
+
+Ingestion uses Blablador for embeddings. Hugging Face supplies only the
+tokenizer files used for local token counting; a successful anonymous download
+does not need an HF token. Watch for the final result for each repository and
+compare its nonzero chunk count in `rag.indexed`. `rag.cloned` means the working
+tree exists. `needs_ingestion=false` means some indexed content exists, not that
+all configured repositories are complete. A healthy RAG service can have an
+empty or partial corpus.
 
 Confirm it worked by asking JüNA which repositories it can search — that calls
 `list_indexed_repositories`, which reports the store's own catalogue and chunk
@@ -224,14 +257,29 @@ repositories:
     source:
       url: https://github.com/org/repo-a.git
       branch: main
+    chunk_size: 3000
+    chunk_overlap: 400
 
   - id: repo-b
     source:
       url: https://github.com/org/repo-b.git
       branch: master
+    chunk_size: 3000
+    chunk_overlap: 400
 ```
 
 The agent will discover both through `list_repositories`.
+Ingest both with `./juena repos-ingest repo-a repo-b`, or omit IDs to process
+the entire registry sequentially. On the pilot server, the seven entries after
+the initial jscatter ingest are:
+
+```bash
+sudo ./juena prod repos-ingest datreat mdanse sasview sasmodels sasdata silx vitess
+sudo ./juena prod doctor
+```
+
+Do not run overlapping ingestion jobs. After a failure, retry the affected IDs;
+unchanged successful entries are skipped unless `--force` is supplied.
 
 ## Updating an Existing Repo Later
 
@@ -249,14 +297,26 @@ replaces the repository's chunks atomically, and search sees the new content at
 once. The command then moves the *clone*, which is what `read_file` and `grep`
 see, to the commit just ingested; if JüNA is not running, its next start does.
 
-New commits upstream are the same case and are not picked up automatically; the
-README's maintainer section says how often to re-ingest.
+New commits upstream are not picked up automatically. Re-ingest every two weeks,
+and at least once a month, or sooner after a release people will ask about:
+
+```bash
+sudo ./juena prod repos-ingest
+sudo ./juena prod doctor
+```
+
+This processes the complete registry sequentially. Unchanged revisions are
+skipped without embedding calls; changed repositories are re-embedded in full.
+Search continues using each repository's old data until its replacement is
+complete. The database volume retains the corpus across normal app rebuilds
+and restarts. Locally, use `./juena repos-ingest` without `prod`.
 
 ## Useful Environment Variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `REPO_CONFIG_PATH` | `config/repositories.yaml` | Override the repo config file location |
+| `JUENA_APP_ROOT` | Source checkout for native runs; `/app` in the image | Root for application files outside the installed Python package |
 | `REPO_CACHE_DIR` | `data/repos` locally, `/data/repos` in Docker | Where repos are cloned |
 | `JUENA_RAG_URL` | none — required | The juena-rag service that holds the vectors and answers every search |
 
@@ -264,12 +324,13 @@ README's maintainer section says how often to re-ingest.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| New repo does not appear in `/repositories` | App did not restart with updated config | Restart locally, or rebuild with `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d` |
+| New repo does not appear in the registry | App did not restart with updated config | Rebuild with `./juena up`, or `sudo ./juena prod up` on the server |
+| Registry warning names a path under `site-packages` | Installed package used the wrong application root | Deploy the path fix; the image uses `/app` and Compose sets `/app/config/repositories.yaml` |
 | `git clone` fails | Bad URL or missing access | Check the URL and ensure the runtime has network/SSH credentials |
 | Wrong branch error | `source.branch` is wrong | Check the repo's default branch and update the config |
 | Service startup is slow | A large repository is cloning | Watch the bootstrap log and wait for the health check |
 | Repo is listed but search finds nothing | It was never ingested into juena-rag | `./juena repos-ingest <id>`; `list_indexed_repositories` confirms |
-| Search misses recent code | The repository has commits that were never ingested | `./juena repos-ingest` (see the README's maintainer section) — restarting alone will not do it |
+| Search misses recent code | The repository has commits that were never ingested | `./juena repos-ingest`, or its server `prod` variant; restarting alone will not do it |
 | Docs search misses files | `docs_paths` does not match the repo layout | Fix `docs_paths` in `config/repositories.yaml`, then `./juena repos-ingest <id> --force` |
 
 ## Short Version
@@ -285,3 +346,7 @@ If you just want the operator checklist:
    but not searched**
 6. Ask JüNA which repositories it can search; the new one should be listed with
    a non-zero chunk count
+
+For the server, use the `prod` command variants above. See
+[deployment troubleshooting](deploy/TROUBLESHOOTING.md#rag-is-healthy-but-repositories-or-search-tools-are-missing)
+if configured, cloned and indexed repositories disagree.
