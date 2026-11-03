@@ -778,6 +778,121 @@ cmd_prod_config() { ## Validate server configuration; --show prints resolved set
     "${COMPOSE_PROD[@]}" config "$@"
 }
 
+cmd_prod_profile_setup() { ## Prepare personal-key settings in the installed environment
+    [ "$#" -eq 0 ] || die "usage: juena prod profile-setup"
+    [ -r "$PROD_ENV_FILE" ] && [ -w "$PROD_ENV_FILE" ] \
+        || die "cannot update $PROD_ENV_FILE; run sudo ./juena prod profile-setup"
+    # The full Compose file cannot be parsed until these settings exist. Let
+    # Compose parse the old dotenv file using a minimal, non-running service.
+    # Do not source it as shell code or print its resolved secrets.
+    (
+        umask 077
+        local prepared settings backup
+        prepared="$(mktemp "$PROD_ENV_FILE.profile.XXXXXX")"
+        settings="$(mktemp "$PROD_ENV_FILE.profile-settings.XXXXXX")"
+        trap 'rm -f "$prepared" "$settings"' EXIT
+        env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
+            docker compose -p juena-profile-setup --env-file "$PROD_ENV_FILE" -f - config --format json \
+            > "$settings" <<'YAML'
+services:
+  settings:
+    image: scratch
+    environment:
+      BLABLADOR_API_KEY: ${BLABLADOR_API_KEY:-}
+      RAG_BLABLADOR_API_KEY: ${RAG_BLABLADOR_API_KEY:-}
+      JUENA_SECRET_KEY: ${JUENA_SECRET_KEY:-}
+YAML
+        python3 - "$PROD_ENV_FILE" "$settings" "$prepared" <<'PY'
+import base64
+import json
+from pathlib import Path
+import re
+import secrets
+import shlex
+import sys
+
+source, settings, target = map(Path, sys.argv[1:])
+values = json.loads(settings.read_text())["services"]["settings"]["environment"]
+# `compose config` serializes a reusable Compose document, escaping literal
+# dollars even in JSON. Undo that escaping before writing literal dotenv values.
+values = {name: value.replace("$$", "$") if isinstance(value, str) else value
+          for name, value in values.items()}
+rag = values.get("RAG_BLABLADOR_API_KEY") or values.get("BLABLADOR_API_KEY") or ""
+if not rag or rag.startswith("CHANGE_ME"):
+    raise SystemExit("Set RAG_BLABLADOR_API_KEY in the protected server environment first.")
+key = values.get("JUENA_SECRET_KEY") or ""
+if key:
+    try:
+        if len(base64.b64decode(key, altchars=b"-_", validate=True)) != 32:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise SystemExit("Existing JUENA_SECRET_KEY is invalid; refusing to replace it.") from None
+else:
+    key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+# These are single-line secrets, not arbitrary dotenv expressions. Quote them
+# literally so a dollar sign in a provider token cannot trigger interpolation.
+if any(c.isspace() or c in "'\\" for c in rag):
+    raise SystemExit("RAG_BLABLADOR_API_KEY must be a single-line API token.")
+replace = {"JUENA_SECRET_KEY", "RAG_BLABLADOR_API_KEY", "BLABLADOR_API_KEY",
+           "OPENAI_API_KEY", "TAVILY_API_KEY", "CONTEXT7_API_KEY"}
+lines = []
+for line in source.read_text().splitlines(keepends=True):
+    match = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", line)
+    if match and match[1] in replace:
+        # Refuse multiline assignments instead of leaving fragments behind.
+        try:
+            shlex.split(match[2], comments=True)
+        except ValueError:
+            raise SystemExit("Use single-line shared-key settings before profile-setup.") from None
+        continue
+    lines.append(line)
+text = "".join(lines).rstrip("\n")
+target.write_text(f"{text}\nJUENA_SECRET_KEY='{key}'\nRAG_BLABLADOR_API_KEY='{rag}'\n")
+PY
+        # Validate both the selected gateway and the complete configuration
+        # before replacing the installed file. A failure leaves it untouched.
+        env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
+            PROD_ENV_FILE="$prepared" PROD_PROXY_MODE="$PROD_PROXY_MODE" \
+            PROD_EDGE_DIR="$PROD_EDGE_DIR" "$REPO_ROOT/juena" prod config
+        backup="$(mktemp "$PROD_ENV_FILE.before-profile.XXXXXX")"
+        cp "$PROD_ENV_FILE" "$backup"
+        chmod 0600 "$backup" "$prepared"
+        mv "$prepared" "$PROD_ENV_FILE"
+        echo "Personal-key configuration ready; protected previous configuration: $backup"
+    )
+}
+
+cmd_prod_reset_chat() { ## DESTROYS chat database, then deploys this checkout. Needs --confirm
+    [ "$#" -eq 1 ] && [ "$1" = --confirm ] \
+        || die "This deletes all JueNA users, sessions, chats, saved keys and jobs. Run 'juena prod reset-chat --confirm'."
+    configure_production_compose
+    [ "$(production_setting POSTGRES_HOST postgres)" = postgres ] \
+        || die "reset-chat supports only the bundled postgres service"
+    local database owner
+    database="$(production_setting POSTGRES_DB juena)"
+    owner="$(production_setting POSTGRES_USER juena)"
+    _valid_pg_identifier "$database" && _valid_pg_identifier "$owner" \
+        || die "reset-chat requires plain PostgreSQL database and user identifiers"
+    case "$database" in postgres|template0|template1) die "refusing to reset a PostgreSQL system database" ;; esac
+    [ "$(production_setting ENVIRONMENT production)" = production ] \
+        && [ "$(production_setting AUTH_DEV_BYPASS false)" = false ] \
+        || die "reset-chat requires production with IFFLogin authentication"
+    if [ "$PROD_PROXY_MODE" = shared ]; then configure_shared_gateway; fi
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    if [ "$(production_setting SANDBOX_ENABLED false)" = true ]; then
+        production_worker_installed || die "run './juena prod sandbox-setup' before enabling sandbox execution"
+    fi
+    # Build and check the database before interrupting the current application.
+    "${COMPOSE_PROD[@]}" build juena-chatbot
+    "${COMPOSE_PROD[@]}" exec -T postgres pg_isready -U "$owner" -d "$database"
+    production_worker_stop
+    "${COMPOSE_PROD[@]}" stop juena-chatbot
+    "${COMPOSE_PROD[@]}" exec -T postgres dropdb --username="$owner" --maintenance-db=postgres --if-exists --force "$database"
+    "${COMPOSE_PROD[@]}" exec -T postgres createdb --username="$owner" --owner="$owner" "$database"
+    echo "Chat database reset. Deploying fresh schema; sign in again and add your personal keys."
+    cmd_prod_up
+}
+
 cmd_prod_build() { ## Build the production app image from this checkout
     configure_production_compose
     echo "Building from $REPO_ROOT"

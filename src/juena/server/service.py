@@ -27,6 +27,7 @@ from juena.core.config import global_config
 from juena.core.personal_models import credential_error_message
 from juena.research import runner as research_runner
 from juena.server.auth.endpoints import router as auth_router
+from juena.server.auth.cors import SamlLogoutCORSMiddleware
 from juena.server.credential_endpoints import router as credential_router, require_chat_credentials
 from juena.server.auth.principal import session_principal
 from juena.server.auth.saml import saml_lifespan
@@ -128,3 +129,5 @@ app = create_app(
         research_runner.lifespan,
     ),
 )
+
+app.add_middleware(SamlLogoutCORSMiddleware, idp_metadata_url=global_config.SAML_IDP_METADATA_URL)

@@ -179,6 +179,14 @@ ACS form after a restart or failed attempt.
 Point `SAML_SP_SLS_URL` at `/auth/sls`, not `/auth/logout`. The IdP callback may
 arrive without an app cookie and is authorized by SAML signature validation.
 
+IFFLogin's logout status page uses background browser requests. JüNA therefore
+allows the origin of `SAML_IDP_METADATA_URL` to read `/auth/sls` responses via
+CORS, including redirects and validation failures. This permission applies only
+to that endpoint, for GET/POST and their preflight requests. It does not grant
+the IdP browser access to profile, chat or file APIs. The SAML signature is still
+required; the app session cookie keeps its existing SameSite policy. The fix is
+in the application and applies to both gateway modes.
+
 ## Validation policy and compatibility fixes
 
 JüNA requires a signed Response. A separate Assertion signature is optional

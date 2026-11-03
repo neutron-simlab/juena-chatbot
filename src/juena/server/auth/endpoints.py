@@ -281,6 +281,7 @@ async def single_logout_service(
                 sigalg=params.get("SigAlg"), signature=params.get("Signature"),
             )
         except SamlAuthenticationError as exc:
+            logger.warning("SAML logout response rejected (%s)", type(exc.__cause__ or exc).__name__)
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return _post_logout_redirect(relay_state)
 
@@ -297,6 +298,7 @@ async def single_logout_service(
             signature=params.get("Signature"),
         )
     except SamlAuthenticationError as exc:
+        logger.warning("SAML logout request rejected (%s)", type(exc.__cause__ or exc).__name__)
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     if subject:
