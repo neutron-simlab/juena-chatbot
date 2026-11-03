@@ -58,7 +58,9 @@ def build_software_prompt(
 
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
     repo_status = (
-        "Indexed local repository search and read-only `/repos` access are available."
+        "Repository catalogue and search tools are available. Use the live catalogue "
+        "to check what is indexed; an empty catalogue means ingestion is still needed. "
+        "Read-only `/repos` access is available for repositories cloned on disk."
         if has_repo_research
         else (
             "The local repository index is unavailable. Do not claim to inspect local "

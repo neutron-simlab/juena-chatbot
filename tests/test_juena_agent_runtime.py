@@ -266,6 +266,7 @@ async def test_supervisor_assembly_registers_both_specialists(
     class StubRepoManager:
         def __init__(self) -> None:
             self.cache_dir = Path("/tmp/test-repos")
+            self.repo_ids = ["jscatter"]
 
     class StubVectorIndex:
         """`build_search_index` takes no arguments: the URL is its only input."""
@@ -416,13 +417,18 @@ async def test_supervisor_assembly_registers_both_specialists(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repo_ids", [[], ["jscatter"]])
 async def test_missing_optional_capabilities_do_not_remove_specialists(
     monkeypatch: pytest.MonkeyPatch,
+    repo_ids: list[str],
 ) -> None:
     calls: dict[str, dict[str, Any]] = {}
 
     class StubRepoManager:
         cache_dir = Path("/tmp/unavailable-repos")
+
+        def __init__(self):
+            self.repo_ids = repo_ids
 
     class StubVectorIndex:
         pass
@@ -474,7 +480,7 @@ async def test_missing_optional_capabilities_do_not_remove_specialists(
 
     await juena_agent.create_juena_agent("openai", "user-model")
 
-    assert calls["software"]["has_repo_research"] is False
+    assert calls["software"]["has_repo_research"] is bool(repo_ids)
     assert calls["software"]["context7_tools"] == ()
     assert calls["neutron"]["tavily_tool"] is None
 

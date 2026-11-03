@@ -75,10 +75,11 @@ async def create_juena_agent(
     vector_index = build_search_index()
     survey = survey_repositories(repo_manager, vector_index)
     bootstrap_problems = survey.problems
-    # One unusable repository no longer removes the tools from the other eight,
-    # and an unreachable store is reported per request rather than by deleting a
-    # capability for the life of the process.
-    has_repo_research = survey.any_searchable
+    # The graph is cached for the life of the process. Keep the catalogue and
+    # search tools when repositories are configured, even before first ingest
+    # or while clones are missing. Their live results report current availability
+    # and recover after ingestion/bootstrap without rebuilding the agent.
+    has_repo_research = bool(repo_manager.repo_ids)
     if bootstrap_problems:
         logger.warning(
             "Repository research is degraded (%d repository(s) usable): %s. "

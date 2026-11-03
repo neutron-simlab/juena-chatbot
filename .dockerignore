@@ -30,6 +30,11 @@ ENV/
 .env
 .env.local
 .env.*.local
+.sandbox/
+DOCS/
+*.key
+*.pem
+*.crt
 
 # IDE
 .vscode/

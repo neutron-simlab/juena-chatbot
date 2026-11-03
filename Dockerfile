@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl bash git openssl xmlsec1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 JUENA_APP_ROOT=/app
 COPY --from=build /app/.venv /app/.venv
 COPY app/ ./app/
 COPY config/ ./config/

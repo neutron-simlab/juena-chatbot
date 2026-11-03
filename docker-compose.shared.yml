@@ -1,0 +1,16 @@
+# Shared TLS gateway: merge after docker-compose.yml with the production env.
+# The independent juena-edge project owns port 443 and also serves eLabFTW.
+# Requires Docker Compose 2.24.4+ for !override / !reset.
+services:
+  juena-chatbot:
+    networks:
+      chatbot-network: {}
+      edge:
+        aliases: [juena-app]
+  gateway:
+    profiles: !override [standalone-gateway]
+    ports: !reset []
+networks:
+  edge:
+    external: true
+    name: juena-edge

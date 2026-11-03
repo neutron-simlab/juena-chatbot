@@ -5,7 +5,9 @@ import base64
 import shutil
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 import zlib
+from copy import copy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -18,6 +20,7 @@ from saml2.httpbase import HTTPBase
 from saml2.metadata import create_metadata_string
 from saml2.saml import NameID
 from saml2.server import Server
+from saml2.sigver import SignatureError
 
 from juena.server.auth import saml
 
@@ -74,8 +77,140 @@ def test_signed_metadata_contact_and_sha256_login(metadata_setup):
     if isinstance(xml, bytes):
         xml = xml.decode()
     assert "admin@example.org" in xml and "Test institute" in xml
-    assert 'WantAssertionsSigned="true"' in xml
+    assert 'WantAssertionsSigned="false"' in xml
     assert service.metadata_expires_at > datetime.now(UTC)
+
+
+def _login_response(config, service, *, sign_response=True, sign_assertion=False, **overrides):
+    """Issue a real response using the disposable IdP's signing key."""
+    sp_config = copy(service.config)
+    sp_config.entityid = overrides.get("sp_entity_id", service.config.entityid)
+    config.metadata = config.load_metadata({"inline": [create_metadata_string(None, config=sp_config)]})
+    idp = Server(config=config)
+    args = {
+        "identity": {"mail": ["pilot@example.org"], "displayName": ["Pilot User"]},
+        "in_response_to": "request-1",
+        "destination": service.config.endpoint("assertion_consumer_service", BINDING_HTTP_POST)[0],
+        "sp_entity_id": service.config.entityid,
+        "name_id": NameID(text="pilot", format=saml.PERSISTENT_NAME_ID_FORMAT),
+        "authn": {"class_ref": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport"},
+        "sign_response": sign_response,
+        "sign_assertion": sign_assertion,
+    }
+    args.update(overrides)
+    return str(idp.create_authn_response(**args))
+
+
+def _parse_login(service, xml, outstanding=None):
+    return service.parse_response(
+        base64.b64encode(xml.encode()).decode(),
+        {"request-1": "/"} if outstanding is None else outstanding,
+    )
+
+
+@pytest.mark.parametrize("sign_assertion", [False, True])
+def test_login_accepts_signed_response_with_optional_assertion_signature(metadata_setup, sign_assertion):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    xml = _login_response(config, service, sign_assertion=sign_assertion)
+
+    identity = _parse_login(service, xml)
+
+    assert identity.subject == "pilot"
+    assert identity.subject_format == saml.PERSISTENT_NAME_ID_FORMAT
+    assert identity.in_response_to == "request-1"
+    assert identity.issuer == "https://idp.example/metadata"
+    assert identity.email == "pilot@example.org"
+    assert identity.display_name == "Pilot User"
+
+
+def test_login_and_metadata_follow_the_configured_dedicated_server_hostname(metadata_setup, monkeypatch):
+    config, _ = metadata_setup
+    origin = "https://dedicated.example.org"
+    for setting, path in (("SAML_SP_ENTITY_ID", "metadata"),
+                          ("SAML_SP_ACS_URL", "acs"), ("SAML_SP_SLS_URL", "sls")):
+        monkeypatch.setattr(saml.global_config, setting, f"{origin}/auth/{path}")
+    service = saml.SamlService.from_config()
+    _, location = service.prepare_login("relay")
+    encoded = parse_qs(urlparse(location).query)["SAMLRequest"][0]
+    request = ET.fromstring(zlib.decompress(base64.b64decode(encoded), -15))
+    assert request.get("AssertionConsumerServiceURL") == f"{origin}/auth/acs"
+    assert request.findtext("{urn:oasis:names:tc:SAML:2.0:assertion}Issuer") == f"{origin}/auth/metadata"
+
+    metadata = ET.fromstring(service.metadata_xml())
+    namespace = "{urn:oasis:names:tc:SAML:2.0:metadata}"
+    assert metadata.get("entityID") == f"{origin}/auth/metadata"
+    assert metadata.find(f".//{namespace}AssertionConsumerService").get("Location") == f"{origin}/auth/acs"
+    assert {node.get("Location") for node in metadata.findall(f".//{namespace}SingleLogoutService")} == {
+        f"{origin}/auth/sls"
+    }
+
+    assert _parse_login(service, _login_response(config, service)).subject == "pilot"
+    with pytest.raises(saml.SamlAuthenticationError):
+        _parse_login(service, _login_response(config, service, destination="https://sp.example/auth/acs"))
+
+
+@pytest.mark.parametrize("sign_assertion", [False, True])
+def test_login_always_requires_a_signed_response(metadata_setup, sign_assertion):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    xml = _login_response(config, service, sign_response=False, sign_assertion=sign_assertion)
+
+    with pytest.raises(saml.SamlAuthenticationError) as exc:
+        _parse_login(service, xml)
+    assert isinstance(exc.value.__cause__, SignatureError)
+
+
+def test_response_signature_protects_the_unsigned_assertion(metadata_setup):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    xml = _login_response(config, service)
+    assert "pilot@example.org" in xml
+    tampered = xml.replace("pilot@example.org", "attacker@example.org")
+
+    with pytest.raises(saml.SamlAuthenticationError) as exc:
+        _parse_login(service, tampered)
+    assert isinstance(exc.value.__cause__, SignatureError)
+
+
+def test_login_rejects_a_response_signed_with_an_untrusted_key(metadata_setup, tmp_path):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    key, cert = tmp_path / "untrusted.key", tmp_path / "untrusted.crt"
+    subprocess.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+        "-subj", "/CN=untrusted-idp", "-keyout", str(key), "-out", str(cert),
+    ], check=True, capture_output=True)
+    config.key_file, config.cert_file = str(key), str(cert)
+    xml = _login_response(config, service)
+
+    with pytest.raises(saml.SamlAuthenticationError) as exc:
+        _parse_login(service, xml)
+    assert isinstance(exc.value.__cause__, SignatureError)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"destination": "https://other.example/auth/acs"},
+    {"sp_entity_id": "https://other.example/auth/metadata"},
+    {"in_response_to": "unknown-request"},
+    {"name_id": NameID(text="temporary", format="urn:oasis:names:tc:SAML:2.0:nameid-format:transient")},
+])
+def test_signed_response_still_requires_the_expected_identity_binding(metadata_setup, overrides):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    xml = _login_response(config, service, **overrides)
+
+    with pytest.raises(saml.SamlAuthenticationError):
+        _parse_login(service, xml)
+
+
+def test_signed_response_requires_an_outstanding_login(metadata_setup):
+    config, _ = metadata_setup
+    service = saml.SamlService.from_config()
+    xml = _login_response(config, service)
+
+    with pytest.raises(saml.SamlAuthenticationError):
+        _parse_login(service, xml, outstanding={})
 
 
 @pytest.mark.parametrize("tamper", [False, True])
