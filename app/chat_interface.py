@@ -209,6 +209,12 @@ def render_chat_interface() -> None:
         for message in st.session_state.messages:
             render_message(message, show_system=st.session_state.show_system_messages)
 
+    if not st.session_state.get("user", {}).get("chat_ready", False):
+        from app.profile_page import open_profile, render_blablador_guidance
+        render_blablador_guidance()
+        st.button("Add Blablador key", on_click=open_profile, type="primary")
+        return
+
     if render_sandbox_interrupt():
         return
 

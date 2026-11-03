@@ -24,8 +24,10 @@ from juena_core.sandbox.runtime import (
 from juena_core.server.service import StreamPolicy, ThreadWorkspace, create_app
 
 from juena.core.config import global_config
+from juena.core.personal_models import credential_error_message
 from juena.research import runner as research_runner
 from juena.server.auth.endpoints import router as auth_router
+from juena.server.credential_endpoints import router as credential_router, require_chat_credentials
 from juena.server.auth.principal import session_principal
 from juena.server.auth.saml import saml_lifespan
 from juena.server.tool_labels import JUENA_TOOL_LABELS
@@ -42,7 +44,7 @@ import juena.agents.juena_agent  # noqa: F401  register the JüNA supervisor
 
 # The same trap, one layer down: a model class nobody imports is never created
 # by `create_all`, and that fails at the first write rather than at startup.
-import juena.server.database.models  # noqa: F401  add this app's two tables
+import juena.server.database.models  # noqa: F401  add this app's tables
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)
@@ -78,6 +80,8 @@ async def _optional_saml_lifespan() -> AsyncGenerator[None, None]:
 
 app = create_app(
     principal=session_principal,
+    invocation_guard=require_chat_credentials,
+    invocation_error=credential_error_message,
     filesystem=get_filesystem(),
     browser_origins=tuple(dict.fromkeys(
         f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
@@ -112,7 +116,7 @@ app = create_app(
     ),
     title="juena",
     version="1.0.0",
-    extra_routers=(auth_router, research_router),
+    extra_routers=(auth_router, credential_router, research_router),
     # Entered in this order inside the database lifespan, and unwound in
     # reverse before it. Research starts last so recovery can build agents only
     # after their resources are ready; it stops before those resources close.

@@ -13,11 +13,11 @@ from urllib.parse import urlencode
 # Add parent directory to path to import juena modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from juena_core.schema.llm_models import Provider
 from juena.core.config import global_config
-from juena_core.llms_providers import get_available_providers, get_default_model
+from juena_core.llms_providers import get_default_model
 
 from app.sidebar import render_sidebar
+from app.profile_page import render_profile_page, render_blablador_guidance
 from app.chat_interface import render_chat_interface
 from app.client_setup import initialize_client
 from app.ui_components import FILES_PANEL_KEY, render_files_panel_styles
@@ -60,6 +60,7 @@ _login_route = "/auth/dev-login" if global_config.AUTH_DEV_BYPASS else "/auth/lo
 _login_query = urlencode({"return_to": global_config.UI_PUBLIC_URL})
 login_url = f"{global_config.JUENA_PUBLIC_URL.rstrip('/')}{_login_route}?{_login_query}"
 if not session_token:
+    render_blablador_guidance()
     if global_config.AUTH_DEV_BYPASS:
         st.warning(
             "Development mode: authentication is bypassed. Anyone reaching this "
@@ -94,20 +95,9 @@ if "thread_id" not in st.session_state:
 if "show_system_messages" not in st.session_state:
     st.session_state.show_system_messages = False
 
-if "selected_provider" not in st.session_state:
-    available_providers = get_available_providers()
-    available_provider_list = [p.value for p in Provider if available_providers.get(p.value, False)]
-
-    if global_config.DEFAULT_PROVIDER.lower() in available_provider_list:
-        st.session_state.selected_provider = global_config.DEFAULT_PROVIDER.lower()
-    elif available_provider_list:
-        st.session_state.selected_provider = available_provider_list[0]
-    else:
-        # Fallback to OpenAI if no providers available (will show error in sidebar)
-        st.session_state.selected_provider = Provider.OPENAI.value
-
+st.session_state.selected_provider = "blablador"
 if "selected_model" not in st.session_state:
-    st.session_state.selected_model = get_default_model(st.session_state.selected_provider) or "gpt-4o-mini"
+    st.session_state.selected_model = get_default_model("blablador")
 
 # Initialize the remote, user-owned chat storage adapter.
 st.session_state.chat_storage = get_chat_storage(client)
@@ -134,6 +124,9 @@ if st.query_params.get("thread") != st.session_state.thread_id:
     st.query_params["thread"] = st.session_state.thread_id
 
 render_sidebar()
+if st.session_state.get("current_page") == "profile":
+    render_profile_page()
+    st.stop()
 render_files_panel_styles()
 chat_column, files_column = st.columns([3, 2], gap="medium")
 # Mount the independent browser first: rendering chat can consume SSE for minutes.

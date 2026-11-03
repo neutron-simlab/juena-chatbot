@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from typing import Dict
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
+from juena.core.personal_models import blablador_key
 
 import juena_core
 from juena_core.filesystem import ConversationFilesystem, configure_filesystem
@@ -34,7 +36,8 @@ load_dotenv(path_env, override=False)
 class Config:
     """Essential configuration for JueNA"""
 
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+    OPENAI_API_KEY = None
+    JUENA_SECRET_KEY = os.getenv("JUENA_SECRET_KEY", "")
 
     LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     LANGSMITH_ENDPOINT = os.getenv("LANGSMITH_ENDPOINT")
@@ -53,13 +56,13 @@ class Config:
     DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "blablador")
     FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "blablador")
 
-    OPENAI_DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
-    # Comma-separated. Unset, every model in the OpenAIModelName enum is offered.
-    OPENAI_AVAILABLE_MODELS = os.getenv("OPENAI_AVAILABLE_MODELS")
+    # Required by shared core settings, but this application offers Blablador only.
+    OPENAI_DEFAULT_MODEL = ""
+    OPENAI_AVAILABLE_MODELS = None
 
     # Blablador (OpenAI-compatible API)
-    BLABLADOR_API_KEY = os.getenv("BLABLADOR_API_KEY")
-    BLABLADOR_BASE_URL = os.getenv("BLABLADOR_BASE_URL")
+    BLABLADOR_API_KEY = staticmethod(blablador_key)
+    BLABLADOR_BASE_URL = os.getenv("BLABLADOR_BASE_URL", "https://api.blablador.fz-juelich.de/v1")
     BLABLADOR_DEFAULT_MODEL = os.getenv(
         "BLABLADOR_DEFAULT_MODEL",
         _BLABLADOR_DEFAULT_MODEL_ID,
@@ -72,15 +75,7 @@ class Config:
 
     # An explicit DEFAULT_MODEL still wins, which is what keeps older .env files working.
     _default_model_explicit = os.getenv("DEFAULT_MODEL")
-    if _default_model_explicit:
-        DEFAULT_MODEL = _default_model_explicit
-    else:
-        if DEFAULT_PROVIDER.lower() == "openai":
-            DEFAULT_MODEL = OPENAI_DEFAULT_MODEL
-        elif DEFAULT_PROVIDER.lower() == "blablador":
-            DEFAULT_MODEL = BLABLADOR_DEFAULT_MODEL
-        else:
-            DEFAULT_MODEL = OPENAI_DEFAULT_MODEL
+    DEFAULT_MODEL = _default_model_explicit or BLABLADOR_DEFAULT_MODEL
 
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "10000"))
     TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "60"))
@@ -92,12 +87,8 @@ class Config:
     STREAM_TOOL_PAYLOADS = os.getenv("STREAM_TOOL_PAYLOADS", "false").lower() == "true"
 
     # Context7 MCP (optional external library/framework documentation tools)
-    CONTEXT7_API_KEY = os.getenv("CONTEXT7_API_KEY")
     CONTEXT7_MCP_URL = os.getenv("CONTEXT7_MCP_URL", "https://mcp.context7.com/mcp")
     CONTEXT7_TIMEOUT_SECONDS = int(os.getenv("CONTEXT7_TIMEOUT_SECONDS", "30"))
-
-    # Tavily web search (optional external web search tool)
-    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
     # juena-rag, the shared retrieval service, and the only search backend: the
     # repository tools search pgvector over HTTP. Required -- the Chroma index
@@ -247,22 +238,12 @@ class Config:
 
         This is used during initialization before the registry is available.
         """
-        provider_name = provider_name.lower()
-        if provider_name == "openai":
-            return bool(cls.OPENAI_API_KEY and cls.OPENAI_API_KEY.strip())
-        elif provider_name == "blablador":
-            return bool(
-                cls.BLABLADOR_API_KEY
-                and cls.BLABLADOR_API_KEY.strip()
-                and cls.BLABLADOR_BASE_URL
-                and cls.BLABLADOR_BASE_URL.strip()
-            )
-        return False
+        return provider_name.lower() == "blablador" and bool(cls.BLABLADOR_BASE_URL)
 
     @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
         """
-        Get dictionary of available providers (have API keys configured).
+        Get dictionary of supported providers; personal readiness is checked by the API.
 
         Uses direct config checks to avoid circular imports during initialization.
 
@@ -274,54 +255,23 @@ class Config:
         return {p.value: cls._check_provider_available(p.value) for p in Provider}
 
     @classmethod
-    def _default_model_for(cls, provider: str) -> str:
-        """Provider-specific default model, matching the class-body derivation."""
-        if provider.lower() == "blablador":
-            return cls.BLABLADOR_DEFAULT_MODEL
-        return cls.OPENAI_DEFAULT_MODEL
-
-    @classmethod
     def validate_required(cls):
         """Validate that required environment variables are set"""
         errors = []
 
-        available_providers = cls.get_available_providers()
-        default_provider_available = available_providers.get(
-            cls.DEFAULT_PROVIDER.lower(), False
-        )
-
-        if not default_provider_available:
-            available_list = [
-                p for p, available in available_providers.items() if available
-            ]
-            if available_list:
-                cls.DEFAULT_PROVIDER = available_list[0]
-                # DEFAULT_MODEL was derived from the *original* provider at class
-                # definition time. Re-derive it, or the pair desyncs into
-                # something like provider=blablador with model=gpt-4o-mini.
-                cls.DEFAULT_MODEL = cls._default_model_for(cls.DEFAULT_PROVIDER)
-                print(
-                    f"⚠️ DEFAULT_PROVIDER was unavailable, auto-adjusted to: "
-                    f"{cls.DEFAULT_PROVIDER} (model: {cls.DEFAULT_MODEL})"
-                )
-            else:
-                errors.append(
-                    f"DEFAULT_PROVIDER '{cls.DEFAULT_PROVIDER}' is not available and no other providers are configured. "
-                    f"Please configure at least one provider (OpenAI, Blablador, etc.) with valid API keys."
-                )
-
-        if cls.FALLBACK_PROVIDER:
-            fallback_available = available_providers.get(
-                cls.FALLBACK_PROVIDER.lower(), False
-            )
-            if not fallback_available:
-                # Read the name before clearing it: the old code interpolated
-                # after the assignment and so always printed 'None'.
-                unavailable = cls.FALLBACK_PROVIDER
-                cls.FALLBACK_PROVIDER = None
-                print(
-                    f"⚠️ FALLBACK_PROVIDER '{unavailable}' is not available, cleared fallback"
-                )
+        try:
+            Fernet(cls.JUENA_SECRET_KEY)
+        except (ValueError, TypeError):
+            errors.append("JUENA_SECRET_KEY must be a persistent Fernet key for personal credentials")
+        if cls.DEFAULT_PROVIDER.lower() != "blablador":
+            errors.append("DEFAULT_PROVIDER must be blablador; users add personal keys in My profile")
+        if cls.FALLBACK_PROVIDER and cls.FALLBACK_PROVIDER.lower() != "blablador":
+            errors.append("FALLBACK_PROVIDER must be blablador or empty")
+        from urllib.parse import urlsplit
+        for name in ("BLABLADOR_BASE_URL", "CONTEXT7_MCP_URL"):
+            url = urlsplit(getattr(cls, name) or "")
+            if url.scheme != "https" or not url.netloc or url.username or url.query or url.fragment:
+                errors.append(f"{name} must be an HTTPS service URL without credentials, query or fragment")
 
         if cls.LANGSMITH_TRACING and not cls.LANGSMITH_API_KEY:
             errors.append(
@@ -472,10 +422,8 @@ def _active_execution_workspaces() -> set[str]:
 def _configure_core() -> None:
     """Hand the validated values to juena_core, once, at import time.
 
-    **After `initialize()`, never before.** `validate_required()` may still
-    move `DEFAULT_PROVIDER`, `DEFAULT_MODEL` and `FALLBACK_PROVIDER` when the
-    configured provider has no credentials; configuring core first would cache
-    models built from the values it rejected.
+    Validation checks operator configuration. Personal model credentials are
+    resolved only when a signed-in user makes a request.
 
     This is the whole of 00-BOUNDARY.md decision 1 in practice: `Config` keeps
     its `os.getenv` calls and its `validate_required()`, which knows about

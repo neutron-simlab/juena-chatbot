@@ -47,12 +47,11 @@ Create your local settings file:
 ./juena env
 ```
 
-Open `.env` in your editor and put your Blablador API key after
-`BLABLADOR_API_KEY=`:
-
-```dotenv
-BLABLADOR_API_KEY=your-blablador-api-key
-```
+Set `RAG_BLABLADOR_API_KEY` in `.env` to the service key for indexing and search
+embeddings. Generate `JUENA_SECRET_KEY` once using the command in `env.example`
+and keep it stable across restarts. Sign in to JüNA, open **My profile**, and add
+your personal Blablador key before chatting. Tavily and Context7 keys are optional.
+See [personal API keys](PERSONAL-API-KEYS.md) for setup and upgrade instructions.
 
 Leave the other settings as supplied. They already set up Blablador, the
 sandbox, disabled tracing and `AUTH_DEV_BYPASS=true`, which lets you sign in locally without

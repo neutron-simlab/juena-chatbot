@@ -28,7 +28,7 @@ x-rag: &rag
   entrypoint: ["juena-rag"]
   environment: &rag-environment
     JUENA_RAG_DSN: postgresql://${RAG_POSTGRES_USER:-juena_rag}:${RAG_POSTGRES_PASSWORD:?set RAG_POSTGRES_PASSWORD}@rag-db:5432/${RAG_POSTGRES_DB:-juena_rag_corpus}
-    BLABLADOR_API_KEY: ${BLABLADOR_API_KEY:-}
+    BLABLADOR_API_KEY: ${RAG_BLABLADOR_API_KEY:?set RAG_BLABLADOR_API_KEY for indexing and search embeddings}
     BLABLADOR_BASE_URL: ${BLABLADOR_BASE_URL:-https://api.blablador.fz-juelich.de/v1}
     BLABLADOR_EMBEDDING_MODEL: ${BLABLADOR_EMBEDDING_MODEL:-alias-qwen3-8b-embeddings}
     BLABLADOR_EMBEDDING_DIMENSION: ${BLABLADOR_EMBEDDING_DIMENSION:-4096}
@@ -86,12 +86,11 @@ services:
       - SERVER_PORT=8080
       - UI_PORT=9501
       
-      # LLM Provider configuration (from .env)
-      - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-openai}
-      - FALLBACK_PROVIDER=${FALLBACK_PROVIDER:-openai}
-      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL:-gpt-4o-mini}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - BLABLADOR_API_KEY=${BLABLADOR_API_KEY:-}
+      # Personal credentials are in PostgreSQL; only their encryption key is configured here.
+      - JUENA_SECRET_KEY=${JUENA_SECRET_KEY:?set a persistent Fernet encryption key}
+      # Model endpoints and defaults
+      - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-blablador}
+      - FALLBACK_PROVIDER=${FALLBACK_PROVIDER-blablador}
       - BLABLADOR_BASE_URL=${BLABLADOR_BASE_URL:-https://api.blablador.fz-juelich.de/v1}
       # Compose DNS; the RAG service and its database are private.
       - JUENA_RAG_URL=http://juena-rag:8100
@@ -103,12 +102,8 @@ services:
       - MAX_RETRIES=${MAX_RETRIES:-3}
 
       # Context7 MCP (optional)
-      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY:-}
       - CONTEXT7_MCP_URL=${CONTEXT7_MCP_URL:-https://mcp.context7.com/mcp}
       - CONTEXT7_TIMEOUT_SECONDS=${CONTEXT7_TIMEOUT_SECONDS:-30}
-
-      # Tavily web search (optional)
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
 
       # Optional host-side rootless-Podman worker. No container socket is mounted
       # into this application container; the sandbox_jobs table is the only channel.

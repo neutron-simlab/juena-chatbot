@@ -36,6 +36,7 @@ dependencies = [
     # Neither of these is core's: web search and SAML are JüNA's alone.
     "langchain-tavily",
     "python-dotenv>=1.0.0",
+    "cryptography",
     "pysaml2==7.5.4",
     # The retrieval store, over HTTP. The `client` extra is httpx only -- no
     # database driver and no embedder, because the service does both.
@@ -57,9 +58,9 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Published, immutable revisions; no sibling checkouts are needed.
+# Immutable revisions; publish new core commits before remote builds.
 [tool.uv.sources]
-juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "0e90214c1da91df10845e5a0c425f1c7c3394a3c" }
+juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "b9f9a0a6df91013ff111107f0dd87f52e481003b" }
 juena-rag = { git = "https://github.com/neutron-simlab/juena-rag.git", rev = "db98edd752967a48ef49fd61f7ee53ad47bcc23c" }
 
 [tool.hatch.build.targets.wheel]

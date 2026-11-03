@@ -1,61 +1,56 @@
-"""Optional Context7 MCP tool loading for external docs/examples."""
+"""Context7 tools with request-owned MCP credentials."""
 
-from __future__ import annotations
-
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from juena_core.log import get_logger
-from juena_core.mcp import discover_optional_tools
+from langchain.tools import ToolRuntime, tool
+from juena_core.mcp import call_personal_tool
+from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 from juena.core.paths import get_config
-
-logger = get_logger(__name__)
-
-CONTEXT7_LABEL = "Context7"
 
 
 @dataclass
 class Context7Runtime:
-    """The tools this integration contributed to the supervisor, if any.
-
-    It no longer holds a client. `juena_core.mcp` returns tools that each
-    reopen their own connection per call and survive an MCP server restart, so
-    there is nothing whose lifetime has to match the agent's -- and nothing for
-    `shutdown_agents` to close. The retired `MultiServerMCPClient` exposed
-    neither `close` nor `aclose` either, so that shutdown was already a no-op.
-    """
-
     tools: list[Any]
 
 
-async def load_optional_context7_tools() -> Context7Runtime | None:
-    """Return loaded Context7 tools or ``None`` when disabled/unavailable.
-
-    Context7 is nobody's product: if it is unreachable its tools should not
-    exist, rather than exist and fail the first time a model reaches for one.
-    """
-
+async def call_context7(key: str, name: str, arguments: dict) -> Any:
     config = get_config()
-    api_key = (config.CONTEXT7_API_KEY or "").strip()
-    if not api_key:
-        return None
+    async with asyncio.timeout(config.CONTEXT7_TIMEOUT_SECONDS):
+        return await call_personal_tool({"mcpServers": {"context7": {
+            "url": config.CONTEXT7_MCP_URL,
+            "headers": {"CONTEXT7_API_KEY": key},
+            "timeout": config.CONTEXT7_TIMEOUT_SECONDS,
+        }}}, name, arguments)
 
-    # FastMCP's `MCPConfig` shape. The transport is inferred from the entry --
-    # there is no `transport` key any more, and the timeout is seconds.
-    tools = await discover_optional_tools(
-        {
-            "mcpServers": {
-                "context7": {
-                    "url": config.CONTEXT7_MCP_URL,
-                    "headers": {"CONTEXT7_API_KEY": api_key},
-                    "timeout": config.CONTEXT7_TIMEOUT_SECONDS,
-                }
-            }
-        },
-        label=CONTEXT7_LABEL,
-    )
-    if tools is None:
-        return None
 
-    logger.info("Loaded %d Context7 MCP tool(s)", len(tools))
-    return Context7Runtime(tools=tools)
+async def _call(user_id: str, name: str, arguments: dict) -> Any:
+    from juena.server.credentials import CredentialError, personal_key
+    try:
+        key = await personal_key(user_id, "context7")
+        return await call_context7(key, name, arguments)
+    except CredentialError as error:
+        return {"error": str(error)}
+    except Exception:
+        return {"error": "Context7 could not complete the lookup. Check your key in My profile or retry later."}
+
+
+@tool("resolve-library-id")
+async def resolve_library_id(libraryName: str, query: str, runtime: ToolRuntime[RuntimeModelContext]) -> Any:
+    """Find a Context7 library ID before fetching its documentation."""
+    return await _call(runtime.context.user_id, "resolve-library-id", {"libraryName": libraryName, "query": query})
+
+
+@tool("query-docs")
+async def query_docs(libraryId: str, query: str, runtime: ToolRuntime[RuntimeModelContext], language: str = "") -> Any:
+    """Fetch documentation for a resolved Context7 library ID and question."""
+    arguments = {"libraryId": libraryId, "query": query}
+    if language:
+        arguments["language"] = language
+    return await _call(runtime.context.user_id, "query-docs", arguments)
+
+
+async def load_optional_context7_tools() -> Context7Runtime:
+    # No network or credentials during process-wide graph construction.
+    return Context7Runtime(tools=[resolve_library_id, query_docs])

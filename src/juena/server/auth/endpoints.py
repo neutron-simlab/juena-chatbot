@@ -199,11 +199,18 @@ async def assertion_consumer_service(
 
 
 @router.get("/me")
-async def current_user(user: Principal = Depends(session_principal)) -> dict[str, str | None]:
+async def current_user(response: Response, user: Principal = Depends(session_principal),
+                       session: AsyncSession = Depends(get_db_session)) -> dict:
+    from juena.server.credentials import credential_status
+
+    response.headers["Cache-Control"] = "no-store"
+    credentials = await credential_status(session, user.id)
     return {
         "id": str(user.id),
         "email": user.email,
         "display_name": user.display_name,
+        "credentials": credentials,
+        "chat_ready": credentials["blablador"]["available"],
     }
 
 
