@@ -24,6 +24,7 @@ from juena_core.agents.specialist_outcome import outcome_verified
 from juena_core.log import get_logger
 from juena_core.filesystem import get_filesystem
 
+from juena.core.personal_models import credential_error_message
 from juena.research import jobs
 from juena.research.constants import DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MESSAGE
 from juena.server.database.models import ResearchJob
@@ -131,8 +132,10 @@ async def _run(job_id: UUID) -> None:
             except TimeoutError:
                 await jobs.finish(connection, job_id, status="failed", error=TIMEOUT_MESSAGE)
             except Exception as error:
-                logger.exception("Research job %s failed", job_id)
-                await jobs.finish(connection, job_id, status="failed", error=str(error))
+                safe_message = credential_error_message(error)
+                if safe_message is None:
+                    logger.exception("Research job %s failed", job_id)
+                await jobs.finish(connection, job_id, status="failed", error=safe_message or str(error))
     except Exception:
         # If the database connection was lost, neither checkpoints nor finish
         # can write through it. Leave the job available for the next poll.

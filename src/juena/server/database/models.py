@@ -2,7 +2,7 @@
 
 `Base`, `utc_now`, `User`, `AuthSession` and `Chat` are juena-core's (00, decision
 9, part 4). Only the tables no other consumer of core has live here: the SAML
-login handshake, and background research jobs.
+login handshake, personal credentials, and background research jobs.
 
 **A model class nobody imports is never created by `create_all`.** There is no
 Alembic, so the failure is a missing table at first write rather than an error at
@@ -35,7 +35,20 @@ from juena_core.agents.findings import FindingsMap
 from juena_core.server.database.models import Base, utc_now
 from juena.research.constants import ACTIVE_STATUSES as ACTIVE_RESEARCH_STATUSES
 
-__all__ = ["SamlLoginRequest", "ResearchJob"]
+__all__ = ["SamlLoginRequest", "ResearchJob", "UserAPICredential"]
+
+
+class UserAPICredential(Base):
+    """One encrypted personal key per service; identity remains core-owned."""
+
+    __tablename__ = "user_api_credentials"
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    service: Mapped[str] = mapped_column(Text, primary_key=True)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class SamlLoginRequest(Base):

@@ -6,6 +6,7 @@ from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
+from juena.agents.personal_tools import PersonalToolsMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -39,7 +40,7 @@ NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.
 
 
 def build_neutron_research_prompt(
-    *, has_tavily: bool, unattended: bool = False
+    *, has_tavily: bool | None, unattended: bool = False
 ) -> str:
     """Append truthful runtime capability status to the authored prompt."""
 
@@ -53,7 +54,7 @@ def build_neutron_research_prompt(
             "claims that require current external verification and never invent citations."
         )
     )
-    capabilities = f"{prompt}\n## Runtime capabilities\n\n- {status}\n"
+    capabilities = prompt if has_tavily is None else f"{prompt}\n## Runtime capabilities\n\n- {status}\n"
     if not unattended:
         return capabilities
     return f"{capabilities}\n## Running unattended\n\n{UNATTENDED_NOTICE}\n"
@@ -86,22 +87,25 @@ def build_neutron_research_specialist(
     specialist_tools = list(build_tools(tavily_tool))
     if not unattended:
         specialist_tools.append(build_ask_user_tool(NEUTRON_RESEARCH_SPECIALIST_NAME))
+    middleware = build_specialist_middleware(
+        backend=backend,
+        summarizer_model=summarizer_model,
+        # A fallback that calls the same model would fail the same way.
+        fallback_models=[m for m in fallback_models if not same_model(m, model)],
+        filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
+        specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
+        unattended=unattended,
+    )
+    if tavily_tool is not None:
+        middleware = [PersonalToolsMiddleware("tavily", ("tavily_search",)), *middleware]
     runnable = create_agent(
         model=model,
         tools=specialist_tools,
         system_prompt=build_neutron_research_prompt(
-            has_tavily=tavily_tool is not None,
+            has_tavily=None if tavily_tool is not None else False,
             unattended=unattended,
         ),
-        middleware=build_specialist_middleware(
-            backend=backend,
-            summarizer_model=summarizer_model,
-            # A fallback that calls the same model would fail the same way.
-            fallback_models=[m for m in fallback_models if not same_model(m, model)],
-            filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
-            specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
-            unattended=unattended,
-        ),
+        middleware=middleware,
         response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,
         checkpointer=checkpointer,

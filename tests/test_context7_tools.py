@@ -1,96 +1,38 @@
-"""Tests for optional Context7 MCP tool loading.
+"""Context7 credentials are scoped to a call, never the cached graph."""
 
-The transport moved to `juena_core.mcp` during the plan-02 cutover, so what is
-this application's -- and what these tests cover -- is the *config it builds*
-and the policy that a missing key or an unreachable server costs a capability
-rather than raising. The `MCPAdapter` lifecycle itself is measured in core's
-`tests/cp0b/` against a real FastMCP server.
-"""
-
-from __future__ import annotations
-
-from typing import Any
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-
-from juena.tools import context7 as context7_module
-
-
-@pytest.mark.asyncio
-async def test_load_optional_context7_tools_returns_none_without_api_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class StubConfig:
-        CONTEXT7_API_KEY = None
-        CONTEXT7_MCP_URL = "https://mcp.context7.com/mcp"
-        CONTEXT7_TIMEOUT_SECONDS = 30
-
-    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
-
-    runtime = await context7_module.load_optional_context7_tools()
-
-    assert runtime is None
+from juena.tools import context7
+from juena.server import credentials
 
 
 @pytest.mark.asyncio
-async def test_load_optional_context7_tools_loads_remote_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tool_a = object()
-    tool_b = object()
-    discovered: dict[str, Any] = {}
-
-    class StubConfig:
-        CONTEXT7_API_KEY = "ctx-key"
-        CONTEXT7_MCP_URL = "https://example.com/mcp"
-        CONTEXT7_TIMEOUT_SECONDS = 45
-
-    async def fake_discover(target: Any, *, label: str) -> list[object]:
-        discovered["target"] = target
-        discovered["label"] = label
-        return [tool_a, tool_b]
-
-    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
-    monkeypatch.setattr(context7_module, "discover_optional_tools", fake_discover)
-
-    runtime = await context7_module.load_optional_context7_tools()
-
-    assert runtime is not None
-    assert runtime.tools == [tool_a, tool_b]
-    assert discovered["label"] == "Context7"
-    # FastMCP's `MCPConfig`: servers under `mcpServers`, the transport inferred
-    # from the entry rather than named, and a plain number of seconds.
-    assert discovered["target"] == {
-        "mcpServers": {
-            "context7": {
-                "url": "https://example.com/mcp",
-                "headers": {"CONTEXT7_API_KEY": "ctx-key"},
-                "timeout": 45,
-            }
-        }
-    }
+async def test_context7_build_needs_no_key_or_network(monkeypatch):
+    call = AsyncMock()
+    monkeypatch.setattr(context7, "call_personal_tool", call)
+    runtime = await context7.load_optional_context7_tools()
+    assert [t.name for t in runtime.tools] == ["resolve-library-id", "query-docs"]
+    call.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_an_unreachable_context7_costs_a_capability_not_a_startup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The optional-integration policy, which is this application's choice.
+async def test_context7_uses_current_owner_key_for_each_call(monkeypatch):
+    monkeypatch.setattr(credentials, "personal_key", AsyncMock(side_effect=["fake-alice", "fake-bob"]))
+    call = AsyncMock(return_value="docs")
+    monkeypatch.setattr(context7, "call_personal_tool", call)
+    for owner in ("alice", "bob"):
+        runtime = SimpleNamespace(context=SimpleNamespace(user_id=owner))
+        assert await context7.resolve_library_id.coroutine("python", "question", runtime) == "docs"
+    targets = [c.args[0] for c in call.call_args_list]
+    assert [t["mcpServers"]["context7"]["headers"]["CONTEXT7_API_KEY"] for t in targets] == ["fake-alice", "fake-bob"]
 
-    Core offers both: `discover_tools` raises for an integration that *is* the
-    product, `discover_optional_tools` returns None for one that is not.
-    Context7 is the second, so the supervisor is built with one tool fewer.
-    """
 
-    class StubConfig:
-        CONTEXT7_API_KEY = "ctx-key"
-        CONTEXT7_MCP_URL = "https://example.com/mcp"
-        CONTEXT7_TIMEOUT_SECONDS = 30
-
-    async def unreachable(target: Any, *, label: str) -> None:
-        return None
-
-    monkeypatch.setattr(context7_module, "get_config", lambda: StubConfig)
-    monkeypatch.setattr(context7_module, "discover_optional_tools", unreachable)
-
-    assert await context7_module.load_optional_context7_tools() is None
+@pytest.mark.asyncio
+async def test_context7_failure_has_no_secret_or_raw_provider_error(monkeypatch):
+    monkeypatch.setattr(credentials, "personal_key", AsyncMock(return_value="secret"))
+    monkeypatch.setattr(context7, "call_personal_tool", AsyncMock(side_effect=RuntimeError("secret")))
+    result = await context7.query_docs.coroutine("/python/docs", "question", SimpleNamespace(context=SimpleNamespace(user_id="alice")))
+    assert "secret" not in str(result)
+    assert "error" in result

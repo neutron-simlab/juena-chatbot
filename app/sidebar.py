@@ -11,9 +11,7 @@ import textwrap
 
 from juena.clients.client import AgentAuthenticationError, AgentClientError
 from juena.core.config import global_config
-from juena_core.schema.llm_models import Provider
 from juena_core.llms_providers import (
-    get_available_providers,
     get_available_models,
     get_default_model,
     format_model_name,
@@ -177,6 +175,12 @@ def render_sidebar() -> None:
         account_label = current_user.get("display_name") or current_user.get("email")
         if account_label:
             st.caption(str(account_label))
+        if st.button("My profile"):
+            st.session_state.current_page = "profile"
+            st.rerun()
+        if st.session_state.get("current_page") == "profile" and st.button("Back to chat"):
+            st.session_state.current_page = "chat"
+            st.rerun()
         st.html(_logout_form_html(global_config.JUENA_PUBLIC_URL))
 
         st.divider()
@@ -185,29 +189,10 @@ def render_sidebar() -> None:
 
         st.subheader("LLM Configuration")
 
-        available_providers = get_available_providers()
-        provider_options = [p.value for p in Provider if available_providers.get(p.value, False)]
-
-        if not provider_options:
-            st.error("❌ No LLM providers are configured. Please configure at least one provider (OpenAI, Blablador, etc.) with valid API keys in your .env file.")
-            return
-
-        if st.session_state.selected_provider not in provider_options:
-            st.session_state.selected_provider = provider_options[0]
-            st.session_state.selected_model = get_default_model(st.session_state.selected_provider)
-            st.warning(f"⚠️ Previously selected provider is unavailable. Auto-selected: **{st.session_state.selected_provider}**")
-        
-        selected_provider = st.radio(
-            "Provider",
-            options=provider_options,
-            index=provider_options.index(st.session_state.selected_provider) if st.session_state.selected_provider in provider_options else 0,
-            help="Select the LLM provider to use"
-        )
-        
-        if selected_provider != st.session_state.selected_provider:
-            st.session_state.selected_provider = selected_provider
-            st.session_state.selected_model = get_default_model(selected_provider)
-            st.info(f"Switched to **{selected_provider}**. Next message will use the new model.")
+        st.session_state.selected_provider = "blablador"
+        st.caption("Blablador · your personal key")
+        if not current_user.get("chat_ready", False):
+            st.warning("Add your Blablador key in My profile to chat.")
 
         model_options = get_available_models(st.session_state.selected_provider)
 

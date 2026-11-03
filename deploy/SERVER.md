@@ -77,6 +77,8 @@ creates the worker account and grants its group access to the existing tree.
 These commands initialize a new host. Do not overwrite an existing environment
 with the example file or reset an installed worker's directory permissions.
 
+For per-user credentials and upgrades, follow [personal API keys](PERSONAL-API-KEYS.md).
+
 Edit `/etc/juena/juena.env`. Replace all `CHANGE_ME` values. Use distinct random
 hex passwords (`openssl rand -hex 32`) for the databases and a separate stable
 filesystem identity secret. These passwords appear in connection URLs, so hex

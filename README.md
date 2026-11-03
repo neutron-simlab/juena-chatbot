@@ -35,6 +35,7 @@ development. See the guides below for indexing, worker setup, updates and shutdo
 | [Troubleshooting](deploy/TROUBLESHOOTING.md) | Login, repository discovery, indexing and sandbox fixes |
 | [Shared gateway](deploy/SHARED-PROXY.md) | JüNA alongside eLabFTW; dedicated servers use the server guide |
 | [Sandbox](deploy/SANDBOX.md) | Execution worker, workspace permissions and acceptance checks |
+| [Personal API keys](deploy/PERSONAL-API-KEYS.md) | Profile setup, Blablador token guidance, encryption and server credential migration |
 | [IFFLogin](deploy/SAML-IFFLOGIN.md) | SAML configuration and browser acceptance |
 | [Repository maintenance](HOW-TO-ADD-REPO.md) | Add repositories and keep their indexes current |
 | [Deployment record](deploy/BUILD-RECORD.md) | How to record builds, validation and rollback evidence |

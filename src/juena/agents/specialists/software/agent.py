@@ -8,6 +8,7 @@ from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
+from juena.agents.personal_tools import PersonalToolsMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -52,7 +53,7 @@ _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 
 
 def build_software_prompt(
-    *, has_repo_research: bool, has_context7: bool, unattended: bool = False
+    *, has_repo_research: bool, has_context7: bool | None, unattended: bool = False
 ) -> str:
     """Append truthful runtime capability status to the authored prompt."""
 
@@ -89,7 +90,9 @@ def build_software_prompt(
     )
     capabilities = (
         f"{prompt}\n## Runtime capabilities\n\n"
-        f"- {repo_status}\n- {context7_status}\n- {execution_status}\n"
+        f"- {repo_status}\n"
+        + (f"- {context7_status}\n" if has_context7 is not None else "")
+        + f"- {execution_status}\n"
     )
     if not unattended:
         return capabilities
@@ -150,29 +153,32 @@ def build_software_specialist(
     )
     if not unattended:
         specialist_tools.append(build_ask_user_tool(SOFTWARE_SPECIALIST_NAME))
+    middleware = build_specialist_middleware(
+        backend=backend,
+        summarizer_model=summarizer_model,
+        # A fallback that calls the same model would fail the same way.
+        fallback_models=[m for m in (backup, *fallback_models) if not same_model(m, model)],
+        filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
+        skills_dir=_SPECIALIST_SKILLS_PATH,
+        skills_label="Software",
+        specialist_name=SOFTWARE_SPECIALIST_NAME,
+        # Keep execution evidence and an explicit automatic policy together.
+        # Unattended jobs receive neither execution nor questions.
+        execution_middleware=(SandboxExecutionMiddleware(),) if can_execute else (),
+        interrupt_on={"execute": False} if can_execute else None,
+        unattended=unattended,
+    )
+    if context7_tools:
+        middleware = [PersonalToolsMiddleware("context7", ("resolve-library-id", "query-docs")), *middleware]
     runnable = create_agent(
         model=model,
         tools=specialist_tools,
         system_prompt=build_software_prompt(
             has_repo_research=has_repo_research,
-            has_context7=bool(context7_tools),
+            has_context7=None if context7_tools else False,
             unattended=unattended,
         ),
-        middleware=build_specialist_middleware(
-            backend=backend,
-            summarizer_model=summarizer_model,
-            # A fallback that calls the same model would fail the same way.
-            fallback_models=[m for m in (backup, *fallback_models) if not same_model(m, model)],
-            filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
-            skills_dir=_SPECIALIST_SKILLS_PATH,
-            skills_label="Software",
-            specialist_name=SOFTWARE_SPECIALIST_NAME,
-            # Keep execution evidence and an explicit automatic policy together.
-            # Unattended jobs receive neither execution nor questions.
-            execution_middleware=(SandboxExecutionMiddleware(),) if can_execute else (),
-            interrupt_on={"execute": False} if can_execute else None,
-            unattended=unattended,
-        ),
+        middleware=middleware,
         response_format=ToolStrategy(SpecialistReport),
         context_schema=RuntimeModelContext,
         checkpointer=checkpointer,

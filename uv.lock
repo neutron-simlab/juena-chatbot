@@ -1432,6 +1432,7 @@ name = "juena"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1465,11 +1466,12 @@ services = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "httpx-sse" },
-    { name = "juena-core", extras = ["ui", "mcp", "sandbox"], git = "https://github.com/neutron-simlab/juena-core.git?rev=0e90214c1da91df10845e5a0c425f1c7c3394a3c" },
+    { name = "juena-core", extras = ["ui", "mcp", "sandbox"], git = "https://github.com/neutron-simlab/juena-core.git?rev=b9f9a0a6df91013ff111107f0dd87f52e481003b" },
     { name = "juena-rag", extras = ["client"], git = "https://github.com/neutron-simlab/juena-rag.git?rev=db98edd752967a48ef49fd61f7ee53ad47bcc23c" },
     { name = "juena-rag", extras = ["serve", "ingest"], marker = "extra == 'services'", git = "https://github.com/neutron-simlab/juena-rag.git?rev=db98edd752967a48ef49fd61f7ee53ad47bcc23c" },
     { name = "langchain" },
@@ -1494,7 +1496,7 @@ provides-extras = ["services", "dev"]
 [[package]]
 name = "juena-core"
 version = "1.0.0"
-source = { git = "https://github.com/neutron-simlab/juena-core.git?rev=0e90214c1da91df10845e5a0c425f1c7c3394a3c#0e90214c1da91df10845e5a0c425f1c7c3394a3c" }
+source = { git = "https://github.com/neutron-simlab/juena-core.git?rev=b9f9a0a6df91013ff111107f0dd87f52e481003b#b9f9a0a6df91013ff111107f0dd87f52e481003b" }
 dependencies = [
     { name = "anyio" },
     { name = "deepagents" },

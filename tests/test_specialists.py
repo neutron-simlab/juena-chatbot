@@ -133,7 +133,8 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     assert created["agent_kwargs"]["model"] is model
     assert created["agent_kwargs"]["tools"][:-1] == list(tools)
     assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
-    assert created["agent_kwargs"]["middleware"] is middleware
+    assert created["agent_kwargs"]["middleware"][1:] == middleware
+    assert type(created["agent_kwargs"]["middleware"][0]).__name__ == "PersonalToolsMiddleware"
     assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"
     assert "protected_tool_names" not in created["middleware_kwargs"]
     assert created["agent_kwargs"]["context_schema"] is RuntimeModelContext
@@ -301,7 +302,8 @@ def test_neutron_specialist_owns_fixed_model_and_runtime(
     assert created["agent_kwargs"]["model"] is model
     assert created["agent_kwargs"]["tools"][:-1] == list(tools)
     assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
-    assert created["agent_kwargs"]["middleware"] is middleware
+    assert created["agent_kwargs"]["middleware"][1:] == middleware
+    assert type(created["agent_kwargs"]["middleware"][0]).__name__ == "PersonalToolsMiddleware"
     assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"
     assert created["agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert spec["name"] == neutron_agent.NEUTRON_RESEARCH_SPECIALIST_NAME

@@ -210,7 +210,7 @@ cmd_env() { ## Create .env from env.example if it does not exist
         echo ".env already exists; leaving it alone"
     else
         cp env.example .env
-        echo "Created .env from env.example -- add your Blablador API key (BLABLADOR_API_KEY)"
+        echo "Created .env from env.example -- set JUENA_SECRET_KEY and RAG_BLABLADOR_API_KEY; add personal chat keys in My profile"
     fi
 }
 

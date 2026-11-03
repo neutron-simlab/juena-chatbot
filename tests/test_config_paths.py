@@ -17,8 +17,8 @@ def _load_config_snapshot(extra_env: dict[str, str] | None = None) -> dict[str, 
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     env["JUENA_ENV_PATH"] = str(REPO_ROOT / ".env.test.empty")
     env["OPENAI_API_KEY"] = "test-key"
-    env["DEFAULT_PROVIDER"] = "openai"
-    env["FALLBACK_PROVIDER"] = "openai"
+    env["DEFAULT_PROVIDER"] = "blablador"
+    env["FALLBACK_PROVIDER"] = "blablador"
     env["LANGSMITH_TRACING"] = "false"
     env["LANGFUSE_TRACING"] = "false"
     env["ENVIRONMENT"] = "development"
@@ -57,10 +57,10 @@ sandbox = sandbox_settings()
 print("JSON::" + json.dumps({
     "database_url": global_config.DATABASE_URL,
     "blablador_default_model": global_config.BLABLADOR_DEFAULT_MODEL,
-    "context7_api_key": global_config.CONTEXT7_API_KEY,
+    "context7_api_key": getattr(global_config, "CONTEXT7_API_KEY", None),
     "context7_mcp_url": global_config.CONTEXT7_MCP_URL,
     "context7_timeout_seconds": global_config.CONTEXT7_TIMEOUT_SECONDS,
-    "tavily_api_key": global_config.TAVILY_API_KEY,
+    "tavily_api_key": getattr(global_config, "TAVILY_API_KEY", None),
     "internal_api_url": global_config.JUENA_API_INTERNAL_URL,
     "public_url": global_config.JUENA_PUBLIC_URL,
     "ui_public_url": global_config.UI_PUBLIC_URL,
@@ -160,8 +160,8 @@ def test_production_requires_public_https_configuration() -> None:
             "PYTHONPATH": str(REPO_ROOT / "src"),
             "JUENA_ENV_PATH": str(REPO_ROOT / ".env.test.empty"),
             "OPENAI_API_KEY": "test-key",
-            "DEFAULT_PROVIDER": "openai",
-            "FALLBACK_PROVIDER": "openai",
+            "DEFAULT_PROVIDER": "blablador",
+            "FALLBACK_PROVIDER": "blablador",
             "LANGSMITH_TRACING": "false",
             "LANGFUSE_TRACING": "false",
             "ENVIRONMENT": "production",
@@ -223,8 +223,8 @@ def _run_config(extra_env: dict[str, str], code: str) -> subprocess.CompletedPro
             "PYTHONPATH": str(REPO_ROOT / "src"),
             "JUENA_ENV_PATH": str(REPO_ROOT / ".env.test.empty"),
             "OPENAI_API_KEY": "test-key",
-            "DEFAULT_PROVIDER": "openai",
-            "FALLBACK_PROVIDER": "openai",
+            "DEFAULT_PROVIDER": "blablador",
+            "FALLBACK_PROVIDER": "blablador",
             "ENVIRONMENT": "development",
             "AUTH_DEV_BYPASS": "false",
             "LANGSMITH_TRACING": "false",
