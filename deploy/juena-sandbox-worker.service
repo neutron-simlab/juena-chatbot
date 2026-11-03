@@ -3,18 +3,28 @@ Description=JüNA rootless Podman sandbox worker
 After=podman.socket
 Requires=podman.socket
 
-# Deliberately not ordered against JüNA: the worker only needs Postgres, and
-# JüNA reports the sandbox unavailable whenever this unit is not running.
-
 [Service]
 Type=simple
-# Install in juena-sandbox's user manager, with loginctl enable-linger.
+# Installed by ./juena prod sandbox-setup in the dedicated user's manager.
+# Only this trusted worker receives the rootless socket. Generated-code
+# containers receive neither the socket nor this environment file.
 EnvironmentFile=/etc/juena/sandbox-worker.env
-Environment=SANDBOX_PODMAN_URI=unix://%t/podman/podman.sock
-WorkingDirectory=/opt/juena/juena-chatbot
-ExecStart=/opt/juena/juena-chatbot/.venv/bin/python -m juena_core.sandbox.worker
+ExecStart=/usr/bin/podman run --runtime=crun --rm --pull=never --name juena-sandbox-worker \
+    --userns=keep-id --user=%U:%G --network=host --read-only \
+    --cap-drop=ALL --security-opt=no-new-privileges --memory=512m --pids-limit=256 \
+    --tmpfs=/tmp:rw,nosuid,nodev,size=128m \
+    --volume=%t/podman/podman.sock:%t/podman/podman.sock \
+    --volume=${SANDBOX_WORKSPACE_ROOT}:${SANDBOX_WORKSPACE_ROOT} \
+    --env-file=/etc/juena/sandbox-worker.env \
+    --env=SANDBOX_PODMAN_URI=unix://%t/podman/podman.sock \
+    --env=PYTHONDONTWRITEBYTECODE=1 \
+    --entrypoint=/app/.venv/bin/python localhost/juena-worker:current \
+    -m juena_core.sandbox.worker
+ExecStop=/usr/bin/podman stop --time=45 juena-sandbox-worker
+ExecStopPost=-/usr/bin/podman rm --force juena-sandbox-worker
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=90
 Delegate=yes
 # Group-writable so JüNA (running as root in its container) and the worker
 # share the workspace tree through the juena-sandbox group.

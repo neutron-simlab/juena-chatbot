@@ -15,12 +15,11 @@ from fastapi import HTTPException
 from saml2 import BINDING_HTTP_POST, BINDING_HTTP_REDIRECT
 from saml2.client import Saml2Client
 from saml2.config import SPConfig
-from saml2.metadata import create_metadata_string
 from saml2.sigver import verify_redirect_signature
 
 from juena.core.config import global_config
+from juena.server.auth.sp_metadata import PERSISTENT_NAME_ID_FORMAT, render_metadata_xml, sp_settings
 
-PERSISTENT_NAME_ID_FORMAT = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
 logger = logging.getLogger(__name__)
 
 
@@ -95,48 +94,19 @@ class SamlService:
                 raise RuntimeError("SAML_IDP_METADATA_CERT_FILE does not exist")
             remote_metadata["cert"] = metadata_cert
 
-        settings = {
-            "entityid": global_config.SAML_SP_ENTITY_ID,
-            "xmlsec_binary": global_config.XMLSEC_BINARY,
-            "key_file": global_config.SAML_SP_KEY_FILE,
-            "cert_file": global_config.SAML_SP_CERT_FILE,
-            "verify_ssl_cert": True,
-            "http_client_timeout": 10,
-            "metadata": {"remote": [remote_metadata]},
-            "service": {
-                "sp": {
-                    "signing_algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
-                    "digest_algorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
-                    "endpoints": {
-                        "assertion_consumer_service": [
-                            (global_config.SAML_SP_ACS_URL, BINDING_HTTP_POST),
-                        ],
-                        "single_logout_service": [
-                            (global_config.SAML_SP_SLS_URL, BINDING_HTTP_REDIRECT),
-                            (global_config.SAML_SP_SLS_URL, BINDING_HTTP_POST),
-                        ],
-                    },
-                    "allow_unsolicited": False,
-                    "authn_requests_signed": True,
-                    "logout_requests_signed": True,
-                    "want_response_signed": True,
-                    "want_assertions_signed": True,
-                    "name_id_format": PERSISTENT_NAME_ID_FORMAT,
-                },
-            },
-        }
-        if global_config.SAML_ORGANIZATION_NAME:
-            settings["organization"] = {
-                "name": [(global_config.SAML_ORGANIZATION_NAME, "en")],
-                "display_name": [(global_config.SAML_ORGANIZATION_NAME, "en")],
-                "url": [(global_config.SAML_ORGANIZATION_URL, "en")],
-            }
-        if global_config.SAML_CONTACT_EMAIL:
-            settings["contact_person"] = [{
-                "given_name": global_config.SAML_CONTACT_NAME,
-                "email_address": [global_config.SAML_CONTACT_EMAIL],
-                "contact_type": "technical",
-            }]
+        settings = sp_settings(
+            entity_id=global_config.SAML_SP_ENTITY_ID,
+            acs_url=global_config.SAML_SP_ACS_URL,
+            sls_url=global_config.SAML_SP_SLS_URL,
+            cert_file=global_config.SAML_SP_CERT_FILE,
+            key_file=global_config.SAML_SP_KEY_FILE,
+            xmlsec_binary=global_config.XMLSEC_BINARY,
+            organization_name=global_config.SAML_ORGANIZATION_NAME,
+            organization_url=global_config.SAML_ORGANIZATION_URL,
+            contact_name=global_config.SAML_CONTACT_NAME,
+            contact_email=global_config.SAML_CONTACT_EMAIL,
+        )
+        settings["metadata"] = {"remote": [remote_metadata]}
         config = SPConfig()
         config.load(settings)
         for source in config.metadata.metadata.values():
@@ -180,12 +150,17 @@ class SamlService:
                 BINDING_HTTP_POST,
                 outstanding=dict(outstanding),
             )
+            # Extracting session info also rejects responses with no validated
+            # authentication assertion (for example, a wrong Destination).
+            session_info = response.session_info() if response is not None else None
         except Exception as exc:
             raise SamlAuthenticationError("SAML response validation failed") from exc
-        if response is None or not response.is_authenticated():
+        # PySAML2 validates signatures, status and assertion bindings inside
+        # parse_authn_request_response. Its AuthnResponse has no
+        # is_authenticated() method; a missing result means validation failed.
+        if session_info is None:
             raise SamlAuthenticationError("SAML response is not authenticated")
 
-        session_info = response.session_info()
         name_id = session_info.get("name_id")
         subject = str(getattr(name_id, "text", "") or name_id or "").strip()
         subject_format = str(getattr(name_id, "format", "") or "")
@@ -220,7 +195,7 @@ class SamlService:
         )
 
     def metadata_xml(self) -> bytes:
-        return create_metadata_string(None, config=self.config)
+        return render_metadata_xml(self.config)
 
     def prepare_logout(self, subject: str) -> SamlLogoutMessage | None:
         """Return the Redirect or POST message for SP-initiated logout."""

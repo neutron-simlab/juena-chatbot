@@ -1,0 +1,20 @@
+# Merge after compose.yml while IFFLogin registration is pending.
+# Only public metadata is mounted; no SAML private key enters nginx.
+services:
+  edge:
+    volumes:
+      - type: bind
+        source: ./nginx.metadata.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /etc/juena/tls
+        target: /etc/nginx/tls/juena
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /etc/juena/sp-metadata
+        target: /etc/nginx/sp-metadata
+        read_only: true
+        bind: {create_host_path: false}

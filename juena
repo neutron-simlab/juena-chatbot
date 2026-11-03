@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# JüNA development shortcuts.
+# JüNA development and production commands.
 #
 # These wrap the commands already documented in README.md, HOW-TO-ADD-REPO.md
 # and SAML-IFFLOGIN.md -- nothing here does anything those files do not.
-# Server operations require explicit `prod-*` commands and a separate env file.
+# Server operations use `prod <command>` and a separate env file.
 #
 # Run `juena help` for the command list, `juena install` to put it on PATH.
 
@@ -45,6 +45,8 @@ LANGFUSE_URL="http://localhost:3000"
 
 # Production reads its settings from a file outside the repo.
 PROD_ENV_FILE="${PROD_ENV_FILE:-/etc/juena/juena.env}"
+PROD_PROXY_MODE="${PROD_PROXY_MODE:-auto}"
+PROD_EDGE_DIR="${PROD_EDGE_DIR:-/etc/juena-edge}"
 
 # Host-side DSN for the integration tests. Matches the development defaults in
 # env.example; override in the environment if you changed them. The integration
@@ -691,30 +693,186 @@ cmd_sp_metadata() { ## Print SP metadata (the document to register with the FZJ 
 # ---------------------------------------------------------------------------
 
 configure_production_compose() {
-    [ -f "$PROD_ENV_FILE" ] || die "missing server environment: $PROD_ENV_FILE"
-    COMPOSE_PROD=(docker compose -f docker-compose.yml --profile server --env-file "$PROD_ENV_FILE")
+    [ -r "$PROD_ENV_FILE" ] \
+        || die "cannot read server environment: $PROD_ENV_FILE. On this VM run sudo ./juena prod <command>."
+    case "$PROD_PROXY_MODE" in
+        auto)
+            if [ -d "$PROD_EDGE_DIR" ]; then PROD_PROXY_MODE=shared
+            else PROD_PROXY_MODE=standalone; fi ;;
+        shared|standalone) ;;
+        *) die "PROD_PROXY_MODE must be auto, shared or standalone." ;;
+    esac
+    # Stable project/volume names even when called from a different checkout.
+    COMPOSE_PROD=(docker compose -p juena-chatbot -f docker-compose.yml)
+    if [ "$PROD_PROXY_MODE" = shared ]; then
+        COMPOSE_PROD+=(-f docker-compose.shared.yml)
+    else
+        COMPOSE_PROD+=(--profile server)
+    fi
+    COMPOSE_PROD+=(--env-file "$PROD_ENV_FILE")
     # Ask Compose to parse quoting and precedence without sourcing shell code.
-    if "${COMPOSE_PROD[@]}" config --environment | grep -qx 'LANGFUSE_TRACING=true'; then
+    PROD_SETTINGS="$("${COMPOSE_PROD[@]}" config --environment)" \
+        || die "invalid production Compose configuration"
+    if [ "$(production_setting LANGFUSE_TRACING false)" = true ]; then
         COMPOSE_PROD+=(-f docker-compose.tracing.yml)
     fi
 }
 
-cmd_prod_config() { ## Validate server configuration (use --quiet to avoid printing secrets)
+production_setting() {
+    local value
+    value="$(printf '%s\n' "$PROD_SETTINGS" | awk -v key="$1" \
+        'index($0, key "=") == 1 {sub(/^[^=]*=/, ""); print; exit}')"
+    printf '%s\n' "${value:-${2:-}}"
+}
+
+configure_shared_gateway() {
+    local name identifier previous
+    for name in compose.yml compose.juena.yml nginx.with-juena.conf; do
+        [ -r "$PROD_EDGE_DIR/$name" ] || die "missing shared gateway configuration: $PROD_EDGE_DIR/$name"
+    done
+    COMPOSE_EDGE=(docker compose -p juena-edge -f "$PROD_EDGE_DIR/compose.yml")
+    COMPOSE_EDGE_FULL=("${COMPOSE_EDGE[@]}" -f "$PROD_EDGE_DIR/compose.juena.yml")
+    identifier="$("${COMPOSE_EDGE[@]}" ps -q edge)"
+    [ -n "$identifier" ] || die "the shared gateway is not running; check the independent juena-edge project first"
+    previous="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$identifier")"
+    COMPOSE_EDGE_PREVIOUS=("${COMPOSE_EDGE[@]}")
+    case "$previous" in
+        "$PROD_EDGE_DIR/compose.yml") ;;
+        "$PROD_EDGE_DIR/compose.yml,$PROD_EDGE_DIR/compose.metadata.yml")
+            COMPOSE_EDGE_PREVIOUS+=(-f "$PROD_EDGE_DIR/compose.metadata.yml") ;;
+        "$PROD_EDGE_DIR/compose.yml,$PROD_EDGE_DIR/compose.juena.yml")
+            COMPOSE_EDGE_PREVIOUS+=(-f "$PROD_EDGE_DIR/compose.juena.yml") ;;
+        *) die "unrecognized running gateway configuration; leaving it unchanged: $previous" ;;
+    esac
+}
+
+production_https_ready() {
+    local url
+    url="$(production_setting JUENA_PUBLIC_URL)"
+    case "$url" in https://*) ;; *) return 1 ;; esac
+    curl --fail --silent --show-error --max-time 10 "${url%/}/health" >/dev/null \
+        && curl --fail --silent --show-error --max-time 10 "${url%/}/_stcore/health" >/dev/null
+}
+
+activate_shared_gateway() {
+    local attempt
+    # Test the installed TLS keys/config without taking port 443 or changing
+    # the running gateway. The app has already passed its API/UI health checks.
+    "${COMPOSE_EDGE_FULL[@]}" run --rm --no-deps edge nginx -t || return 1
+    if "${COMPOSE_EDGE_FULL[@]}" up -d --no-deps --pull never edge; then
+        for attempt in {1..15}; do
+            if production_https_ready; then return 0; fi
+            sleep 2
+        done
+    fi
+    echo "Gateway activation failed; restoring its previous Compose configuration." >&2
+    "${COMPOSE_EDGE_PREVIOUS[@]}" up -d --no-deps --pull never edge \
+        || die "gateway restoration failed; inspect the juena-edge project immediately"
+    return 1
+}
+
+cmd_prod_config() { ## Validate server configuration; --show prints resolved settings, including secrets
     configure_production_compose
+    if [ "${1:-}" = --show ]; then shift
+    elif [ "$#" -eq 0 ]; then set -- --quiet; fi
     "${COMPOSE_PROD[@]}" config "$@"
 }
 
-cmd_prod_up() { ## Start the server stack and HTTPS gateway
+cmd_prod_build() { ## Build the production app image from this checkout
     configure_production_compose
-    if "${COMPOSE_PROD[@]}" config --environment | grep -qx 'LANGFUSE_TRACING=true'; then
+    echo "Building from $REPO_ROOT"
+    if [ "$#" -eq 0 ]; then set -- juena-chatbot; fi
+    "${COMPOSE_PROD[@]}" build "$@"
+}
+
+cmd_prod_up() { ## Build/start production; enable shared routing after app health checks
+    configure_production_compose
+    [ "$(production_setting ENVIRONMENT production)" = production ] \
+        || die "prod up requires ENVIRONMENT=production"
+    [ "$(production_setting AUTH_DEV_BYPASS false)" = false ] \
+        || die "prod up requires AUTH_DEV_BYPASS=false"
+    if [ "$PROD_PROXY_MODE" = shared ]; then
+        # Explicit service names could accidentally enable the disabled gateway.
+        [ "$#" -eq 0 ] || die "shared prod up takes no extra arguments"
+        case "$(production_setting JUENA_PUBLIC_URL)" in
+            https://*) ;; *) die "shared prod up requires an HTTPS JUENA_PUBLIC_URL" ;;
+        esac
+        configure_shared_gateway
+    fi
+    if [ "$(production_setting LANGFUSE_TRACING false)" = true ]; then
         ensure_tracing_network
     fi
-    "${COMPOSE_PROD[@]}" up -d --build --wait --wait-timeout 900 "$@"
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    if [ "$(production_setting SANDBOX_ENABLED false)" = true ]; then
+        production_worker_installed || die "run './juena prod sandbox-setup' before enabling sandbox execution"
+    fi
+    production_worker_stop
+    echo "Deploying from $REPO_ROOT ($PROD_PROXY_MODE proxy; $PROD_ENV_FILE)"
+    if [ "$PROD_PROXY_MODE" = shared ]; then
+        "${COMPOSE_PROD[@]}" up -d --build --wait --wait-timeout 900 juena-chatbot \
+            || die "app startup failed; shared gateway configuration was not changed. See 'juena prod logs'."
+        activate_shared_gateway \
+            || die "shared gateway checks failed; inspect 'juena prod ps' and the gateway logs"
+    else
+        "${COMPOSE_PROD[@]}" up -d --build --wait --wait-timeout 900 "$@"
+    fi
+    if [ "$(production_setting SANDBOX_ENABLED false)" = true ]; then
+        production_worker_start
+    fi
+    echo "JüNA  $(production_setting JUENA_PUBLIC_URL)"
 }
 
 cmd_prod_down() { ## Stop the server Compose project, retaining its volumes
     configure_production_compose
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    production_worker_stop
     "${COMPOSE_PROD[@]}" down "$@"
+}
+
+cmd_prod_ps() { ## Show production services and the independent shared gateway
+    configure_production_compose
+    "${COMPOSE_PROD[@]}" ps "$@"
+    if [ "$PROD_PROXY_MODE" = shared ]; then
+        docker compose -p juena-edge -f "$PROD_EDGE_DIR/compose.yml" ps
+    fi
+}
+
+cmd_prod_logs() { ## Follow production app logs; optionally name another service
+    configure_production_compose
+    if [ "$#" -eq 0 ]; then set -- juena-chatbot; fi
+    "${COMPOSE_PROD[@]}" logs -f "$@"
+}
+
+cmd_prod_health() { ## Check public HTTPS API and UI health
+    configure_production_compose
+    production_https_ready || die "production HTTPS health check failed"
+    echo "API and UI are healthy."
+}
+
+cmd_prod_doctor() { ## Report live RAG contents and sandbox readiness without secrets
+    configure_production_compose
+    if command -v podman >/dev/null 2>&1; then podman --version
+    else echo "Host: Podman is not installed"; fi
+    if id juena-sandbox >/dev/null 2>&1; then echo "Host: juena-sandbox account exists"
+    else echo "Host: juena-sandbox account is not installed"; fi
+    "${COMPOSE_PROD[@]}" exec -T juena-chatbot python - < "$REPO_ROOT/src/juena/deployment/doctor.py"
+}
+
+cmd_prod_sandbox_setup() { ## Install rootless execution, verify a PNG job, then enable it
+    configure_production_compose
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    setup_production_sandbox
+}
+
+cmd_prod_sandbox_test() { ## Run a disposable plotting job through the real worker
+    configure_production_compose
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    production_sandbox_check
+}
+
+cmd_prod_sandbox_logs() { ## Show the dedicated sandbox worker's journal
+    source "$REPO_ROOT/deploy/sandbox-production.sh"
+    production_worker_user journalctl --user -u juena-sandbox-worker.service --no-pager --full -n 100 "$@"
 }
 
 cmd_prod_repos_ingest() { ## Ingest with the server environment, then re-pin running clones
@@ -754,9 +912,10 @@ cmd_install() { ## Symlink this script into a bin directory on PATH
 # The help text is generated from the `##` comments above, so a new command is
 # documented by defining it -- there is no second list to keep in sync.
 cmd_help() { ## Show this help
-    echo "JüNA development shortcuts"
+    echo "JüNA development and production commands"
     echo
     echo "  usage: juena <command> [args...]"
+    echo "         juena prod <command> [args...] (prod-<command> also works)"
     echo
     # Only the command name gets underscores rewritten -- descriptions may
     # legitimately contain them (PROD_ENV_FILE).
@@ -770,6 +929,12 @@ cmd_help() { ## Show this help
 main() {
     local command="${1:-help}"
     shift || true
+
+    if [ "$command" = prod ]; then
+        if [ "$#" -eq 0 ] || [ "$1" = help ]; then cmd_help; return; fi
+        command="prod-$1"
+        shift
+    fi
 
     # Commands are typed with dashes; the functions use underscores.
     local fn="cmd_${command//-/_}"

@@ -1,0 +1,14 @@
+# Stage 2 only: merge after compose.yml once the JueNA TLS certificate is installed.
+services:
+  edge:
+    volumes:
+      - type: bind
+        source: ./nginx.with-juena.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /etc/juena/tls
+        target: /etc/nginx/tls/juena
+        read_only: true
+        bind: {create_host_path: false}

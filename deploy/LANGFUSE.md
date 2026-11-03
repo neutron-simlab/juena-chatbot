@@ -14,6 +14,23 @@ LangSmith is still available. The two have independent switches,
 `LANGFUSE_TRACING` and `LANGSMITH_TRACING`. If both are on, every run goes to
 both.
 
+## Linux development server
+
+The server template keeps tracing disabled. The pilot's increase to 12 GB of VM
+memory does not automatically enable Langfuse or increase service limits.
+Deploying a tracing stack is separate from fixing login, retrieval or sandbox
+execution; their normal operation does not require it.
+
+For an existing approved Langfuse service, set the tracing URL and credentials
+in `/etc/juena/juena.env`, then use `sudo ./juena prod up`. That launcher adds the
+tracing network overlay when `LANGFUSE_TRACING=true`, in both shared and
+standalone gateway modes. It does not install or start Langfuse itself. The
+`langfuse-up` commands below manage the separate local development stack and
+its development credentials; there is no `prod langfuse-up` command.
+
+See [SERVER.md](SERVER.md) for capacity and installed configuration, and the
+exposure requirements below before provisioning a server tracing instance.
+
 ## Development
 
 ```bash

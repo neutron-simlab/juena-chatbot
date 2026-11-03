@@ -321,5 +321,9 @@ def _post_logout_redirect(relay_state: str | None) -> RedirectResponse:
 async def service_provider_metadata() -> Response:
     return Response(
         content=_require_saml_service().metadata_xml(),
-        media_type="application/samlmetadata+xml",
+        media_type="text/xml",
+        headers={
+            "Content-Disposition": 'inline; filename="metadata.xml"',
+            "Cache-Control": "no-cache",
+        },
     )

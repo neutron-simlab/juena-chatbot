@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import cast
 
 from juena.indexing.repo_manager import RepoManager
 from juena.indexing.rag_index import RagVectorIndex
 from juena.tools import repo_search
+
+
+def test_existing_catalogue_tool_sees_first_ingestion_without_rebuilding() -> None:
+    rows = []
+    manager = SimpleNamespace(repo_ids=["jscatter"], get_config=lambda _: None)
+    index = SimpleNamespace(catalogue=lambda: list(rows))
+    tool = next(tool for tool in repo_search.build_code_chat_tools(manager, index)
+                if tool.name == "list_indexed_repositories")
+    assert json.loads(tool.invoke({})) == []
+    rows.append({"repo_id": "jscatter", "chunks": 1676})
+    assert json.loads(tool.invoke({}))[0]["chunks"] == 1676
 
 
 class _FanOutStub:

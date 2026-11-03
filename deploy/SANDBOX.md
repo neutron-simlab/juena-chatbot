@@ -6,9 +6,11 @@ rootless Podman. That table is the only channel between the two: there is no
 message broker, so there is no second state to reconcile. The application
 container has no Podman socket, and generated containers have no network.
 
-See [`DOCS/SANDBOX.md`](../DOCS/SANDBOX.md) for the implemented architecture,
-threat model, artifact lifecycle, verification layers, and production gates.
-This file is the host installation and operations runbook.
+This file covers worker operation, filesystem behavior and rollout checks.
+Use [SERVER.md](SERVER.md#install-the-worker) for installation and
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-plot-script-exists-but-no-png-was-generated)
+for the failures encountered on the development server. These tracked guides
+are usable from a fresh checkout without the ignored internal `DOCS/` notes.
 
 This is a single-host design. The Postgres volume survives process and container
 restarts, but loss of the host is loss of the service. It does not claim
@@ -38,31 +40,40 @@ The worker PID and log are under `.sandbox/`.
 
 `SANDBOX_CONCURRENCY` must be the same for JüNA and the worker: JüNA admits that
 many active jobs before reporting `busy`, and the worker runs that many
-containers. The Compose files, launcher and 8 GiB server template default to one.
+containers. The Compose files, launcher and server template default to one;
+the pilot retains that limit after its increase to 12 GB of VM memory.
 
 ## Production host
 
-1. Install rootless Podman and create the unprivileged `juena-sandbox` user.
-2. Configure subordinate UID/GID ranges and enable lingering for that user.
-3. Build `juena-sandbox:latest` as that user.
-4. Enable its user Podman socket with `systemctl --user enable --now podman.socket`.
-5. Put the shared workspace on a quota-capable filesystem:
+Use `sudo ./juena prod sandbox-setup` from the deployed checkout. The approved
+pilot setup installs prerequisites and the dedicated account, builds/imports
+the execution image, installs the protected worker environment and user service,
+creates the optional queue, and enables execution only after a real PNG smoke
+test. It runs the trusted worker in a rootless container with the application's
+exact dependency image and the host network for loopback Postgres. Generated
+commands run in separate containers with no network or container socket.
+See [SERVER.md](SERVER.md#install-the-worker) for the steps, backups and failure
+handling. No host virtualenv or administrator-home access is needed.
+The same setup works with either the shared or standalone gateway.
 
-   ```bash
-   install -d -o juena-sandbox -g juena-sandbox -m 2770 \
-     /var/lib/juena-sandbox/workspaces
-   ```
+`prod sandbox-test` repeats the queued plot check; `prod sandbox-logs` reads the
+worker journal. `prod doctor` reports the application switch, queue table and
+worker's database lock. `prod up` synchronizes worker dependencies with the
+deployed app; `prod down` stops the worker before its database. Setting
+`SANDBOX_ENABLED=false` and running `prod up` leaves the worker stopped.
+Changes to the installed worker unit, generated-code image, database connection
+or worker limits require `prod sandbox-setup` again. Ordinary `prod up` reuses
+the installed unit and worker environment while updating its application image.
 
-6. Apply a hard 5 GB project/directory quota per workspace. The application
-   size checks and per-file `fsize` limit do not replace a live filesystem quota.
-7. Copy `deploy/sandbox-worker.env.example` to `/etc/juena/sandbox-worker.env`,
-   set the database credentials, and make it readable only by the service
-   account and administrator.
-8. Install `deploy/juena-sandbox-worker.service` in the service account's
-   `~/.config/systemd/user/`, reload its user manager, and enable the unit with
-   `systemctl --user enable --now juena-sandbox-worker` only after JüNA has
-   created the database schema. The unit uses that user's `%t/podman/podman.sock`.
-   Follow [SERVER.md](SERVER.md) for the pinned host environment and permissions.
+After setup, `prod doctor` should report all three sandbox flags as true. The
+worker lock proves connection, not execution; run `prod sandbox-test` for the
+queued PNG check, then test delivery of a plot through a new browser chat.
+The Files panel and script writing remain available when execution is disabled.
+
+The setup preserves the existing workspace filesystem and does not add hard
+quotas. Application size checks and the per-file `fsize` limit are not a hard
+per-workspace quota. Provision and verify that independently for broader rollout;
+the smoke test does not establish it.
 
 ## Shared workspace ownership
 
@@ -78,6 +89,17 @@ Three processes touch the workspace tree, so its ownership has to be deliberate:
 The setgid mode `2770` is what makes this work: files JüNA creates as root still
 inherit the `juena-sandbox` group, so the worker and the sandbox container can
 read and replace them. The systemd unit sets `UMask=0007` for the same reason.
+Production setup uses `crun` for the worker and execution containers, so the
+runtime can enter the app-owned scratch directory as the configured job user.
+The worker receives `SANDBOX_OCI_RUNTIME=crun`; `runc 1.2.2` fails its earlier
+working-directory check on these restricted directories. Keep the `2770`/`0660`
+workspace modes rather than broadening access to conversation files.
+
+The parent `/var/lib/juena-sandbox` uses `0711` to allow remapped UIDs to
+traverse it during rootless mount setup. This does not permit listing or writing
+that parent, and does not change access to the restricted child directories.
+Worker commands start from `/` to avoid inheriting the administrator's private
+checkout. See the [permission failure explanations](TROUBLESHOOTING.md#rootless-worker-setup-failures-encountered).
 
 Set `SANDBOX_WORKSPACE_HOST_ROOT` to the host path,
 `SANDBOX_WORKSPACE_ROOT=/sandbox-workspaces` in JüNA, and the host path as
@@ -103,9 +125,10 @@ Set `SANDBOX_WORKSPACE_HOST_ROOT` to the host path,
 - Worker failure does not stop chat startup; sandbox calls report
   `sandbox unavailable`.
 
-## Production gate
+## Broader rollout acceptance
 
-Keep `SANDBOX_ENABLED=false` until these checks pass on the target host:
+The approved pilot setup enables execution after its targeted smoke test. It
+does not establish all of the following acceptance criteria on the target host:
 
 1. A tenant completes a job and a second concurrent job for that tenant is busy.
 2. With the one-slot pilot, another tenant also receives `busy` while that slot
@@ -130,7 +153,9 @@ Deploy the API, UI, and host worker from matching versions of `juena-core`.
 Stop the old worker before upgrading: its cleanup loop deletes whole idle
 workspaces. Start the updated API and worker together after the update.
 The lockfile pins the same published core commit for the container and worker.
-Run `uv sync --frozen --no-dev` in `juena-chatbot` before restarting the host worker.
+The production launcher imports the running app image into rootless Podman and
+restarts the worker with that image. Native development still uses
+`uv sync --frozen --no-dev` before restarting its host worker.
 
 Keep the existing workspace root and identity secret unchanged. A stable secret of
 at least 32 characters is now required even when sandbox execution is disabled.
@@ -152,16 +177,17 @@ identifiers, so it requires a separate storage migration.
 
 The UI uses a 60/40 chat/files layout with a React folder browser and Ace editor.
 Docker builds core's frontend in a Node 24 stage; the running image needs no Node.
-For native installation, first run `npm ci && npm run build` in
-`juena-core/frontend/filesystem`, then reinstall core in chatbot's environment.
+Native installation needs Node.js 24 and npm on PATH so the pinned core package
+can build its frontend during `uv sync`; a sibling core checkout is unnecessary.
 Keep `UI_PUBLIC_URL` and `JUENA_PUBLIC_URL` browser-reachable on the same cookie
 host; their explicit origins configure credentialed CORS and browser-save origin
 validation. Production uses the shared public origin. Never pass
 `JUENA_API_INTERNAL_URL` or session tokens to the component.
 
-The production gateway must route browser filesystem requests to FastAPI. With
-the VM plan's unprefixed URLs, Caddy must forward `/auth/*`, `/chats/*`,
-`/threads/*/filesystem`, and `/threads/*/filesystem/*`; other paths, including
+The production gateway must route browser filesystem requests to FastAPI. Both
+shipped nginx configurations forward `/auth`, `/chats`, `/threads`, `/artifacts`
+and `/research` paths, `/health` and agent streaming/resume paths to FastAPI.
+The `/threads` routing includes all filesystem requests. Other paths, including
 `/_stcore/*`, go to Streamlit. Forwarding only `/auth/*` is insufficient. On
 OpenShift (or a gateway using the same convention), route `/api/*` to FastAPI
 and set `JUENA_PUBLIC_URL=https://<host>/api`, with `UI_PUBLIC_URL=https://<host>`.

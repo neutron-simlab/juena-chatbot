@@ -1,48 +1,148 @@
 # Image build record
 
-One entry per accepted `juena-chatbot` image, newest first.
+Build and deployment evidence, newest first. Each entry states whether only
+the build passed or deployment/runtime acceptance was completed. Historical
+entries describe the state at their date; use the newest entry for pilot status.
 
-## Why this file exists
+## Current build provenance
 
-`juena-core` is not fetched from a package index. It is the sibling directory
-`../juena-core`, declared in `pyproject.toml` as:
+Build from the chatbot checkout alone. `pyproject.toml` and `uv.lock` pin
+published Git revisions of `juena-core` and `juena-rag`; the Docker build supplies
+Node.js 24 for core's packaged frontend. Sibling repositories are not required.
+The older entries below describe the source layout used at their build dates.
 
-```toml
-[tool.uv.sources]
-juena-core = { path = "../juena-core" }
-```
-
-`uv.lock` fixes the exact version of every dependency downloaded from the
-internet, and it can verify those downloads by checksum. It cannot do that for a
-directory on this machine: a local folder has no fixed checksum, because
-anyone can edit it between one build and the next. So the lock file proves
-nothing about which core source went into an image.
-
-Two facts close that gap, and this file is where they are written down:
-
-- **the core commit** the build copied, together with the fact that core's
-  working tree had no uncommitted edits at the time. A dirty tree means the
-  image contains code that exists nowhere in version control;
-- **the image ID**, the checksum Docker computes over the finished image. Given
-  the same two, anyone can tell whether a running container is the image this
-  record describes.
-
-This is deliberately lighter than a published package with a signature, and it
-is enough for one person building on one machine. **It stops being enough the
-day a second person builds an image**, because then "the sibling directory" is a
-different directory. That is the point at which core moves to a git tag and both
-sources switch together.
-
-## How to add an entry
+Record the chatbot commit and any modified build inputs, the dependency pins,
+lockfile hash, local image ID and resolved base-image digests. The image ID is
+not a registry manifest digest. Preserve the reviewed image for deployment and
+rollback; a successful build alone does not prove application/SAML readiness.
 
 ```bash
-git -C ../juena-core status --porcelain   # must print nothing
-git -C ../juena-core rev-parse HEAD       # the core commit
-git rev-parse HEAD                        # this repository's commit
-./juena build
-docker image inspect juena-chatbot:latest --format '{{.Id}}'
-shasum -a 256 uv.lock
+git status --short
+git rev-parse HEAD
+sha256sum uv.lock
+# Use the reviewed production environment; this command builds only the app.
+sudo ./juena prod build
+sudo docker image inspect juena-chatbot:dev-server --format '{{.Id}} {{.Os}}/{{.Architecture}} {{.Size}}'
 ```
+
+---
+
+## 2026-11-03 — auth, retrieval and sandbox recovery
+
+The fixes and deployment documentation are maintained on
+`fix/portable-production-auth-sandbox`, based on chatbot commit
+`cce102ed1ba2f1ad15d0b492f5db369336a6511a`. The implementation is recorded in
+commit `1a18ba4`; the pilot had been deployed with local changes before that
+commit. Do not identify its image with the older image ID recorded below;
+record the final commit and running image ID at the next deployment.
+Core/RAG pins remain `0e90214c1da91df10845e5a0c425f1c7c3394a3c` and
+`db98edd752967a48ef49fd61f7ee53ad47bcc23c`.
+
+| Area | Evidence and status |
+| --- | --- |
+| Host capacity | User increased the VM allocation to 12 GB; a subsequent host check showed about 11 GiB total RAM. Container limits and one sandbox slot remain conservative. |
+| IFFLogin | SP registration and metadata trust were confirmed. ACS failed with `Signature missing for assertion`; the signed-Response policy and PySAML2 callback were fixed. The user subsequently reported the issue resolved. The complete browser acceptance sequence remains unrecorded. |
+| Repository discovery | Initial diagnostics found jscatter indexed but no configured/cloned repositories. After the application-root/registry-path fix, diagnostics loaded all eight IDs and found all eight local clones. |
+| Retrieval contents | The user's 18:03 UTC diagnostic reported jscatter with 1,676 chunks. Ingestion of datreat, mdanse, sasview, sasmodels, sasdata, silx and vitess was subsequently started. Later output showed tokenizer download completion and an embedding batch of 12,361 chunks; final counts for the seven are not yet recorded. |
+| Sandbox | The user's 18:03 UTC diagnostic reported `enabled=true`, `jobs_table_exists=true`, and `worker_connected=true`, with Podman 4.9.3 and the dedicated account installed. This establishes the reported app/queue/connection state, not browser delivery of a plot. |
+| Gateway | The shared gateway serves JueNA alongside eLabFTW. The launcher also supports standalone mode; SAML, repository and worker fixes are independent of gateway selection. |
+
+Worker setup fixes address the inherited private checkout directory, traversal
+of `/var/lib/juena-sandbox` by remapped UIDs, and `runc 1.2.2` failing to enter
+app-owned scratch directories. Setup now starts account commands from `/`, sets
+only the parent to the explicitly approved `0711`, and selects `crun` for the
+worker and generated jobs. It retains restricted workspace permissions, imports
+the app's image, waits for readiness, and gates enablement on a queued PNG test
+before and after redeployment. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+Regression coverage includes signed SAML responses and alternate public origins,
+repository paths and tool availability, sandbox preflight/activation/rollback,
+and launcher lifecycle in both gateway modes. The branch review ran 154 passing
+tests in an isolated Python 3.12 environment using the pinned core source;
+three pgvector integration tests were skipped because no disposable test DSN
+was configured. Shell syntax, local documentation links and both Compose modes
+using the public example environment were also checked.
+These local tests do not substitute for a root lifecycle run or browser
+acceptance on another host.
+
+Remaining evidence to record:
+
+- All eight repositories listed with nonzero counts after ingestion completes.
+- A PNG generated and delivered through a new authenticated chat, plus Files
+  panel preview/download through the public gateway.
+- Signed-in identity, logout, repeat login, and IdP-initiated SLO behavior.
+- Reboot recovery, backup restoration and the broader sandbox acceptance checks
+  in [SANDBOX.md](SANDBOX.md#broader-rollout-acceptance).
+- Final chatbot commit, running app/worker image IDs and dedicated-server runtime
+  acceptance when that host is provisioned.
+
+## Historical records
+
+The entries below retain earlier build and migration evidence. Statements such
+as "worker disabled" or "registration pending" describe those earlier stages,
+not the current pilot. Former `.sandbox/server-setup` helpers and sibling-source
+build layouts are not required by today's launcher.
+
+## 2026-11-03 — application activation and native CLI
+
+The initial installer completed while the launcher was being updated. Public
+HTTPS checks returned API/UI health 200, metadata 200, login 303 and eLabFTW 302.
+The running image ID is recorded by the installer under its protected backup;
+it has not been independently read in this session. The old image ID below
+must not be treated as the current running image. Browser login/logout remains
+to be accepted.
+
+Ongoing deployment uses `sudo ./juena prod up` from the working source checkout.
+It builds that checkout with the protected installed environment; no source
+copy or temporary installer is involved. The shared Compose overlay and gateway
+templates are now in the repository. The initial `/opt` checkout is retained as
+an installation snapshot. The CLI update was checked with launcher tests and
+the real Compose model; a root lifecycle run through the updated CLI remains
+to be exercised by the operator.
+
+## 2026-11-03 — server image built from the chatbot checkout
+
+**Build passed; deployment/runtime acceptance pending.** The user supplied the
+completed Compose build output: all 27 steps finished, frozen dependency installs
+succeeded, and the runtime image was exported under the tag below. This assistant
+session cannot independently inspect the Docker daemon because sudo still
+requires a terminal password.
+
+| Field | Recorded value |
+| --- | --- |
+| Image tag | `juena-chatbot:dev-server` |
+| Image ID from build output | `sha256:03048a277102fe0a8a0c8a678931c48ee9f15165db7c2e38c571fbec809bc8e3` |
+| Chatbot checkout HEAD | `cce102ed1ba2f1ad15d0b492f5db369336a6511a` |
+| Core Git pin | `0e90214c1da91df10845e5a0c425f1c7c3394a3c` |
+| RAG Git pin | `db98edd752967a48ef49fd61f7ee53ad47bcc23c` |
+| `uv.lock` SHA-256 | `7cfbb09879cbb35ad627bb6cb729f1b7f4fcf9b428bae6a6405617d551521e54` |
+| Runtime/build Python base | `python:3.11-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd` |
+| Frontend Node base | `node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c` |
+| Build-tool image | `ghcr.io/astral-sh/uv:0.7.15@sha256:9653efd4380d5a0e5511e337dcfc3b8ba5bc4e6ea7fa3be7716598261d5503fa` |
+| Source of evidence | User-provided terminal build output, 2026-11-03 |
+
+At build time, the checkout had deployment documentation/template/nginx-comment
+edits under `deploy/`; those files are outside the application image's
+allowlisted inputs. Application build inputs then matched the recorded commit.
+Base-image identifiers above are the digests shown in that build output.
+
+**Subsequent source change, not in this image:** metadata registration preparation
+on 3 November extracted the SP configuration into
+`src/juena/server/auth/sp_metadata.py`, shared by the runtime and a standalone
+offline exporter. Rebuild the application image from the reviewed current
+checkout before starting it, and record the new image ID. Metadata-only nginx
+publication serves the already-generated public XML and does not run this image.
+Subsequent metadata work enables XML signatures with the existing SP key and
+inline XML response headers. The publisher uses only the existing image's
+`xmlsec1` binary for an isolated public-input signature check, without starting
+the application or requiring that image to contain the new source code.
+
+The user built from `/home/administrator/juena-chatbot` using the private staged
+environment with `docker compose -f docker-compose.yml --env-file
+.sandbox/server-setup/juena.env build juena-chatbot`. This creates the image only.
+Application startup, installed package/frontend inspection, database setup and
+real SAML/browser acceptance have not been established by this build. IFFLogin
+registration/trust/SP key policy and remaining runtime settings are still pending.
 
 ---
 

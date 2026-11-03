@@ -184,6 +184,8 @@ services:
       - FORWARDED_ALLOW_IPS=*
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       # Code-chat agent settings
+      - JUENA_APP_ROOT=/app
+      - REPO_CONFIG_PATH=/app/config/repositories.yaml
       - REPO_CACHE_DIR=/data/repos
     networks: [chatbot-network]
     depends_on:

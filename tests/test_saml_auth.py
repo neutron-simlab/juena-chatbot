@@ -24,9 +24,6 @@ class _Response:
     def __init__(self, *, name_id_format: str = PERSISTENT_NAME_ID_FORMAT) -> None:
         self.name_id_format = name_id_format
 
-    def is_authenticated(self) -> bool:
-        return True
-
     def session_info(self) -> dict:
         return {
             "name_id": SimpleNamespace(text="persistent-subject", format=self.name_id_format),
@@ -84,6 +81,14 @@ def test_saml_validation_errors_are_rejected_without_leaking_details() -> None:
     with pytest.raises(SamlAuthenticationError, match="validation failed") as exc:
         service.parse_response("tampered", {"request-1": "/"})
     assert "detailed" not in str(exc.value)
+
+
+def test_saml_missing_validation_result_is_rejected() -> None:
+    service = _service_with_client(
+        SimpleNamespace(parse_authn_request_response=lambda *args, **kwargs: None)
+    )
+    with pytest.raises(SamlAuthenticationError, match="not authenticated"):
+        service.parse_response("invalid", {"request-1": "/"})
 
 
 @pytest.mark.parametrize(
