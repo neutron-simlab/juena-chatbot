@@ -3,7 +3,7 @@
 # JüNA development and production commands.
 #
 # These wrap the commands already documented in README.md, HOW-TO-ADD-REPO.md
-# and SAML-IFFLOGIN.md -- nothing here does anything those files do not.
+# and deploy/SAML-IFFLOGIN.md -- nothing here does anything those files do not.
 # Server operations use `prod <command>` and a separate env file.
 #
 # Run `juena help` for the command list, `juena install` to put it on PATH.
@@ -682,7 +682,7 @@ cmd_health() { ## Check the API health endpoint
 }
 
 cmd_sp_metadata() { ## Print SP metadata (the document to register with the FZJ IdP)
-    # Returns 500 while AUTH_DEV_BYPASS is on: the bypass skips saml_lifespan,
+    # Returns 503 while AUTH_DEV_BYPASS is on: the bypass skips saml_lifespan,
     # so no SP is initialised. Unset it to produce real metadata.
     # Redirect to a file to hand it over: juena sp-metadata > sp-metadata.xml
     curl -fsS "http://localhost:${API_PORT}/auth/metadata"

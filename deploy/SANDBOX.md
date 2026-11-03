@@ -40,13 +40,13 @@ The worker PID and log are under `.sandbox/`.
 
 `SANDBOX_CONCURRENCY` must be the same for JüNA and the worker: JüNA admits that
 many active jobs before reporting `busy`, and the worker runs that many
-containers. The Compose files, launcher and server template default to one;
-the pilot retains that limit after its increase to 12 GB of VM memory.
+containers. The Compose files, launcher and server template default to one.
+Increase the slot count only after measuring capacity on the target host.
 
 ## Production host
 
-Use `sudo ./juena prod sandbox-setup` from the deployed checkout. The approved
-pilot setup installs prerequisites and the dedicated account, builds/imports
+Use `sudo ./juena prod sandbox-setup` from the deployed checkout. Setup
+installs prerequisites and the dedicated account, builds/imports
 the execution image, installs the protected worker environment and user service,
 creates the optional queue, and enables execution only after a real PNG smoke
 test. It runs the trusted worker in a rootless container with the application's
@@ -127,12 +127,12 @@ Set `SANDBOX_WORKSPACE_HOST_ROOT` to the host path,
 
 ## Broader rollout acceptance
 
-The approved pilot setup enables execution after its targeted smoke test. It
-does not establish all of the following acceptance criteria on the target host:
+Setup enables execution after its targeted smoke test. It does not establish
+all of the following acceptance criteria on the target host:
 
 1. A tenant completes a job and a second concurrent job for that tenant is busy.
-2. With the one-slot pilot, another tenant also receives `busy` while that slot
-   is occupied, without inserting a row.
+2. With the one-slot configuration, another tenant also receives `busy` while
+   that slot is occupied, without inserting a row.
 3. A second worker process exits without claiming anything.
 4. An endless job times out while other tenants continue.
 5. Killing the worker mid-job leaves no container and fails that job without

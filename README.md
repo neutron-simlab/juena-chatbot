@@ -35,9 +35,9 @@ development. See the guides below for indexing, worker setup, updates and shutdo
 | [Troubleshooting](deploy/TROUBLESHOOTING.md) | Login, repository discovery, indexing and sandbox fixes |
 | [Shared gateway](deploy/SHARED-PROXY.md) | JüNA alongside eLabFTW; dedicated servers use the server guide |
 | [Sandbox](deploy/SANDBOX.md) | Execution worker, workspace permissions and acceptance checks |
-| [IFFLogin](SAML-IFFLOGIN.md) | SAML configuration and browser acceptance |
+| [IFFLogin](deploy/SAML-IFFLOGIN.md) | SAML configuration and browser acceptance |
 | [Repository maintenance](HOW-TO-ADD-REPO.md) | Add repositories and keep their indexes current |
-| [Deployment record](deploy/BUILD-RECORD.md) | Build evidence, reported checks and outstanding acceptance |
+| [Deployment record](deploy/BUILD-RECORD.md) | How to record builds, validation and rollback evidence |
 | [Tracing](deploy/LANGFUSE.md) | Optional Langfuse integration |
 | [Local development](deploy/LOCAL-DEVELOPMENT.md) | Optional macOS, Linux and WSL setup for development/testing |
 

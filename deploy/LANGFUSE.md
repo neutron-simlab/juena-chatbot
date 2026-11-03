@@ -16,8 +16,8 @@ both.
 
 ## Linux development server
 
-The server template keeps tracing disabled. The pilot's increase to 12 GB of VM
-memory does not automatically enable Langfuse or increase service limits.
+The server template keeps tracing disabled. Increasing VM memory does not
+automatically enable Langfuse or increase service limits.
 Deploying a tracing stack is separate from fixing login, retrieval or sandbox
 execution; their normal operation does not require it.
 
