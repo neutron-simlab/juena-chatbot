@@ -68,8 +68,8 @@ if not session_token:
         )
         st.link_button("Sign in (development)", login_url, type="primary")
     else:
-        st.info("Sign in with your Forschungszentrum Jülich account to use JüNA.")
-        st.link_button("Sign in with FZJ", login_url, type="primary")
+        st.info("Sign in with iffLogin to use JüNA.")
+        st.link_button("Sign in with iffLogin", login_url, type="primary")
     st.stop()
 
 try:
