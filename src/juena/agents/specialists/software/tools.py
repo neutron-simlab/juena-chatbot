@@ -28,13 +28,15 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Extend the range only if needed for context."
     ),
     "grep": (
-        "Search for literal text, not regex, within a known file or directory. "
-        "Use separate calls for different strings: `foo|bar` searches for those "
-        "literal characters, not either name. Use for symbols, imports, configuration "
-        "keys, or call sites in a relevant file identified by retrieval or an exact "
-        "path supplied by the user or a skill. Do not use repository-wide grep as "
-        "a substitute for indexed retrieval. Works on virtual `/repos` and `/skills` paths; "
-        "shell grep cannot access those paths."
+        "Search for literal text, not regex, within the files your "
+        "search returned or an exact path supplied by the user or a skill. "
+        "Use it only for exact text you have already seen: a symbol, an "
+        "import, a configuration key, an error message. Use separate calls "
+        "for different strings: `foo|bar` searches for those literal "
+        "characters, not either name. If it finds nothing or too much, "
+        "search semantically again with the repository's own words instead "
+        "of guessing variants. Works on virtual `/repos` and `/skills` "
+        "paths; shell grep cannot access those paths."
     ),
     "glob": (
         "Find a filename pattern within a specific directory, for shared files or "

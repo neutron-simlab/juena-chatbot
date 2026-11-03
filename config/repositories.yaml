@@ -1,18 +1,21 @@
-# Repository registry for the code-chat agent.
-# Each entry describes one software project that the agent can search and answer
-# questions about.  Add new software by appending another block.
+# Repository registry for the code-chat agent -- the only list of JüNA's
+# repositories. JüNA clones from it, and `./juena repos-ingest` hands the same file
+# to `juena-rag ingest-repo`, which chunks and embeds from it. juena-rag keeps no
+# list of its own. Add new software by appending another block.
 #
 # Fields:
-#   id            – unique slug (used in API + vector store namespace)
+#   id            – unique slug (the repository's source id in juena-rag)
 #   name          – human-readable display name
 #   description   – short blurb shown to users / used in tool descriptions
 #   source.url    – Git clone URL (HTTPS or SSH)
 #   source.branch – branch to track (default: main)
-#   include_globs – file patterns to index (default: all text files)
+#   include_globs – file patterns to index
 #   exclude_globs – patterns to skip
 #   max_file_bytes– skip files larger than this (default: 512 KB)
-#   chunk_size    – characters per chunk for embedding (default: 1500)
-#   chunk_overlap – overlap between chunks (default: 200)
+#   chunk_size    – characters per chunk. Required: juena-rag has no default.
+#                   3000 was measured against 1500 and 6000 (juena-rag's
+#                   use-cases/code-repository/README.md, "How big should a chunk be?")
+#   chunk_overlap – overlap between chunks. Required
 #   docs_paths    – paths inside the repo treated as documentation
 
 repositories:
@@ -31,8 +34,8 @@ repositories:
   #     - "**/.git/**"
   #     - "**/__pycache__/**"
   #   max_file_bytes: 524288
-  #   chunk_size: 1500
-  #   chunk_overlap: 200
+  #   chunk_size: 3000
+  #   chunk_overlap: 400
   #   docs_paths:
   #     - "README.md"
   #     - "docs/"
@@ -75,10 +78,9 @@ repositories:
       - "**/*.a"
       - "**/*.so"
     max_file_bytes: 524288          # 512 KB
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
-      - "README.md"
       - "doc/"
 
   - id: jscatter
@@ -100,11 +102,13 @@ repositories:
       - "**/dist/**"
       - "**/build/**"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
+    # jscatter's documentation is README.rst and src/jscatter/doc/; it has no
+    # README.md and no docs/.
     docs_paths:
-      - "README.md"
-      - "docs/"
+      - "README.rst"
+      - "src/jscatter/doc/"
 
   - id: mdanse
     name: MDANSE
@@ -171,8 +175,8 @@ repositories:
       - "**/*.pyd"
       - "**/*.exe"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.md"
       - "CHANGELOG"
@@ -243,8 +247,8 @@ repositories:
       - "**/*.pyd"
       - "**/*.exe"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.md"
       - "INSTALL.md"
@@ -315,8 +319,8 @@ repositories:
       - "**/*.pyd"
       - "**/*.exe"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.rst"
       - "CHANGES.rst"
@@ -385,8 +389,8 @@ repositories:
       - "**/*.pyd"
       - "**/*.exe"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.md"
       - "docs/"
@@ -461,8 +465,8 @@ repositories:
       - "**/*.pyd"
       - "**/*.exe"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.rst"
       - "CHANGELOG.rst"
@@ -544,8 +548,8 @@ repositories:
       - "**/*.lib"
       - "**/*.ncmat"
     max_file_bytes: 524288
-    chunk_size: 1500
-    chunk_overlap: 200
+    chunk_size: 3000
+    chunk_overlap: 400
     docs_paths:
       - "README.md"
       - "Concepts/"

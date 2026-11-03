@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 STREAMLIT_PID=""
@@ -83,11 +83,13 @@ echo "Starting FastAPI server on port 8080..."
 python main.py &
 FASTAPI_PID=$!
 
+# Either server exiting ends the container so Docker can recover both. A
+# healthcheck alone would leave a dead UI beside a healthy API indefinitely.
 set +e
-wait "$FASTAPI_PID"
-FASTAPI_STATUS=$?
+wait -n "$FASTAPI_PID" "$STREAMLIT_PID"
+SERVER_STATUS=$?
 set -e
-
-kill "$STREAMLIT_PID" 2>/dev/null || true
+kill "$FASTAPI_PID" "$STREAMLIT_PID" 2>/dev/null || true
+wait "$FASTAPI_PID" 2>/dev/null || true
 wait "$STREAMLIT_PID" 2>/dev/null || true
-exit "$FASTAPI_STATUS"
+exit "$SERVER_STATUS"

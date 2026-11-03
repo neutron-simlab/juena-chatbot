@@ -52,3 +52,19 @@ def test_missing_url_skipped(tmp_path: Path):
     p.write_text(yaml.dump(cfg_data))
     configs = load_repo_configs(p)
     assert configs == []
+
+
+def test_every_shipped_repository_says_how_it_is_split():
+    """juena-rag ingests from this file and has no default chunk size.
+
+    `RepoConfig` above quietly fills in 1500/200 for an entry without them, while
+    the ingest refuses that entry -- so the file says them for every repository,
+    and the two never disagree about what was indexed.
+    """
+    shipped = Path(__file__).resolve().parents[1] / "config" / "repositories.yaml"
+    entries = yaml.safe_load(shipped.read_text())["repositories"]
+
+    unsplit = [e["id"] for e in entries if not {"chunk_size", "chunk_overlap"} <= set(e)]
+
+    assert entries
+    assert unsplit == []

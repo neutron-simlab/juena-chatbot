@@ -7,7 +7,7 @@ juena-rag owns ingestion, and this module now only clones and reports.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
+from types import SimpleNamespace
 
 import pytest
 
@@ -121,52 +121,81 @@ def test_no_repositories_configured_is_its_own_answer() -> None:
     assert survey.problems == ["no repositories configured"]
 
 
-def test_cloning_refreshes_every_repository_and_builds_no_index(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The half this pod still needs once search is remote."""
-    resolved: list[str] = []
+def _stub_manager(repo_ids: list[str], resolved: list[tuple[str, str | None]],
+                  broken: set[str] = frozenset()):
+    """A repository manager that records which revision each clone was asked for."""
 
     class StubRepoManager:
-        repo_ids: ClassVar[list[str]] = ["a", "b"]
-
         def __init__(self, _configs: object) -> None:
-            pass
+            self.repo_ids = repo_ids
 
-        def resolve_root(self, repo_id: str) -> Path:
-            resolved.append(repo_id)
+        def resolve_root(self, repo_id: str, revision: str | None = None) -> Path:
+            if repo_id in broken:
+                raise RuntimeError("git said no")
+            resolved.append((repo_id, revision))
             return Path("/tmp") / repo_id
 
         def current_revision(self, repo_id: str) -> str:
             return f"{repo_id}-sha"
 
+    return StubRepoManager
+
+
+def test_cloning_refreshes_every_repository_and_builds_no_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The half this pod still needs once search is remote."""
+    resolved: list[tuple[str, str | None]] = []
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
-    monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
+    monkeypatch.setattr(bootstrap, "RepoManager", _stub_manager(["a", "b"], resolved))
+    monkeypatch.setattr(bootstrap, "indexed_revisions", dict)
 
     revisions = bootstrap.clone_repositories()
 
-    assert resolved == ["a", "b"]
+    assert [repo_id for repo_id, _ in resolved] == ["a", "b"]
     assert revisions == {"a": "a-sha", "b": "b-sha"}
+
+
+def test_each_clone_is_checked_out_at_the_revision_juena_rag_indexed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """So a hit's line numbers are the lines of the file the model opens."""
+    resolved: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
+    monkeypatch.setattr(bootstrap, "RepoManager", _stub_manager(["a", "b"], resolved))
+    monkeypatch.setattr(bootstrap, "indexed_revisions", lambda: {"a": "a-indexed"})
+
+    bootstrap.clone_repositories()
+
+    # `b` is not in the store, so there is no revision to match: it follows its branch.
+    assert resolved == [("a", "a-indexed"), ("b", None)]
+
+
+def test_clones_follow_their_branches_when_juena_rag_cannot_say(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
+    monkeypatch.setattr(bootstrap, "RepoManager", _stub_manager(["a"], resolved))
+
+    def unreachable():
+        raise ConnectionError("cannot reach the juena-rag service")
+
+    monkeypatch.setattr(bootstrap, "build_search_index", lambda: SimpleNamespace(
+        indexed_revisions=unreachable))
+
+    assert bootstrap.clone_repositories() == {"a": "a-sha"}
+    assert resolved == [("a", None)]
 
 
 def test_a_repository_that_will_not_clone_does_not_stop_the_rest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class StubRepoManager:
-        repo_ids: ClassVar[list[str]] = ["broken", "fine"]
-
-        def __init__(self, _configs: object) -> None:
-            pass
-
-        def resolve_root(self, repo_id: str) -> Path:
-            if repo_id == "broken":
-                raise RuntimeError("git said no")
-            return Path("/tmp") / repo_id
-
-        def current_revision(self, repo_id: str) -> str:
-            return f"{repo_id}-sha"
-
+    resolved: list[tuple[str, str | None]] = []
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
-    monkeypatch.setattr(bootstrap, "RepoManager", StubRepoManager)
+    monkeypatch.setattr(
+        bootstrap, "RepoManager", _stub_manager(["broken", "fine"], resolved, {"broken"})
+    )
+    monkeypatch.setattr(bootstrap, "indexed_revisions", dict)
 
     assert bootstrap.clone_repositories() == {"fine": "fine-sha"}

@@ -196,6 +196,7 @@ def test_production_accepts_explicit_secure_public_origins() -> None:
     snapshot = _load_config_snapshot(
         {
             "ENVIRONMENT": "production",
+            "SAML_IDP_METADATA_CERT_FILE": "/data/saml/idp-metadata.crt",
             "JUENA_API_INTERNAL_URL": "http://api:8080",
             "JUENA_PUBLIC_URL": "https://juena.example.org",
             "SAML_SP_ENTITY_ID": "https://juena.example.org/auth/metadata",

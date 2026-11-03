@@ -39,13 +39,14 @@ dependencies = [
     "pysaml2==7.5.4",
     # The retrieval store, over HTTP. The `client` extra is httpx only -- no
     # database driver and no embedder, because the service does both.
-    "juena-rag[client] @ git+https://github.com/neutron-simlab/juena-rag.git",
+    "juena-rag[client]",
     # Self-hosted tracing, switched on by LANGFUSE_TRACING. The floor is the
     # version whose span propagation tests/test_langfuse_tracing.py verifies.
     "langfuse>=4.17,<5",
 ]
 
 [project.optional-dependencies]
+services = ["juena-rag[serve,ingest]"]
 dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
@@ -56,16 +57,10 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# A sibling directory, not a remote (D7). The lock fixes the third-party set;
-# it cannot hash a path dependency, so which core bytes are installed is
-# recorded instead -- a clean core tree and its commit SHA in the build record.
+# Published, immutable revisions; no sibling checkouts are needed.
 [tool.uv.sources]
-juena-core = { path = "../juena-core" }
-
-[tool.hatch.metadata]
-# juena-rag is installed straight from git -- it is not on PyPI, and hatchling
-# refuses a direct reference unless this says so.
-allow-direct-references = true
+juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "0e90214c1da91df10845e5a0c425f1c7c3394a3c" }
+juena-rag = { git = "https://github.com/neutron-simlab/juena-rag.git", rev = "db98edd752967a48ef49fd61f7ee53ad47bcc23c" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/juena"]

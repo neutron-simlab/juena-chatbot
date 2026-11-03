@@ -27,7 +27,7 @@ Two things follow from this that shape the implementation:
 
 ---
 
-## 2. What the IdP actually supports
+## 2. Historical IdP metadata snapshot
 
 Read directly from the live metadata on 5 August 2026.
 
@@ -47,15 +47,15 @@ Read directly from the live metadata on 5 August 2026.
 | Contacts published | `Organization`, plus `technical` and `support` `ContactPerson` |
 | Algorithms advertised | Digest and signing methods up to SHA-512, including `rsa-sha256` |
 
-Single Log-Out is advertised on both bindings, so Daniel's stated advantage is
-real and usable.
+Both Single Log-Out bindings were advertised in that snapshot. Current support
+and end-to-end behavior must be confirmed for this development SP.
 
 > **The values above are a snapshot taken on 5 August 2026 and the metadata
 > expires on 12 August 2026.** Two consequences. First, re-read the live
 > document before relying on any row in this table — a refreshed `idp.xml`
 > carries a new `validUntil` and may carry new certificates. Second, the roughly
 > one-week validity window is not a quirk of this snapshot but the IdP's normal
-> cadence, which makes §4.3 a release blocker rather than a nicety: a deployment
+> cadence, which requires periodic refresh: a deployment
 > that fetches metadata only at startup stops recognising the IdP mid-run, and
 > every login fails with no deploy to explain it.
 
@@ -71,7 +71,7 @@ real and usable.
 | SLO bindings | POST + Redirect | Both, on `/auth/sls` | ✅ |
 | IdP entity ID | as above | matches `SAML_IDP_METADATA_URL` | ✅ |
 
-Endpoint layout ([auth_endpoints.py](src/juena/server/auth_endpoints.py)):
+Endpoint layout ([auth_endpoints.py](src/juena/server/auth/endpoints.py)):
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -89,52 +89,34 @@ Endpoint layout ([auth_endpoints.py](src/juena/server/auth_endpoints.py)):
 
 ---
 
-## 4. Gaps found while verifying
+## 4. Implemented readiness work and remaining confirmations
 
-Four issues in our SP configuration, all confirmed against the installed
-`pysaml2==7.5.4`.
+The application explicitly configures RSA-SHA256 and SHA-256 under PySAML2's
+`service.sp` configuration, where the client reads them. Tests inspect the
+actual Redirect `SigAlg`, not just the configuration dictionary.
 
-### 4.1 We would sign with SHA-1
+Production requires `SAML_IDP_METADATA_CERT_FILE`. The remote metadata signature
+is verified against this certificate, and unsigned metadata is explicitly
+rejected (PySAML2 otherwise accepts unsigned metadata even when `cert` is set).
+TLS verification remains enabled. Obtain the trust certificate independently
+from IFFLogin; do not trust a certificate merely because the downloaded XML
+contains it.
 
-PySAML2 defaults to `rsa-sha1` signatures and `sha1` digests. The IdP
-advertises RSA-SHA256 and above. SHA-1 is deprecated and Shibboleth-family
-IdPs commonly reject it outright.
+`SAML_METADATA_REFRESH_SECONDS` defaults to six hours. Refresh keeps the existing
+client and its login/logout state, replaces verified metadata in-process, and
+retries failed fetches. Expired metadata blocks SAML operations. Startup requires
+fresh metadata and has no stale disk fallback. Coordinate metadata trust-anchor
+changes with the administrator; assertion-key changes arrive through verified
+metadata. Confirm the required refresh and rollover policy with IFFLogin.
 
-**Fix:** set `signing_algorithm` and `digest_algorithm` to the SHA-256 variants
-in the SP config. Both are valid PySAML2 configuration keys.
+Set `SAML_ORGANIZATION_NAME`, `SAML_ORGANIZATION_URL`, `SAML_CONTACT_NAME` and
+`SAML_CONTACT_EMAIL` to include the SP organization and technical contact.
+Email/display attributes are optional profile fields; confirm their exact wire
+names. Persistent NameID is required for identity.
 
-### 4.2 The IdP metadata signature is never verified
-
-The metadata is signed, but PySAML2's `parse_and_check_signature` begins with
-`if not self.cert: return True` — with no certificate configured, verification
-is **silently skipped**. Our config passes only `{"url": ...}`, so trust rests
-entirely on TLS.
-
-**Fix:** obtain the metadata signing certificate from Daniel and pass it as
-`cert` alongside the URL.
-
-### 4.3 Metadata expiry will break logins with no deploy to explain it
-
-`validUntil` sits about a week out, PySAML2 defaults to `check_validity=True`
-and **drops expired entities**, and `saml_lifespan` fetches the metadata
-**once at startup**. A container running past that timestamp stops recognising
-the IdP entirely and every login fails.
-
-**Fix:** periodic reload, or an MDQ endpoint if IFFLogin offers one.
-
-### 4.4 Attribute names are guesses
-
-The IdP metadata declares no attributes, so nothing confirms the wire names.
-`_first_attribute` in [saml_service.py](src/juena/server/saml_service.py)
-currently tries three spellings each for e-mail and display name.
-
-**Fix:** ask Daniel for the exact released attribute names.
-
-### 4.5 Our SP metadata omits organisation and contacts
-
-The IdP publishes `Organization` and two `ContactPerson` entries; federations
-usually expect the same in return. Our `SPConfig` sets neither, though PySAML2
-supports `organization` and `contact_person`.
+Real IFFLogin browser login, authenticated session, logout and repeat login are
+still required before declaring SAML ready. The historical snapshot above was
+not revalidated during this deployment work.
 
 ---
 
@@ -146,10 +128,12 @@ supports `organization` and `contact_person`.
 reachable from the user's browser**, not from inside Docker. SAML redirects the
 browser, so the address must resolve on the user's machine.
 
-Daniel is expected to provision the hostname and its TLS certificate. The
-production settings then are:
+You administer the Proxmox VM. Confirm hostname allocation and TLS issuance only
+where institutionally controlled; do not assume the IFFLogin administrator owns
+those services. Replace this example hostname with the agreed development host:
 
 ```bash
+SAML_IDP_METADATA_CERT_FILE=/data/saml/idp-metadata.crt
 SAML_SP_ENTITY_ID=https://juena.fz-juelich.de/auth/metadata
 SAML_SP_ACS_URL=https://juena.fz-juelich.de/auth/acs
 SAML_SP_SLS_URL=https://juena.fz-juelich.de/auth/sls
@@ -175,7 +159,7 @@ destination; in production it defaults to `JUENA_PUBLIC_URL`. See §5.2.
 ### 5.2 Both services must share one hostname
 
 `/auth/acs` sets `juena_session` with `path="/"` and **no `domain=`**
-([`_set_session_cookie`](src/juena/server/auth_endpoints.py#L53-L62)), so the
+([`_set_session_cookie`](src/juena/server/auth/endpoints.py#L53-L62)), so the
 cookie is host-only. Streamlit then reads it through `st.context.cookies`.
 
 Splitting the two across subdomains — FastAPI on `api.…`, Streamlit on
@@ -188,7 +172,7 @@ So both run behind `juena.fz-juelich.de`, split by path in the reverse proxy:
 
 | Path | Backend |
 | --- | --- |
-| `/auth/*`, `/chats/*`, `/agents`, `/repositories`, `/health`, `/{agent_id}/*` | FastAPI `:8080` |
+| `/auth/*`, `/chats/*`, `/threads/*`, `/artifacts/*`, `/research/*`, `/health`, and optional-agent `stream`, `stream_with_files`, `resume` paths | FastAPI `:8080` |
 | everything else, including `/_stcore/*` | Streamlit `:9501` |
 
 That is why `JUENA_PUBLIC_URL`, `UI_PUBLIC_URL`, and the SP base URL are the
@@ -293,45 +277,40 @@ Delete `AUTH_DEV_BYPASS` from the environment once the SP is registered.
 
 ---
 
-## 7. Questions outstanding for Daniel
+## 7. External confirmations
 
-1. **Signing algorithm** — confirm RSA-SHA256 + SHA-256 digest; does the IdP
-   reject SHA-1?
-2. **Metadata signing certificate** — cert or URL, so we can verify the signed
-   `idp.xml`.
-3. **Attribute names** — exact wire names released for e-mail and display name.
-4. **Persistent NameID** — released by default, or enabled per SP?
-5. **Metadata refresh** — expected polling cadence, or is there an MDQ endpoint?
-6. **Bindings** — confirm Redirect-out / POST-back for SSO and both bindings for
-   SLO are acceptable.
-7. **Registration process** — how to submit SP metadata on his side.
-8. **SP signing keypair** — does he issue one for `juena.fz-juelich.de`, or
-   should we generate a long-lived self-signed keypair and publish the public
-   half in our metadata? (See §5.3 — distinct from the TLS certificate.)
-9. **Hostname and TLS** — confirm `juena.fz-juelich.de` is what will be
-   provisioned, and that both services can sit behind it on one origin (§5.2).
+Ask IFFLogin about a separate development SP for an intranet/VPN-only hostname,
+metadata submission versus direct URL fetching, persistent NameID, optional
+email/display-name attribute names, RSA-SHA256/SHA-256, signed responses and
+assertions, Redirect-out/POST-back SSO, and front-channel SLO behavior.
+Obtain the metadata verification certificate, refresh/rollover procedure, SP
+keypair/lifetime policy, and pilot-user eligibility agreement.
+
+Confirm DNS, TLS termination/renewal, upstream institute/VPN rules and shared
+Blablador credentials only with whichever institutional team controls them.
+You own Docker, Podman, storage, systemd and the VM firewall on Proxmox.
+The complete questions and answer fields are in the local ignored
+`DOCS/DEV-SERVER-CHECKLIST.md`.
 
 ---
 
-## 8. Next steps
+## 8. Acceptance status
 
-**Blocked on Daniel:** items 3 and 4 — attribute names and persistent NameID
-behaviour — plus item 8, which decides where the SP keypair comes from. Nothing
-else in the list needs his reply to start.
+- [x] RSA-SHA256 signing and SHA-256 digests, checked on an actual Redirect.
+- [x] Verified signed metadata and production trust-certificate requirement.
+- [x] Periodic refresh preserving the client state, with expiry rejection.
+- [x] Configurable organization and technical contact in SP metadata.
+- [x] One HTTPS gateway for internal API/UI routes and public browser URLs.
+- [ ] Agree hostname, trust material, registration and eligibility with IFFLogin.
+- [ ] Real browser login, authenticated session, logout and repeat login.
+- [ ] Verify IdP-initiated SLO, certificate rollover and metadata refresh on the VM.
 
-**Blocked on infrastructure:** provisioning of `juena.fz-juelich.de` with TLS,
-and a reverse proxy routing both services onto that single origin (§5.2).
-
-**Can be done now:**
-
-- [ ] Pin SHA-256 signing and digest algorithms (§4.1)
-- [ ] Support a metadata signing certificate in the SP config (§4.2)
-- [ ] Add periodic IdP metadata refresh (§4.3)
-- [ ] Add `organization` and `contact_person` to the SP metadata (§4.5)
-- [x] Make the Streamlit backend URL configurable, internal vs public (§5.4)
-
-Once those land and the hostname exists, `GET /auth/metadata` produces the
-final document to hand over, and staged live login QA can begin.
+Logout verifies Redirect signatures or POST XML signatures before revoking
+sessions, correlates responses with pending requests, and can return either a
+redirect or a POST form. Actual IFFLogin interoperability is still pending.
+The local PySAML2 login/logout cache is in memory, so test logout after an app
+restart as part of the IdP agreement; durable local app sessions alone do not
+preserve the IdP's session index across process restarts.
 
 ---
 
@@ -339,6 +318,6 @@ final document to hand over, and staged live login QA can begin.
 
 - IdP metadata: <https://ifflogin.fz-juelich.de/saml/idp.xml>
 - PySAML2 configuration: <https://pysaml2.readthedocs.io/en/latest/howto/config.html>
-- SP implementation: [saml_service.py](src/juena/server/saml_service.py),
-  [auth_endpoints.py](src/juena/server/auth_endpoints.py)
+- SP implementation: [saml_service.py](src/juena/server/auth/saml.py),
+  [auth_endpoints.py](src/juena/server/auth/endpoints.py)
 - Settings: [config.py](src/juena/core/config.py), [env.example](env.example)
