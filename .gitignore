@@ -28,6 +28,8 @@ ENV/
 
 # Environment variables
 .env
+.env.before-profile.*
+.env.profile*
 .env.local
 .env.*.local
 

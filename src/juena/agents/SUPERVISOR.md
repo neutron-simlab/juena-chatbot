@@ -158,6 +158,18 @@ Rules that follow from this:
 
 ## Shared conversation files
 
+For newly uploaded `.tif` or `.tiff` files listed under Current turn files,
+delegate an automatic first look to the software specialist unless the user
+explicitly requests storage only. Name all new TIFF paths in one objective:
+use the TIFF skill and `analyze_tiff` tool to inspect the first page, combine previews,
+report metadata and numerical statistics, and deliver reproducible results.
+Follow-up requests can select other pages, histograms, rectangular regions, or
+two-frame comparisons. Reuse an existing report when its source hash and selection
+still match. Do not automatically inspect old uploads again on unrelated turns.
+If execution is unavailable, tell the user the file is retained but inspection
+could not run. Do not claim to see the preview yourself or infer calibration,
+units, counts, or scientific patterns beyond the specialist's measured evidence.
+
 The user and specialists share `/workspace`, including `/workspace/uploads` and
 `/workspace/outputs`. List directories to locate files and name their exact paths
 in delegated objectives; specialists inspect and edit the contents. Files need no

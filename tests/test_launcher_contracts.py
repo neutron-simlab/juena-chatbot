@@ -338,6 +338,93 @@ def test_profile_setup_keeps_original_when_complete_compose_validation_fails(tmp
     assert not list(tmp_path.glob("server.env.profile*"))
 
 
+def test_local_profile_setup_migrates_only_local_env_without_deployment(tmp_path: Path):
+    env, server, original = _profile_setup(tmp_path, {"BLABLADOR_API_KEY": "fake-old-rag"})
+    local = tmp_path / ".env"
+    local.write_text(original)
+    result = subprocess.run([str(tmp_path / "juena"), "profile-setup"], cwd="/", env=env, capture_output=True, text=True)
+    commands = (tmp_path / "commands").read_text().splitlines()
+    assert result.returncode == 0, result.stderr
+    assert "RAG_BLABLADOR_API_KEY='fake-old-rag'" in local.read_text()
+    assert "JUENA_SECRET_KEY=" in local.read_text()
+    assert server.read_text() == original
+    backup, = tmp_path.glob(".env.before-profile.*")
+    assert backup.read_text() == original
+    assert local.stat().st_mode & 0o777 == backup.stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob(".env.profile*"))
+    assert "fake-old-rag" not in result.stdout + result.stderr
+    assert not any(" up " in c or " stop " in c or "--profile server" in c for c in commands)
+
+
+def test_development_up_validates_compose_before_build_or_start(tmp_path: Path):
+    env = _launcher(tmp_path)
+    docker = tmp_path / "bin/docker"
+    docker.write_text(docker.read_text() + '\ncase "$*" in *"config --quiet"*) exit 1 ;; esac\n')
+    result = subprocess.run([str(tmp_path / "juena"), "up"], env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    commands = (tmp_path / "commands").read_text().splitlines()
+    assert len(commands) == 1 and commands[0].endswith("config --quiet")
+
+
+def test_development_up_can_use_already_built_images(tmp_path: Path):
+    env = _launcher(tmp_path)
+    result = subprocess.run([str(tmp_path / "juena"), "up", "--no-build"], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    commands = (tmp_path / "commands").read_text().splitlines()
+    assert commands[0].endswith("config --quiet")
+    up, = [command for command in commands if " up " in command]
+    assert "--no-build" in up and "--build" not in up.split()
+
+
+def test_development_worker_survives_launcher_process_group_cleanup(tmp_path: Path):
+    import json
+    import shlex
+    import signal
+
+    source = (ROOT / "juena").read_text()
+    start = source.index("start_sandbox_worker() {")
+    end = source.index("\nstop_sandbox_worker()", start)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    fake_uv.write_text('#!/usr/bin/env python3\nimport json,os,time\nprint(json.dumps({"pid":os.getpid(),"sid":os.getsid(0)}),flush=True)\ntime.sleep(60)\n')
+    fake_uv.chmod(0o755)
+    script = tmp_path / "start"
+    runtime = tmp_path / "runtime"
+    script.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+SANDBOX_RUNTIME_DIR=''' + shlex.quote(str(runtime)) + '''
+SANDBOX_WORKER_PID_FILE="$SANDBOX_RUNTIME_DIR/worker.pid"
+SANDBOX_WORKER_LOG_FILE="$SANDBOX_RUNTIME_DIR/worker.log"
+SANDBOX_WORKER_LIMITS_FILE="$SANDBOX_RUNTIME_DIR/limits"
+worker_is_running() { [ -s "$SANDBOX_WORKER_PID_FILE" ] && kill -0 "$(cat "$SANDBOX_WORKER_PID_FILE")" 2>/dev/null; }
+die() { echo "$*" >&2; exit 1; }
+''' + source[start:end] + '\nstart_sandbox_worker\n')
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    launcher = subprocess.Popen(["bash", str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    worker_pid = None
+    try:
+        stdout, stderr = launcher.communicate(timeout=10)
+        assert launcher.returncode == 0, stdout + stderr
+        worker_pid = int((runtime / "worker.pid").read_text())
+        info = json.loads((runtime / "worker.log").read_text())
+        assert info == {"pid": worker_pid, "sid": worker_pid}
+        try:
+            os.killpg(launcher.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        os.kill(worker_pid, 0)
+    finally:
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if launcher.poll() is None:
+            launcher.kill()
+            launcher.wait()
+
+
 def test_prod_doctor_uses_running_app_without_rebuild_or_secret_dump(tmp_path: Path) -> None:
     env = _production_launcher(tmp_path)
     diagnostic = tmp_path / "src/juena/deployment/doctor.py"

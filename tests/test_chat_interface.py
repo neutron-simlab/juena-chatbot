@@ -18,7 +18,7 @@ from unittest.mock import Mock
 import pytest
 
 from juena_core.schema.server import ChatMessage
-from juena_core.schema.upload_limits import CHAT_INPUT_MAX_CHARS, CHAT_INPUT_MAX_UPLOAD_MB
+from juena_core.schema.upload_limits import CHAT_INPUT_MAX_CHARS
 from app.starters import StarterPrompt as chat_interface_starter
 
 
@@ -301,11 +301,11 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, m
         key="chat_prompt",
         max_chars=CHAT_INPUT_MAX_CHARS,
         accept_file="multiple",
-        max_upload_size=CHAT_INPUT_MAX_UPLOAD_MB,
+        max_upload_size=64,
         file_type=[
-            "py", "js", "ts", "java", "c", "cpp", "rs", "go", "sh", "md", "txt",
-            "log", "json", "yaml", "yml", "toml", "ini", "cfg", "csv", "sql",
-            "html", "css", "xml", "ipynb",
+            "c", "cfg", "cpp", "css", "csv", "dat", "go", "html", "ini", "ipynb",
+            "java", "js", "json", "log", "md", "py", "rs", "sh", "sql", "tif",
+            "tiff", "toml", "ts", "txt", "xml", "yaml", "yml",
         ],
     )
     render_chat_input_styles_mock.assert_called_once_with()

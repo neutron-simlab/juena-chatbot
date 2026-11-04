@@ -16,6 +16,8 @@ RUN apt-get update \
         scipy==1.17.1 \
         seaborn==0.13.2 \
         sympy==1.14.0 \
+        tifffile==2025.5.10 \
+        imagecodecs==2025.3.30 \
         --requirement /tmp/repository-requirements.txt
 
 
@@ -24,7 +26,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MPLBACKEND=Agg \
-    MPLCONFIGDIR=/tmp/matplotlib
+    MPLCONFIGDIR=/tmp/matplotlib \
+    PYTHONPATH=/opt/juena-tools
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -32,11 +35,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/sandbox/ /usr/local/
+COPY src/juena/tools/analysis/ /opt/juena-tools/analysis/
 
 # Fail the image build if JScatter, its compiled extensions, or its recommended
-# headless GracePlot backend cannot produce a PNG. Then remove installers from
-# the runtime environment.
-RUN python -c "import pathlib, shutil; import jscatter; assert jscatter.version == '1.9.0.1'; assert shutil.which('gracebat'); plot = jscatter.GracePlot(headless=True); plot.save('/tmp/grace-smoke.png'); plot.exit(); assert pathlib.Path('/tmp/grace-smoke.png').stat().st_size > 0" \
+# headless GracePlot backend cannot produce a PNG. Wait for gracebat to finish
+# writing before checking its output; save/exit only flush the command queue.
+# Then remove installers from the runtime environment.
+RUN python -c "import pathlib, shutil; import jscatter; assert jscatter.version == '1.9.0.1'; assert shutil.which('gracebat'); plot = jscatter.GracePlot(headless=True); plot.save('/tmp/grace-smoke.png'); plot.exit(); assert plot.grace.wait(timeout=30) == 0; assert pathlib.Path('/tmp/grace-smoke.png').stat().st_size > 0" \
+    && python -c "from analysis.tiff import execute_request" \
+    && python -c "import numpy as np, tifffile, imagecodecs; assert tifffile.__version__ == '2025.5.10'; assert imagecodecs.__version__ == '2025.3.30'; a = np.array([[0, 65535]], dtype=np.uint16); tifffile.imwrite('/tmp/tiff-smoke.tif', a, compression='lzw'); np.testing.assert_array_equal(tifffile.imread('/tmp/tiff-smoke.tif'), a)" \
+    && rm -f /tmp/tiff-smoke.tif \
     && rm -f /tmp/grace-smoke.png \
     && chmod 1777 /tmp/matplotlib \
     && python -m pip uninstall -y pip setuptools wheel

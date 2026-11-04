@@ -18,10 +18,9 @@ from juena.clients.client import AgentClientError  # noqa: F401  page-level erro
 from juena_core.schema.server import ChatMessage
 from juena_core.schema.upload_limits import (
     CHAT_INPUT_MAX_CHARS,
-    CHAT_INPUT_MAX_UPLOAD_MB,
-    DEFAULT_TEXT_READABLE_FILE_TYPES,
     validate_attachments,
 )
+from juena.uploads import UPLOAD_POLICY
 from juena_core.ui.streaming import (
     ApprovalCard,
     render_pending_interrupt,
@@ -180,7 +179,8 @@ def _attachment_errors(attachments: list[Any]) -> list[str]:
         [
             (str(getattr(attachment, "name", "attachment")), getattr(attachment, "size", None))
             for attachment in attachments
-        ]
+        ],
+        upload_policy=UPLOAD_POLICY,
     )
 
 
@@ -193,8 +193,8 @@ def _chat_input_kwargs() -> dict[str, Any]:
         "key": "chat_prompt",
         "max_chars": CHAT_INPUT_MAX_CHARS,
         "accept_file": "multiple",
-        "max_upload_size": CHAT_INPUT_MAX_UPLOAD_MB,
-        "file_type": list(DEFAULT_TEXT_READABLE_FILE_TYPES),
+        "max_upload_size": UPLOAD_POLICY.max_binary_bytes // 1024**2,
+        "file_type": sorted(suffix.lstrip(".") for suffix in UPLOAD_POLICY.suffixes),
     }
 
 def render_chat_interface() -> None:

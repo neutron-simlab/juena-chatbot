@@ -131,8 +131,9 @@ def test_software_specialist_owns_fixed_model_and_runtime(
     ]
     assert created["backend_kwargs"]["repo_cache_root"] == repo_manager.cache_dir
     assert created["agent_kwargs"]["model"] is model
-    assert created["agent_kwargs"]["tools"][:-1] == list(tools)
-    assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
+    assert created["agent_kwargs"]["tools"][:len(tools)] == list(tools)
+    extra_names = [tool.name for tool in created["agent_kwargs"]["tools"][len(tools):]]
+    assert extra_names == (["ask_user", "analyze_tiff"] if can_execute else ["ask_user"])
     assert created["agent_kwargs"]["middleware"][1:] == middleware
     assert type(created["agent_kwargs"]["middleware"][0]).__name__ == "PersonalToolsMiddleware"
     assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"

@@ -32,6 +32,7 @@ from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
 from juena_core.sandbox.middleware import SandboxExecutionMiddleware
 from juena_core.sandbox.runtime import build_sandbox_backend, sandbox_enabled
 from juena.sandbox.software import repository_software_prompt
+from juena.tools.detector import analyze_tiff
 
 SOFTWARE_SPECIALIST_NAME = "software-specialist"
 SOFTWARE_SPECIALIST_DESCRIPTION = (
@@ -42,6 +43,8 @@ SOFTWARE_SPECIALIST_DESCRIPTION = (
     "what each is for, what is searchable -- including when the question also names "
     "neutron science, because it holds the only tools that can answer it. "
     "Delegate Python or shell execution, calculations, plots, and generated files here; "
+    "inspect uploaded detector TIFFs with the TIFF skill, including previews, histograms, "
+    "region statistics, and frame comparisons; "
     "when the sandbox is enabled, this specialist can execute them automatically in isolation."
 )
 SOFTWARE_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
@@ -153,6 +156,8 @@ def build_software_specialist(
     )
     if not unattended:
         specialist_tools.append(build_ask_user_tool(SOFTWARE_SPECIALIST_NAME))
+    if can_execute:
+        specialist_tools.append(analyze_tiff)
     middleware = build_specialist_middleware(
         backend=backend,
         summarizer_model=summarizer_model,

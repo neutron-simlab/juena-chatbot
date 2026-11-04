@@ -53,6 +53,11 @@ and keep it stable across restarts. Sign in to JüNA, open **My profile**, and a
 your personal Blablador key before chatting. Tavily and Context7 keys are optional.
 See [personal API keys](PERSONAL-API-KEYS.md) for setup and upgrade instructions.
 
+For an existing local `.env` from before personal API keys, run
+`./juena profile-setup` once. It moves the old shared Blablador key to the RAG
+setting, creates the encryption key if missing, and keeps a protected backup.
+It preserves an existing encryption key and dedicated RAG key.
+
 Leave the other settings as supplied. They already set up Blablador, the
 sandbox, disabled tracing and `AUTH_DEV_BYPASS=true`, which lets you sign in locally without
 setting up FZJ login. Use that only on your own development computer.

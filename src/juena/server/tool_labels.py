@@ -21,6 +21,7 @@ def _specialist(args: dict[str, Any]) -> str:
 
 
 JUENA_TOOL_LABELS: dict[str, ToolLabel] = {
+    "analyze_tiff": lambda args: f"Analyze detector TIFFs: {short(args.get('operation'))}",
     "search_code_semantic": lambda args: describe(
         f"Search the code of {_repo(args)}", quote(args.get("query")), sep=": "
     ),
