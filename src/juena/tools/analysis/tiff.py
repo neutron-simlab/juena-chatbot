@@ -109,7 +109,7 @@ def statistics(data):
     return result
 
 
-def display_limits(data, scale):
+def display_limits(data, scale, bounds=None):
     values = finite_values(data)
     excluded = 0
     if scale == "log":
@@ -117,11 +117,14 @@ def display_limits(data, scale):
         values = values[values > 0]
     if not values.size:
         return {"scale": scale, "low": None, "high": None, "excluded_nonpositive": excluded}
-    low, high = (float(v) for v in np.percentile(values, [1, 99]))
-    return {"scale": scale, "low": low, "high": high, "percentiles": [1, 99],
-            "clipped_below": int(np.count_nonzero(values < low)),
-            "clipped_above": int(np.count_nonzero(values > high)),
-            "excluded_nonpositive": excluded}
+    low, high = (float(v) for v in (np.percentile(values, [1, 99]) if bounds is None else bounds))
+    result = {"scale": scale, "low": low, "high": high,
+              "clipped_below": int(np.count_nonzero(values < low)),
+              "clipped_above": int(np.count_nonzero(values > high)),
+              "excluded_nonpositive": excluded}
+    if bounds is None:
+        result["percentiles"] = [1, 99]
+    return result
 
 
 def draw_plane(ax, data, title, limits):
@@ -202,6 +205,8 @@ def run(operation, inputs, *, pages=None, roi=None, scale="linear", output_dir=N
             common = {"scale": scale, "low": min(d["low"] for d in limits),
                       "high": max(d["high"] for d in limits)}
             report["shared_display"] = common
+            for data, info in zip(arrays, sources):
+                info["display"] = display_limits(data, scale, (common["low"], common["high"]))
     out = Path(output_dir) if output_dir else Path("/workspace/outputs") / f"tiff-{uuid4().hex[:10]}"
     out.mkdir(parents=True, exist_ok=False)
     columns = 3 if operation == "compare" else min(2, len(inputs))
@@ -210,13 +215,21 @@ def run(operation, inputs, *, pages=None, roi=None, scale="linear", output_dir=N
     try:
         if operation == "histogram":
             values = finite_values(arrays[0])
-            counts, edges = np.histogram(values, bins=100) if values.size else (np.zeros(100, dtype=int), np.linspace(0, 1, 101))
+            low, high = (float(values.min()), float(values.max())) if values.size else (0., 1.)
+            # Use float64 edges even for float32 pixels. Expand narrow ranges
+            # enough to give all 100 bins distinct edges without changing pixels.
+            padding = max(abs(low), abs(high)) * np.finfo(np.float64).eps * 100
+            if low == high:
+                padding = max(padding, .5)
+            if high - low < 2 * padding:
+                low, high = low - padding, high + padding
+            counts, edges = np.histogram(values, bins=np.linspace(low, high, 101))
             report["histogram"] = {"counts": counts.tolist(), "edges": edges.tolist(), "bins": 100}
             axes.flat[0].stairs(counts, edges)
             axes.flat[0].set(xlabel="raw pixel value", ylabel="finite pixels", title=f"{Path(inputs[0]).name}, page {pages[0]}")
         else:
             for ax, data, info in zip(axes.flat, arrays, sources):
-                draw_plane(ax, data, f"{Path(info['path']).name}, page {info['page']}", report.get("shared_display", info["display"]))
+                draw_plane(ax, data, f"{Path(info['path']).name}, page {info['page']}", info["display"])
             if operation == "roi":
                 axes.flat[0].add_patch(Rectangle((x0 - .5, y0 - .5), x1 - x0, y1 - y0, fill=False, edgecolor="red", linewidth=1))
             if operation == "compare":

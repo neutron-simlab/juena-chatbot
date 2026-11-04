@@ -88,6 +88,36 @@ def test_histogram_uses_original_values_and_accounts_for_every_finite_pixel(tmp_
     assert len(hist["edges"]) == 101
 
 
+@pytest.mark.parametrize("dtype,value", [("float32", 1e6), ("float32", 1e10),
+                                         ("float64", 1e20), ("float64", -1e20)])
+def test_constant_float_histograms_have_distinct_bins_and_preserve_pixels(tmp_path, dtype, value):
+    values = np.full((2, 2), value, dtype=dtype)
+    path = image(tmp_path, values)
+    report = tiff.run("histogram", [path], output_dir=tmp_path / "hist")
+    hist = report["histogram"]
+    edges = np.asarray(hist["edges"])
+    assert hist["bins"] == 100 and len(edges) == 101
+    assert np.isfinite(edges).all() and np.all(np.diff(edges) > 0)
+    assert sum(hist["counts"]) == 4 and np.count_nonzero(hist["counts"]) == 1
+    occupied = hist["counts"].index(4)
+    assert edges[occupied] <= float(values[0, 0]) <= edges[occupied + 1]
+    assert report["sources"][0]["statistics"]["min"] == float(values[0, 0])
+    assert report["sources"][0]["statistics"]["max"] == float(values[0, 0])
+    assert all(Path(path).is_file() for path in report["outputs"].values())
+    assert json.loads(Path(report["outputs"]["report"]).read_text()) == report
+
+
+def test_histogram_handles_a_float_range_narrower_than_one_hundred_ulps(tmp_path):
+    low = 1e20
+    high = np.nextafter(low, np.inf)
+    path = image(tmp_path, np.array([[low, high], [low, high]]))
+    report = tiff.run("histogram", [path], output_dir=tmp_path / "hist")
+    hist = report["histogram"]
+    assert sum(hist["counts"]) == 4
+    assert np.all(np.diff(hist["edges"]) > 0)
+    assert hist["edges"][0] <= low < high <= hist["edges"][-1]
+
+
 def test_roi_has_top_left_origin_and_exclusive_upper_bounds(tmp_path):
     path = image(tmp_path, np.arange(12, dtype=np.int16).reshape(3, 4))
     report = tiff.run("roi", [path], roi=[1, 0, 3, 2], output_dir=tmp_path / "roi")
@@ -108,6 +138,34 @@ def test_unsigned_comparison_is_signed_and_uses_shared_scales(tmp_path):
     different = image(tmp_path, np.zeros((3, 3), dtype=np.uint16), "different.tif")
     with pytest.raises(tiff.TiffError, match="equal-sized"):
         tiff.run("compare", [first, different])
+
+
+@pytest.mark.parametrize("scale", ["linear", "log"])
+def test_comparison_reports_clipping_against_the_rendered_shared_limits(tmp_path, monkeypatch, scale):
+    first = np.arange(100, dtype=np.float32).reshape(10, 10)
+    second = first + 1000
+    paths = [image(tmp_path, first, "a.tif"), image(tmp_path, second, "b.tif")]
+    rendered = []
+    draw_plane = tiff.draw_plane
+    def capture(ax, data, title, limits):
+        rendered.append(dict(limits))
+        return draw_plane(ax, data, title, limits)
+    monkeypatch.setattr(tiff, "draw_plane", capture)
+    report = tiff.run("compare", paths, scale=scale, output_dir=tmp_path / "compare")
+    common = report["shared_display"]
+    assert common["low"] == pytest.approx(.99 if scale == "linear" else 1.98)
+    assert common["high"] == pytest.approx(1098.01)
+    for index, source in enumerate(report["sources"]):
+        display = source["display"]
+        assert display == rendered[index]
+        assert display["low"] == common["low"] and display["high"] == common["high"]
+        assert "percentiles" not in display  # Shared bounds are not this plane's percentiles.
+    a, b = [source["display"] for source in report["sources"]]
+    assert (a["clipped_below"], a["clipped_above"]) == (1, 0)
+    assert (b["clipped_below"], b["clipped_above"]) == (0, 1)
+    assert a["excluded_nonpositive"] == (1 if scale == "log" else 0)
+    assert report["difference"]["display"] == rendered[2]
+    assert report["difference"]["display"]["scale"] == "linear"
 
 
 @pytest.mark.parametrize("kind", ["color", "complex", "float16", "ome", "multidimensional"])
