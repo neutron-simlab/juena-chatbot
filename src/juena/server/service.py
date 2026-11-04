@@ -34,6 +34,7 @@ from juena.server.auth.saml import saml_lifespan
 from juena.server.tool_labels import JUENA_TOOL_LABELS
 from juena.server.research.endpoints import router as research_router
 from juena.server.tracing import langfuse_lifespan, start_langfuse
+from juena.uploads import UPLOAD_POLICY
 
 # Imported for its side effect: the module self-registers the agent factory.
 # Importing *this* module has to be enough, because the process serving the API
@@ -84,6 +85,7 @@ app = create_app(
     invocation_guard=require_chat_credentials,
     invocation_error=credential_error_message,
     filesystem=get_filesystem(),
+    upload_policy=UPLOAD_POLICY,
     browser_origins=tuple(dict.fromkeys(
         f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
         for url in (global_config.UI_PUBLIC_URL, global_config.JUENA_PUBLIC_URL)
@@ -104,7 +106,7 @@ app = create_app(
     # tools in the activity log.
     stream_policy=StreamPolicy(
         custom_event_types=frozenset({"sandbox_status"}),
-        silent_tools=frozenset({"execute"}),
+        silent_tools=frozenset({"execute", "analyze_tiff"}),
         tool_labels=JUENA_TOOL_LABELS,
     ),
     # This block is prepended to the *supervisor's* turn, and the supervisor

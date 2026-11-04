@@ -1,0 +1,4 @@
+interface:
+  display_name: "Detector TIFF"
+  short_description: "Inspect detector TIFFs and explore pixel data"
+  default_prompt: "Use $tiff to inspect this detector image and produce reproducible previews and numerical results."

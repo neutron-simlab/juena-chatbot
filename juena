@@ -323,9 +323,20 @@ start_sandbox_worker() {
     fi
     rm -f "$SANDBOX_WORKER_PID_FILE"
 
-    PYTHONDONTWRITEBYTECODE=1 nohup uv run python -m juena_core.sandbox.worker \
-        >"$SANDBOX_WORKER_LOG_FILE" 2>&1 &
-    echo "$!" > "$SANDBOX_WORKER_PID_FILE"
+    # A new session keeps terminal/IDE process-group cleanup from stopping the
+    # worker after this short-lived launcher exits. nohup only ignores SIGHUP.
+    PYTHONDONTWRITEBYTECODE=1 python3 - "$SANDBOX_WORKER_LOG_FILE" > "$SANDBOX_WORKER_PID_FILE" <<'PY'
+import subprocess
+import sys
+
+with open(sys.argv[1], "wb") as log:
+    worker = subprocess.Popen(
+        ["uv", "run", "python", "-m", "juena_core.sandbox.worker"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+print(worker.pid)
+PY
 
     local attempt
     for attempt in {1..30}; do
@@ -591,9 +602,17 @@ report_langfuse_reachability() {
 
 cmd_up() { ## Start the full development stack (build if needed)
     require_env
-    if [ "$SANDBOX_ENABLED" = true ]; then prepare_sandbox; fi
+    "${COMPOSE_DEV[@]}" config --quiet
+    local build_option=--build arg
+    for arg in "$@"; do
+        if [ "$arg" = --no-build ]; then build_option=--no-build; fi
+    done
+    if [ "$SANDBOX_ENABLED" = true ]; then
+        if [ "$build_option" = --build ]; then prepare_sandbox
+        else configure_sandbox; fi
+    fi
     if [ "$(environment_value LANGFUSE_TRACING false)" = true ]; then ensure_tracing_network; fi
-    "${COMPOSE_DEV[@]}" up --build -d --wait --wait-timeout 900 --remove-orphans "$@"
+    "${COMPOSE_DEV[@]}" up "$build_option" -d --wait --wait-timeout 900 --remove-orphans "$@"
     if [ "$SANDBOX_ENABLED" = true ]; then
         wait_for_sandbox_stack
         start_sandbox_worker
@@ -778,21 +797,32 @@ cmd_prod_config() { ## Validate server configuration; --show prints resolved set
     "${COMPOSE_PROD[@]}" config "$@"
 }
 
+cmd_profile_setup() { ## Migrate local .env to personal keys and a dedicated RAG key
+    [ "$#" -eq 0 ] || die "usage: juena profile-setup"
+    require_env
+    profile_setup development "$REPO_ROOT/.env"
+}
+
 cmd_prod_profile_setup() { ## Prepare personal-key settings in the installed environment
     [ "$#" -eq 0 ] || die "usage: juena prod profile-setup"
-    [ -r "$PROD_ENV_FILE" ] && [ -w "$PROD_ENV_FILE" ] \
-        || die "cannot update $PROD_ENV_FILE; run sudo ./juena prod profile-setup"
+    profile_setup production "$PROD_ENV_FILE"
+}
+
+profile_setup() {
+    local profile_mode="$1" profile_env_file="$2"
+    [ -r "$profile_env_file" ] && [ -w "$profile_env_file" ] \
+        || die "cannot update $profile_env_file; run sudo ./juena prod profile-setup"
     # The full Compose file cannot be parsed until these settings exist. Let
     # Compose parse the old dotenv file using a minimal, non-running service.
     # Do not source it as shell code or print its resolved secrets.
     (
         umask 077
         local prepared settings backup
-        prepared="$(mktemp "$PROD_ENV_FILE.profile.XXXXXX")"
-        settings="$(mktemp "$PROD_ENV_FILE.profile-settings.XXXXXX")"
+        prepared="$(mktemp "$profile_env_file.profile.XXXXXX")"
+        settings="$(mktemp "$profile_env_file.profile-settings.XXXXXX")"
         trap 'rm -f "$prepared" "$settings"' EXIT
         env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
-            docker compose -p juena-profile-setup --env-file "$PROD_ENV_FILE" -f - config --format json \
+            docker compose -p juena-profile-setup --env-file "$profile_env_file" -f - config --format json \
             > "$settings" <<'YAML'
 services:
   settings:
@@ -802,7 +832,7 @@ services:
       RAG_BLABLADOR_API_KEY: ${RAG_BLABLADOR_API_KEY:-}
       JUENA_SECRET_KEY: ${JUENA_SECRET_KEY:-}
 YAML
-        python3 - "$PROD_ENV_FILE" "$settings" "$prepared" <<'PY'
+        python3 - "$profile_env_file" "$settings" "$prepared" <<'PY'
 import base64
 import json
 from pathlib import Path
@@ -851,13 +881,18 @@ target.write_text(f"{text}\nJUENA_SECRET_KEY='{key}'\nRAG_BLABLADOR_API_KEY='{ra
 PY
         # Validate both the selected gateway and the complete configuration
         # before replacing the installed file. A failure leaves it untouched.
-        env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
-            PROD_ENV_FILE="$prepared" PROD_PROXY_MODE="$PROD_PROXY_MODE" \
-            PROD_EDGE_DIR="$PROD_EDGE_DIR" "$REPO_ROOT/juena" prod config
-        backup="$(mktemp "$PROD_ENV_FILE.before-profile.XXXXXX")"
-        cp "$PROD_ENV_FILE" "$backup"
+        if [ "$profile_mode" = development ]; then
+            env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
+                "${COMPOSE_DEV[@]}" --env-file "$prepared" config --quiet
+        else
+            env -u BLABLADOR_API_KEY -u RAG_BLABLADOR_API_KEY -u JUENA_SECRET_KEY \
+                PROD_ENV_FILE="$prepared" PROD_PROXY_MODE="$PROD_PROXY_MODE" \
+                PROD_EDGE_DIR="$PROD_EDGE_DIR" "$REPO_ROOT/juena" prod config
+        fi
+        backup="$(mktemp "$profile_env_file.before-profile.XXXXXX")"
+        cp "$profile_env_file" "$backup"
         chmod 0600 "$backup" "$prepared"
-        mv "$prepared" "$PROD_ENV_FILE"
+        mv "$prepared" "$profile_env_file"
         echo "Personal-key configuration ready; protected previous configuration: $backup"
     )
 }

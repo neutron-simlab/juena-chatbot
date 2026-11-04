@@ -52,6 +52,10 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-mock>=3.15.1",
+    "tifffile==2025.5.10",
+    "imagecodecs==2025.3.30",
+    "matplotlib==3.10.8",
+    "numpy==2.4.2",
 ]
 
 [build-system]
@@ -60,7 +64,7 @@ build-backend = "hatchling.build"
 
 # Immutable revisions; publish new core commits before remote builds.
 [tool.uv.sources]
-juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "126c97226678a0c0590701690576e3a0e433134b" }
+juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "63e09b516a8747e27fde7efd63b56897104a07ed" }
 juena-rag = { git = "https://github.com/neutron-simlab/juena-rag.git", rev = "db98edd752967a48ef49fd61f7ee53ad47bcc23c" }
 
 [tool.hatch.build.targets.wheel]

@@ -5,6 +5,7 @@ from juena_core.server.streaming.tool_labels import describe_tool_call
 from juena.server.tool_labels import JUENA_TOOL_LABELS
 from juena.tools.repo_search import build_code_chat_tools
 from juena.tools.research import build_research_tools
+from juena.tools.detector import analyze_tiff
 
 
 def test_every_label_names_a_tool_juena_builds() -> None:
@@ -12,6 +13,7 @@ def test_every_label_names_a_tool_juena_builds() -> None:
     built = {tool.name for tool in build_code_chat_tools(None, None)}
     built |= {tool.name for tool in build_research_tools(["software-specialist"])}
     built.add("tavily_search")  # langchain-tavily's TavilySearch
+    built.add(analyze_tiff.name)
 
     assert set(JUENA_TOOL_LABELS) <= built
 
