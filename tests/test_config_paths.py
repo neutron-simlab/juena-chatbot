@@ -94,13 +94,10 @@ def test_postgres_is_not_silently_defaulted_outside_compose() -> None:
     assert snapshot["database_url"] is None
 
 
-def test_blablador_defaults_to_juwels_qwen() -> None:
+def test_blablador_defaults_to_hzdr_deepseek() -> None:
     snapshot = _load_config_snapshot()
 
-    assert snapshot["blablador_default_model"] == (
-        "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
-        "An excellent model from September 2026"
-    )
+    assert snapshot["blablador_default_model"] == "deepseek-v4.1-flash-at-hzdr"
 
 
 def test_blablador_default_model_can_be_overridden() -> None:

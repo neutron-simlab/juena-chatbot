@@ -95,7 +95,7 @@ services:
       # Compose DNS; the RAG service and its database are private.
       - JUENA_RAG_URL=http://juena-rag:8100
 
-      - BLABLADOR_DEFAULT_MODEL=${BLABLADOR_DEFAULT_MODEL:-90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - An excellent model from September 2026}
+      - BLABLADOR_DEFAULT_MODEL=${BLABLADOR_DEFAULT_MODEL:-deepseek-v4.1-flash-at-hzdr}
       # LLM Settings
       - MAX_TOKENS=${MAX_TOKENS:-10000}
       - TIMEOUT_SECONDS=${TIMEOUT_SECONDS:-60}

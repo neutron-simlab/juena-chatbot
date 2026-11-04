@@ -16,7 +16,7 @@ from juena.core.paths import repo_root
 from juena_core.schema.llm_models import BlabladorModelName as _BlabladorModelName
 
 # Keep the built-in default in step with the enum the UI filters against.
-_BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+_BLABLADOR_DEFAULT_MODEL_ID = _BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
 
 
 def _repo_data_dir(*parts: str) -> Path:
