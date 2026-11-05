@@ -47,7 +47,14 @@ def _import_chat_interface(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "juena_core.ui.chat_storage", fake_chat_storage)
     sys.modules.pop("app.chat_interface", None)
-    return importlib.import_module("app.chat_interface")
+    module = importlib.import_module("app.chat_interface")
+    monkeypatch.setattr(
+        module,
+        "get_stream_controller",
+        lambda: SimpleNamespace(active=False, thread_id=None),
+    )
+    monkeypatch.setattr(module, "render_running_response", Mock())
+    return module
 
 
 def test_render_starter_topics_returns_selected_prompt(monkeypatch) -> None:
@@ -140,8 +147,6 @@ def test_render_chat_interface_offers_starter_topics_on_empty_chat(monkeypatch) 
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=None),
         container=lambda: _DummyContext(),
         error=Mock(),
@@ -152,7 +157,7 @@ def test_render_chat_interface_offers_starter_topics_on_empty_chat(monkeypatch) 
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
     monkeypatch.setattr(chat_interface, "render_starter_topics", starter_mock)
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
@@ -183,8 +188,6 @@ def test_render_chat_interface_sends_selected_starter_topic(monkeypatch) -> None
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=None),
         container=lambda: _DummyContext(),
         error=Mock(),
@@ -199,7 +202,7 @@ def test_render_chat_interface_sends_selected_starter_topic(monkeypatch) -> None
         "render_starter_topics",
         Mock(return_value="What is the jscatter repository for?"),
     )
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
@@ -233,8 +236,6 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=None),
         container=lambda: _DummyContext(),
     )
@@ -243,7 +244,7 @@ def test_render_chat_interface_does_not_duplicate_intro_for_existing_history(mon
     monkeypatch.setattr(chat_interface, "render_header_with_logo", render_header_mock)
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
@@ -275,8 +276,6 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, m
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=chat_input_mock,
         container=lambda: _DummyContext(),
     )
@@ -287,7 +286,7 @@ def test_render_chat_interface_uses_attachment_enabled_chat_input(monkeypatch, m
     monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", Mock())
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+    monkeypatch.setattr(chat_interface, "start_response", Mock())
 
     chat_interface.render_chat_interface()
 
@@ -334,8 +333,6 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=submission),
         container=lambda: _DummyContext(),
         error=Mock(),
@@ -346,7 +343,7 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", render_chat_input_styles_mock)
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
     monkeypatch.setattr(chat_interface, "render_starter_topics", Mock(return_value=None))
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
@@ -357,7 +354,7 @@ def test_render_chat_interface_streams_attachments(monkeypatch) -> None:
     render_message_mock.assert_called_once_with(session_state.messages[0])
     stream_mock.assert_called_once()
     render_chat_input_styles_mock.assert_called_once_with()
-    assert stream_mock.call_args.args[:2] == ("please inspect", fake_st.empty.return_value)
+    assert stream_mock.call_args.args == ("please inspect",)
     assert stream_mock.call_args.kwargs["attachments"] == [attachment]
 
 
@@ -395,10 +392,6 @@ def test_a_new_turn_is_drawn_above_the_composer(monkeypatch) -> None:
         events.append(("composer",))
         return "fit the SANS data"
 
-    def chat_message(role):
-        events.append(("bubble", role, tuple(open_blocks)))
-        return _DummyContext()
-
     def render_message(message, **_kwargs):
         events.append(("message", message.content, tuple(open_blocks)))
 
@@ -418,8 +411,6 @@ def test_a_new_turn_is_drawn_above_the_composer(monkeypatch) -> None:
         "st",
         SimpleNamespace(
             session_state=session_state,
-            chat_message=chat_message,
-            empty=Mock(),
             chat_input=chat_input,
             container=container,
             error=Mock(),
@@ -428,14 +419,19 @@ def test_a_new_turn_is_drawn_above_the_composer(monkeypatch) -> None:
     monkeypatch.setattr(chat_interface, "render_header_with_logo", Mock())
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
     monkeypatch.setattr(chat_interface, "render_message", render_message)
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+    monkeypatch.setattr(
+        chat_interface,
+        "render_running_response",
+        lambda **_kwargs: events.append(("live_response",)),
+    )
+    monkeypatch.setattr(chat_interface, "start_response", Mock())
 
     chat_interface.render_chat_interface()
 
     assert events.index(("block", 0)) < events.index(("composer",))
     assert ("message", "Existing response", (0,)) in events
     assert ("message", "fit the SANS data", (0,)) in events
-    assert ("bubble", "assistant", (0,)) in events
+    assert events.index(("live_response",)) < events.index(("composer",))
 
 
 def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -> None:
@@ -459,8 +455,6 @@ def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=submission),
         container=lambda: _DummyContext(),
         error=Mock(),
@@ -471,14 +465,14 @@ def test_render_chat_interface_preserves_raw_math_in_user_message(monkeypatch) -
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
     monkeypatch.setattr(chat_interface, "render_message", render_message_mock)
     monkeypatch.setattr(chat_interface, "render_starter_topics", Mock(return_value=None))
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
     assert len(session_state.messages) == 1
     assert session_state.messages[0].content == submission
     render_message_mock.assert_called_once_with(session_state.messages[0])
-    assert stream_mock.call_args.args[:2] == (submission, fake_st.empty.return_value)
+    assert stream_mock.call_args.args == (submission,)
 
 
 @pytest.mark.parametrize(
@@ -516,8 +510,6 @@ def test_render_chat_interface_refuses_bad_uploads_without_touching_history(
     )
     fake_st = SimpleNamespace(
         session_state=session_state,
-        chat_message=lambda _role: _DummyContext(),
-        empty=Mock(),
         chat_input=Mock(return_value=SimpleNamespace(text="have a look", files=files)),
         container=lambda: _DummyContext(),
         error=error_mock,
@@ -528,7 +520,7 @@ def test_render_chat_interface_refuses_bad_uploads_without_touching_history(
     monkeypatch.setattr(chat_interface, "render_chat_input_styles", Mock())
     monkeypatch.setattr(chat_interface, "render_message", Mock())
     monkeypatch.setattr(chat_interface, "render_starter_topics", Mock(return_value=None))
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", stream_mock)
+    monkeypatch.setattr(chat_interface, "start_response", stream_mock)
 
     chat_interface.render_chat_interface()
 
@@ -564,8 +556,6 @@ def test_a_pending_interrupt_replaces_the_composer(monkeypatch) -> None:
         "st",
         SimpleNamespace(
             session_state=session_state,
-            chat_message=lambda _role: _DummyContext(),
-            empty=Mock(),
             chat_input=chat_input_mock,
             container=lambda: _DummyContext(),
             error=Mock(),
@@ -576,7 +566,7 @@ def test_a_pending_interrupt_replaces_the_composer(monkeypatch) -> None:
     monkeypatch.setattr(chat_interface, "render_message", Mock())
     monkeypatch.setattr(chat_interface, "render_starter_topics", Mock())
     monkeypatch.setattr(chat_interface, "render_sandbox_interrupt", interrupt_mock)
-    monkeypatch.setattr(chat_interface, "stream_and_display_response", Mock())
+    monkeypatch.setattr(chat_interface, "start_response", Mock())
 
     chat_interface.render_chat_interface()
 

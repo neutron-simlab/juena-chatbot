@@ -43,9 +43,10 @@ def main():
         # streams are not what it waits for -- sse-starlette ends every event
         # stream as soon as shutdown begins -- but any other slow request
         # could use up Docker's whole grace period, and the container would be
-        # killed before anything was flushed. 10 s caps that wait;
-        # docker-compose.yml's stop_grace_period budgets for it.
-        timeout_graceful_shutdown=10,
+        # killed before anything was flushed. Foreground cancellation can
+        # also wait for sandbox termination; allow its 25 s cleanup window.
+        # docker-compose.yml budgets additional time for lifespan shutdown.
+        timeout_graceful_shutdown=30,
     )
 
 

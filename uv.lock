@@ -1756,7 +1756,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "httpx-sse" },
     { name = "imagecodecs", marker = "extra == 'dev'", specifier = "==2025.3.30" },
-    { name = "juena-core", extras = ["ui", "mcp", "sandbox"], git = "https://github.com/neutron-simlab/juena-core.git?rev=55462710e634fcf676740e342a9c71fbe8fba173" },
+    { name = "juena-core", extras = ["ui", "mcp", "sandbox"], git = "https://github.com/neutron-simlab/juena-core.git?rev=1c76ca1918cdcadbd8bf3d5c13bff2f1727aea98" },
     { name = "juena-rag", extras = ["client"], git = "https://github.com/neutron-simlab/juena-rag.git?rev=db98edd752967a48ef49fd61f7ee53ad47bcc23c" },
     { name = "juena-rag", extras = ["serve", "ingest"], marker = "extra == 'services'", git = "https://github.com/neutron-simlab/juena-rag.git?rev=db98edd752967a48ef49fd61f7ee53ad47bcc23c" },
     { name = "langchain" },
@@ -1775,7 +1775,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml" },
     { name = "sqlalchemy", extras = ["asyncio"] },
-    { name = "streamlit", specifier = ">=1.53.0" },
+    { name = "streamlit", specifier = ">=1.64.0" },
     { name = "tifffile", marker = "extra == 'dev'", specifier = "==2025.5.10" },
     { name = "uvicorn", extras = ["standard"] },
 ]
@@ -1784,7 +1784,7 @@ provides-extras = ["services", "dev"]
 [[package]]
 name = "juena-core"
 version = "1.0.0"
-source = { git = "https://github.com/neutron-simlab/juena-core.git?rev=55462710e634fcf676740e342a9c71fbe8fba173#55462710e634fcf676740e342a9c71fbe8fba173" }
+source = { git = "https://github.com/neutron-simlab/juena-core.git?rev=1c76ca1918cdcadbd8bf3d5c13bff2f1727aea98#1c76ca1918cdcadbd8bf3d5c13bff2f1727aea98" }
 dependencies = [
     { name = "anyio" },
     { name = "deepagents" },
