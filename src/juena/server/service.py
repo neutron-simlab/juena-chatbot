@@ -86,6 +86,7 @@ app = create_app(
     invocation_error=credential_error_message,
     filesystem=get_filesystem(),
     upload_policy=UPLOAD_POLICY,
+    run_controls=True,
     browser_origins=tuple(dict.fromkeys(
         f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
         for url in (global_config.UI_PUBLIC_URL, global_config.JUENA_PUBLIC_URL)

@@ -30,9 +30,8 @@ dependencies = [
     "pydantic",
     "pyyaml",
     "pillow",
-    # 1.53 is the floor for `st.chat_input(max_upload_size=...)`, used by the
-    # composer. This application's own floor, not core's.
-    "streamlit>=1.53.0",
+    # Session-scoped stream ownership and cleanup require Streamlit 1.64.
+    "streamlit>=1.64.0",
     # Neither of these is core's: web search and SAML are JüNA's alone.
     "langchain-tavily",
     "python-dotenv>=1.0.0",
@@ -64,7 +63,7 @@ build-backend = "hatchling.build"
 
 # Immutable revisions; publish new core commits before remote builds.
 [tool.uv.sources]
-juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "55462710e634fcf676740e342a9c71fbe8fba173" }
+juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "1c76ca1918cdcadbd8bf3d5c13bff2f1727aea98" }
 juena-rag = { git = "https://github.com/neutron-simlab/juena-rag.git", rev = "db98edd752967a48ef49fd61f7ee53ad47bcc23c" }
 
 [tool.hatch.build.targets.wheel]

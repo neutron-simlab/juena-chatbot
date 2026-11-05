@@ -44,6 +44,10 @@ if (
     or client.session_token != session_token
 ):
     if client is not None:
+        from juena_core.ui.run_stream import get_stream_controller
+        controller = get_stream_controller()
+        controller.close()
+        controller.thread = None
         client.close()
     client = initialize_client(
         internal_api_url,
@@ -80,6 +84,7 @@ except Exception:
     st.stop()
 
 st.session_state.session_token = session_token
+st.session_state.run_controls = True
 st.session_state.user = current_user
 st.session_state.setdefault("filesystem_session_scope", str(uuid4()))
 

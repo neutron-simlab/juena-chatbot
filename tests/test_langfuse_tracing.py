@@ -119,6 +119,33 @@ def _by_trace(spans) -> dict[int, list]:
 
 
 @pytest.mark.asyncio
+async def test_live_run_controls_do_not_serialize_execution_handles_into_traces(langfuse_capture) -> None:
+    import json
+    from juena_core.server.run_control import RunControl
+    from juena_core.server.streaming.own_task import run_in_own_task
+
+    graph = _graph()
+    control = RunControl(thread_id="controlled-trace", user_id="controlled-user")
+    run = AgentInputHandler.build_run_context(thread_id=control.thread_id, user_id=control.user_id, control=control)
+    control.agent, control.config = graph, run.config
+
+    async def source():
+        async for _ in graph.astream(_hello(), config=run.config, context=run.context):
+            yield json.dumps({"type":"status", "phase":"thinking"})
+
+    async with run_in_own_task(source(), control=control) as frames:
+        async for _ in frames:
+            pass
+    langfuse_capture.client.flush()
+    spans = langfuse_capture.exporter.get_finished_spans()
+    assert spans
+    assert control.state == "completed"
+    attributes = str([dict(span.attributes) for span in spans])
+    assert "sandbox_jobs" not in attributes
+    assert "RunControl object" not in attributes
+
+
+@pytest.mark.asyncio
 async def test_every_span_of_a_streamed_run_carries_session_and_user(langfuse_capture) -> None:
     await _request(_graph(), _hello(), thread_id="thread-1", user_id="user-1")
 
