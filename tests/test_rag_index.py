@@ -251,8 +251,11 @@ def test_the_repository_list_says_what_each_one_is_for(index):
                 return SimpleNamespace(name="jscatter", description="SAS analysis")
             return None
 
-    listed = json.loads(_list_indexed_repositories(StubRepoManager(), index))
+    result = json.loads(_list_indexed_repositories(StubRepoManager(), index))
+    listed = result["repositories"]
 
+    # The count is stated so the model copies it instead of counting the list.
+    assert result["count"] == len(listed)
     assert listed[0] == {
         "repo_id": "jscatter",
         "chunks": 1641,
@@ -274,7 +277,7 @@ def test_the_repository_list_is_the_store_not_the_clone_directory(index):
         def get_config(self, repo_id):
             return SimpleNamespace(name=repo_id, description="")
 
-    listed = json.loads(_list_indexed_repositories(StubRepoManager(), index))
+    listed = json.loads(_list_indexed_repositories(StubRepoManager(), index))["repositories"]
 
     assert [row["repo_id"] for row in listed] == [
         "jscatter",

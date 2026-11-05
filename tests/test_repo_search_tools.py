@@ -17,9 +17,11 @@ def test_existing_catalogue_tool_sees_first_ingestion_without_rebuilding() -> No
     index = SimpleNamespace(catalogue=lambda: list(rows))
     tool = next(tool for tool in repo_search.build_code_chat_tools(manager, index)
                 if tool.name == "list_indexed_repositories")
-    assert json.loads(tool.invoke({})) == []
+    assert json.loads(tool.invoke({})) == {"count": 0, "repositories": []}
     rows.append({"repo_id": "jscatter", "chunks": 1676})
-    assert json.loads(tool.invoke({}))[0]["chunks"] == 1676
+    listed = json.loads(tool.invoke({}))
+    assert listed["count"] == 1
+    assert listed["repositories"][0]["chunks"] == 1676
 
 
 class _FanOutStub:

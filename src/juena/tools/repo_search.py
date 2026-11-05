@@ -209,6 +209,10 @@ def _list_indexed_repositories(
     The store is the authority on what is searchable and the config is the
     authority on what it is for, so a repository present in one and not the
     other is reported rather than hidden.
+
+    The count is stated, not left for the model to work out: an answer opens
+    with "JueNA indexes N repositories" before the list is written, so a model
+    has to estimate N at that point, and in the benchmark it guessed 7 for 8.
     """
     entries = []
     for source in vector_index.catalogue():
@@ -222,7 +226,7 @@ def _list_indexed_repositories(
             entry["name"] = repo_id
             entry["description"] = "Indexed, but not described in this deployment's config."
         entries.append(entry)
-    return json.dumps(entries, separators=(",", ":"))
+    return json.dumps({"count": len(entries), "repositories": entries}, separators=(",", ":"))
 
 
 def build_code_chat_tools(
@@ -326,9 +330,11 @@ def build_code_chat_tools(
         to be cloned on disk, which can include repositories that were removed
         from the index and are not searchable.
 
-        Returns a JSON array of objects with repo_id, name, description, and
-        chunks. `chunks` is how many indexed pieces the repository has; 0 means
-        it is registered but not yet searchable.
+        Returns a JSON object. `count` is how many repositories are indexed;
+        state this number rather than counting the list. `repositories` is an
+        array of objects with repo_id, name, description, and chunks. `chunks`
+        is how many indexed pieces the repository has; 0 means it is registered
+        but not yet searchable.
         """
         return _list_indexed_repositories(repo_manager, vector_index)
 
