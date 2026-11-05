@@ -344,8 +344,10 @@ Apply these rules:
 - `setLimit(par=(low, up, lowhard, uphard))`: two values set a lower *and* an upper soft
   limit, so `setLimit(bgr=[0, 1])` pulls `bgr` below 1. Use `(low, None)` for a lower
   bound only, and keep start values inside the limits.
-- Treat `Nelder-Mead` and `differential_evolution` as optimization tools that do not
-  supply the usual covariance-derived errors; refine locally when justified.
+- Only `lm`, `trf`, `dogbox`, `BFGS` and `bayes` set `<name>_err`. The others
+  (`Nelder-Mead`, `Powell`, `SLSQP`, `L-BFGS-B`, `differential_evolution`, ...) leave
+  it unset, so `data.D_err` raises `AttributeError`. To get errors after such a fit,
+  call `data.refineFit()` (default `lm`), which restarts from the values found.
 
 ### `dataArray.fit` versus `dataList.fit`
 
