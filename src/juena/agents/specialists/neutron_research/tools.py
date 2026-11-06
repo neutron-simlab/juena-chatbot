@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from juena.tools.tavily import tavily_extract
+
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
         "List `/findings` to see what earlier specialists established, or `/inputs` "
@@ -30,4 +32,4 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
 def build_tools(tavily_tool: Any | None) -> list[Any]:
     """Expose Tavily only when configured."""
 
-    return [tavily_tool] if tavily_tool is not None else []
+    return [tavily_tool, tavily_extract] if tavily_tool is not None else []

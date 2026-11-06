@@ -287,11 +287,15 @@ def test_neutron_prompt_truthfully_describes_missing_web_search() -> None:
     assert "never invent citations" in prompt
 
 
-def test_neutron_prompt_requires_reading_raw_content_not_the_snippet() -> None:
-    prompt = build_neutron_research_prompt(has_tavily=True)
+@pytest.mark.parametrize("has_tavily", [True, None])
+def test_neutron_prompt_uses_excerpts_and_extracts_when_verification_needs_context(has_tavily) -> None:
+    prompt = build_neutron_research_prompt(has_tavily=has_tavily)
 
-    assert "Read each result's `raw_content`, not its `content` snippet" in prompt
-    assert "never quote a value, definition, or table cell from it" in prompt
+    assert "use the returned `content` excerpts when sufficient" in prompt
+    assert "Use `tavily_extract` on one selected source URL" in prompt
+    assert "omit it for a full page when checking tables" in prompt
+    assert "never infer a table column from a snippet" in prompt
+    assert "full page text alongside its short snippet" not in prompt
 
 
 def test_neutron_prompt_requires_verifying_tabular_data() -> None:

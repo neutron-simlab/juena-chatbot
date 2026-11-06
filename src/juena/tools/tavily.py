@@ -1,4 +1,4 @@
-"""Web search with the current caller's personal key."""
+"""Web search and selective page reading with the current caller's personal key."""
 
 from langchain.tools import ToolRuntime, tool
 from juena_core.server.agent.runtime_model_middleware import RuntimeModelContext
@@ -7,7 +7,7 @@ TAVILY_MAX_RESULTS = 2
 TAVILY_TOPIC = "general"
 TAVILY_SEARCH_DEPTH = None
 TAVILY_INCLUDE_ANSWER = False
-TAVILY_INCLUDE_RAW_CONTENT = "markdown"
+TAVILY_INCLUDE_RAW_CONTENT = False
 TAVILY_INCLUDE_IMAGES = False
 TAVILY_INCLUDE_IMAGE_DESCRIPTIONS = False
 
@@ -19,7 +19,7 @@ def load_optional_tavily_tool():
 
 @tool
 async def tavily_search(query: str, runtime: ToolRuntime[RuntimeModelContext]) -> dict:
-    """Search the web for current facts and external evidence."""
+    """Search the web for relevant excerpts and source URLs, without full pages."""
     from langchain_tavily import TavilySearch
     from juena.server.credentials import CredentialError, personal_key
 
@@ -39,3 +39,36 @@ async def tavily_search(query: str, runtime: ToolRuntime[RuntimeModelContext]) -
         return {"error": str(error)}
     except Exception:
         return {"error": "Tavily could not complete the search. Check your key in My profile or retry later."}
+
+
+@tool
+async def tavily_extract(
+    url: str, runtime: ToolRuntime[RuntimeModelContext], query: str | None = None,
+) -> str:
+    """Read one selected web page for exact wording, numbers, or table headers.
+
+    Supply query to retrieve relevant passages for prose. Omit query to read the
+    full page when table headers, legends, or surrounding context are needed.
+    """
+    from langchain_tavily import TavilyExtract
+    from juena.server.credentials import CredentialError, personal_key
+
+    failure = "Tavily could not read this page. Check the URL and your key in My profile or retry later."
+    try:
+        key = await personal_key(runtime.context.user_id, "tavily")
+        client = TavilyExtract(
+            tavily_api_key=key, extract_depth="advanced", format="markdown",
+            include_images=False, chunks_per_source=3 if query else None,
+        )
+        result = await client.ainvoke({"urls": [url], "query": query}, config={"callbacks": []})
+        if not isinstance(result, dict) or result.get("error") or not result.get("results"):
+            return failure
+        page = result["results"][0]
+        if not page.get("raw_content"):
+            return failure
+        # Keep real line breaks so offloaded tables can be read by line range.
+        return f"Source: {page['url']}\n\n{page['raw_content']}"
+    except CredentialError as error:
+        return str(error)
+    except Exception:
+        return failure
