@@ -17,12 +17,7 @@ from juena_core.schema.llm_models import BlabladorModelName
     [
         # 900,000 verified at HZDR minus 32,768 reserved for output.
         (software, "deepseek-v4.1-flash-at-hzdr", 867_232),
-        (
-            neutron,
-            "90 - Qwen 3.8-Flash-Next-125B-AWQ-W4A16 on Juwels Booster - "
-            "An excellent model from September 2026",
-            907_232,
-        ),
+        (neutron, "deepseek-v4.1-flash-at-hzdr", 867_232),
     ],
 )
 def test_specialists_use_their_models_with_matching_compaction(
@@ -74,7 +69,7 @@ def test_specialists_use_their_models_with_matching_compaction(
 @pytest.mark.parametrize("specialist", [software, neutron])
 def test_specialists_stream_with_one_retry_layer_and_a_real_fallback(monkeypatch, specialist) -> None:
     """Streaming bounds the gap between tokens; ModelRetryMiddleware owns retries;
-    a fallback that calls the specialist's own model is dropped. The code agent's
+    a fallback that calls the specialist's own model is dropped. Both specialists'
     rate-limited HZDR model is paced and backed by the same model on JUWELS."""
     from langchain.agents.middleware import ModelFallbackMiddleware
 
@@ -106,9 +101,9 @@ def test_specialists_stream_with_one_retry_layer_and_a_real_fallback(monkeypatch
     assert model.streaming is True
     assert model.stream_usage is True
     assert model.max_retries == 0
-    assert (model.rate_limiter is not None) is (specialist is software)
+    assert model.rate_limiter is not None
     fallback = next(m for m in captured["middleware"] if isinstance(m, ModelFallbackMiddleware))
-    expected = [BlabladorModelName.GPT_OSS.value]
-    if specialist is software:
-        expected.insert(0, BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value)
-    assert [m.model_name for m in fallback.models] == expected
+    assert [m.model_name for m in fallback.models] == [
+        BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value,
+        BlabladorModelName.GPT_OSS.value,
+    ]

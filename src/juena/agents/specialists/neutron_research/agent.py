@@ -36,7 +36,12 @@ NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION = (
     "about neutron software -- sending them here produces a web search instead of an answer."
 )
 NEUTRON_RESEARCH_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.QWEN38_FLASH_NEXT_JUWELS.value
+# The software specialist's model and host. A research run on Qwen at JUWELS
+# wrote 8 tokens/s with a 367k-token context (2026-11-06); HZDR serves DeepSeek
+# faster but only about 30 requests a minute, so juena_core paces it and JUWELS
+# serves the same model when HZDR still refuses.
+NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
+NEUTRON_RESEARCH_SPECIALIST_BACKUP_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
 
 
 def build_neutron_research_prompt(
@@ -76,14 +81,15 @@ def build_neutron_research_specialist(
 
     backend = build_specialist_backend()
     # Streaming and max_retries=0: see MODEL_MAX_RETRIES in juena_core.agents.specialist_runtime.
-    model = build_chat_model(
-        provider=NEUTRON_RESEARCH_SPECIALIST_PROVIDER,
-        model=NEUTRON_RESEARCH_SPECIALIST_MODEL,
-        temperature=0.0,
-        max_tokens=32_768,
-        streaming=True,
-        max_retries=0,
-    )
+    model_settings = {
+        "provider": NEUTRON_RESEARCH_SPECIALIST_PROVIDER,
+        "temperature": 0.0,
+        "max_tokens": 32_768,
+        "streaming": True,
+        "max_retries": 0,
+    }
+    model = build_chat_model(model=NEUTRON_RESEARCH_SPECIALIST_MODEL, **model_settings)
+    backup = build_chat_model(model=NEUTRON_RESEARCH_SPECIALIST_BACKUP_MODEL, **model_settings)
     specialist_tools = list(build_tools(tavily_tool))
     if not unattended:
         specialist_tools.append(build_ask_user_tool(NEUTRON_RESEARCH_SPECIALIST_NAME))
@@ -91,7 +97,7 @@ def build_neutron_research_specialist(
         backend=backend,
         summarizer_model=summarizer_model,
         # A fallback that calls the same model would fail the same way.
-        fallback_models=[m for m in fallback_models if not same_model(m, model)],
+        fallback_models=[m for m in (backup, *fallback_models) if not same_model(m, model)],
         filesystem_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
         specialist_name=NEUTRON_RESEARCH_SPECIALIST_NAME,
         unattended=unattended,
