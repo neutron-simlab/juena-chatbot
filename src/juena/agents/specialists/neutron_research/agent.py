@@ -6,6 +6,7 @@ from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from juena.agents.personal_tools import PersonalToolsMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -52,7 +53,7 @@ def build_neutron_research_prompt(
     prompt = load_markdown("juena.agents.specialists.neutron_research", "AGENT.md")
     status = (
         "Tavily web search is available for current facts and external evidence. "
-        "Each result carries the full page text alongside its short snippet."
+        "Search returns excerpts; tavily_extract reads a selected page when more context is needed."
         if has_tavily
         else (
             "Tavily web search is unavailable. Distinguish established knowledge from "
@@ -103,7 +104,12 @@ def build_neutron_research_specialist(
         unattended=unattended,
     )
     if tavily_tool is not None:
-        middleware = [PersonalToolsMiddleware("tavily", ("tavily_search",)), *middleware]
+        middleware = [PersonalToolsMiddleware("tavily", ("tavily_search", "tavily_extract")), *middleware]
+        if not unattended:
+            middleware.extend([
+                ToolCallLimitMiddleware(tool_name="tavily_search", run_limit=20),
+                ToolCallLimitMiddleware(tool_name="tavily_extract", run_limit=6),
+            ])
     runnable = create_agent(
         model=model,
         tools=specialist_tools,

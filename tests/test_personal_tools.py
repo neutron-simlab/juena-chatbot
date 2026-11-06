@@ -16,8 +16,8 @@ async def test_optional_tools_and_prompt_follow_current_user(monkeypatch):
             raise CredentialError("No key")
         return "fake-key"
     monkeypatch.setattr(personal_tools, "personal_key", key)
-    middleware = personal_tools.PersonalToolsMiddleware("tavily", ("tavily_search",))
-    all_tools = [SimpleNamespace(name="tavily_search"), SimpleNamespace(name="read_file")]
+    middleware = personal_tools.PersonalToolsMiddleware("tavily", ("tavily_search", "tavily_extract"))
+    all_tools = [SimpleNamespace(name=name) for name in ("tavily_search", "tavily_extract", "read_file")]
     captured = []
     async def handler(request):
         captured.append(request)
@@ -26,7 +26,8 @@ async def test_optional_tools_and_prompt_follow_current_user(monkeypatch):
                                tools=all_tools, runtime=SimpleNamespace(context={"user_id": owner}), state={})
         await middleware.awrap_model_call(request, handler)
     assert [[t.name for t in r.tools] for r in captured] == [
-        ["tavily_search", "read_file"], ["read_file"], ["tavily_search", "read_file"]]
+        ["tavily_search", "tavily_extract", "read_file"], ["read_file"],
+        ["tavily_search", "tavily_extract", "read_file"]]
     assert "unavailable" in captured[1].system_message.text
     assert "fake-key" not in str(captured)
-    assert len(all_tools) == 2
+    assert len(all_tools) == 3

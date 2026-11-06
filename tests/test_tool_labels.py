@@ -12,7 +12,7 @@ def test_every_label_names_a_tool_juena_builds() -> None:
     """A misspelt name would silently fall back to the generic line."""
     built = {tool.name for tool in build_code_chat_tools(None, None)}
     built |= {tool.name for tool in build_research_tools(["software-specialist"])}
-    built.add("tavily_search")  # langchain-tavily's TavilySearch
+    built.update(("tavily_search", "tavily_extract"))
     built.add(analyze_tiff.name)
 
     assert set(JUENA_TOOL_LABELS) <= built
@@ -32,3 +32,4 @@ def test_juena_tools_read_as_actions() -> None:
         "start_research", specialist="neutron-research-specialist", objective="Find the flux"
     ) == "Start background research with the neutron research specialist: “Find the flux”"
     assert line("tavily_search", query="FRM II") == "Search the web: “FRM II”"
+    assert line("tavily_extract", url="https://example.org") == "Read a web page: “https://example.org”"

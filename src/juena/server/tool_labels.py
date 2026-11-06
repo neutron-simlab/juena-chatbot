@@ -37,4 +37,5 @@ JUENA_TOOL_LABELS: dict[str, ToolLabel] = {
     "check_research": lambda args: "Check on background research",
     "list_research": lambda args: "List background research",
     "tavily_search": lambda args: describe("Search the web", quote(args.get("query")), sep=": "),
+    "tavily_extract": lambda args: describe("Read a web page", quote(args.get("url")), sep=": "),
 }

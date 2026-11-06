@@ -59,7 +59,7 @@ def test_software_tool_assembly_owns_repository_and_context7(
 def test_neutron_tool_assembly_adds_tavily_only_when_available() -> None:
     tavily = object()
 
-    assert neutron_tools.build_tools(tavily) == [tavily]
+    assert neutron_tools.build_tools(tavily) == [tavily, neutron_tools.tavily_extract]
     assert neutron_tools.build_tools(None) == []
 
 
@@ -319,13 +319,75 @@ def test_neutron_specialist_owns_fixed_model_and_runtime(
     assert created["agent_kwargs"]["model"] is model
     assert created["agent_kwargs"]["tools"][:-1] == list(tools)
     assert created["agent_kwargs"]["tools"][-1].name == "ask_user"
-    assert created["agent_kwargs"]["middleware"][1:] == middleware
+    assert created["agent_kwargs"]["middleware"][1:-2] == middleware
     assert type(created["agent_kwargs"]["middleware"][0]).__name__ == "PersonalToolsMiddleware"
+    assert created["agent_kwargs"]["middleware"][0].tool_names == {"tavily_search", "tavily_extract"}
     assert created["agent_kwargs"]["response_format"].schema.__name__ == "SpecialistReport"
     assert created["agent_kwargs"]["context_schema"] is RuntimeModelContext
     assert spec["name"] == neutron_agent.NEUTRON_RESEARCH_SPECIALIST_NAME
     assert spec["description"] == neutron_agent.NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION
     assert spec["runnable"] is runnable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unattended", [False, True])
+async def test_neutron_web_budgets_allow_reporting_and_leave_background_budget_unchanged(
+    monkeypatch, unattended,
+) -> None:
+    from collections import Counter
+    from unittest.mock import AsyncMock
+
+    from langchain.tools import tool
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from juena.agents import personal_tools
+
+    executed = Counter()
+
+    @tool
+    async def tavily_search(query: str) -> str:
+        """Return a search excerpt."""
+        executed["tavily_search"] += 1
+        return query
+
+    @tool
+    async def tavily_extract(url: str) -> str:
+        """Return a selected page."""
+        executed["tavily_extract"] += 1
+        return url
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    model = ToolModel(responses=[
+        AIMessage(content="", tool_calls=[
+            {"name": name, "args": {argument: str(i)}, "id": f"{name}-{i}"}
+            for name, argument, count in [("tavily_search", "query", 21), ("tavily_extract", "url", 7)]
+            for i in range(count)
+        ]),
+        AIMessage(content="", tool_calls=[{
+            "name": "SpecialistReport", "id": "report",
+            "args": {"status": "completed", "finding": "Research result", "limitations": ["Bounded search"]},
+        }]),
+    ])
+    monkeypatch.setattr(neutron_agent, "build_chat_model", lambda **kwargs: model)
+    monkeypatch.setattr(neutron_tools, "tavily_extract", tavily_extract)
+    monkeypatch.setattr(personal_tools, "personal_key", AsyncMock(return_value="fake-key"))
+    agent = neutron_agent.build_neutron_research_specialist(
+        tavily_tool=tavily_search, summarizer_model=model, fallback_models=[], unattended=unattended,
+    )["runnable"]
+    context = RuntimeModelContext(provider="blablador", model="fake", user_id="user-a")
+    # A fresh invocation receives a fresh budget, even on the same compiled graph.
+    for _ in range(2):
+        executed.clear()
+        result = await agent.ainvoke({"messages": [("user", "Research the question.")]}, context=context)
+        assert executed == {"tavily_search": 21 if unattended else 20, "tavily_extract": 7 if unattended else 6}
+        blocked = [m for m in result["messages"] if isinstance(m, ToolMessage) and m.status == "error"]
+        assert {m.name for m in blocked} == (set() if unattended else {"tavily_search", "tavily_extract"})
+        assert "Finding: Research result" in result["messages"][-1].content
+        assert result["messages"][-1].additional_kwargs["juena_outcome_verified"] is True
 
 
 def _write_skill(skills_dir: Path, name: str = "plot-report") -> Path:
