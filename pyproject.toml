@@ -63,7 +63,7 @@ build-backend = "hatchling.build"
 
 # Immutable revisions; publish new core commits before remote builds.
 [tool.uv.sources]
-juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "1c76ca1918cdcadbd8bf3d5c13bff2f1727aea98" }
+juena-core = { git = "https://github.com/neutron-simlab/juena-core.git", rev = "b23e16b37bb56e1e0f187f6866931dd68dd1a76b" }
 juena-rag = { git = "https://github.com/neutron-simlab/juena-rag.git", rev = "db98edd752967a48ef49fd61f7ee53ad47bcc23c" }
 
 [tool.hatch.build.targets.wheel]
