@@ -33,7 +33,10 @@ def start_langfuse(client: Langfuse | None = None) -> None:
     Call before the app is built, so the very first run carries the handler.
     The client is built from `Config` explicitly rather than letting the SDK
     read its own environment variables: one place decides where traces go.
-    Tests pass a client wired to an in-memory exporter instead.
+
+    Args:
+        client: A ready client; None builds one from ``Config``. Tests pass a
+            client wired to an in-memory exporter.
     """
 
     global _client
@@ -49,17 +52,15 @@ def start_langfuse(client: Langfuse | None = None) -> None:
 def _run_tracing(*, thread_id: str, user_id: str) -> RunTracing:
     """Give one invocation its own handler and its Langfuse session and user.
 
-    A new handler per invocation, so no handler state is shared between two
-    users' requests, and an answer to an interrupt reliably starts a new trace
-    in the same session rather than sometimes continuing an old one.
+    A new handler per invocation, so two users' requests share no handler
+    state, and an answer to an interrupt reliably starts a new trace in the same
+    session rather than sometimes continuing an old one.
 
-    `run_inline = True` is what puts the session and user on *every* span, not
-    only the root. Without it, during async runs LangChain calls this
-    (synchronous) handler on a worker thread, each call inside a throwaway copy
-    of the context. The session and user the root's callback sets on the
-    OpenTelemetry context vanish with that copy, so child chains and model
-    generations arrive unattributed and Langfuse's per-user and per-session
-    totals undercount. tests/test_langfuse_tracing.py guards this.
+    `run_inline = True` puts the session and user on every span, not only the
+    root. Without it, in async runs LangChain calls this synchronous handler on
+    a worker thread inside a throwaway copy of the context, so the session and
+    user set by the root are lost. Child spans then arrive unattributed, and
+    Langfuse's per-user and per-session totals undercount.
     """
 
     handler = CallbackHandler(public_key=Config.LANGFUSE_PUBLIC_KEY)
@@ -80,6 +81,9 @@ async def langfuse_lifespan() -> AsyncGenerator[None, None]:
     unwinds last: by then research has been cancelled and the sandbox stopped,
     and their final spans are in the buffer too. Spans still buffered when the
     process is killed rather than stopped are lost.
+
+    Yields:
+        Nothing; the server runs inside this block.
     """
 
     try:

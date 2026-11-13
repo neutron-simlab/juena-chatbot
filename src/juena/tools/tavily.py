@@ -13,6 +13,11 @@ TAVILY_INCLUDE_IMAGE_DESCRIPTIONS = False
 
 
 def load_optional_tavily_tool():
+    """Return the web search tool for the graph.
+
+    Returns:
+        ``tavily_search``.
+    """
     # The graph owns only this wrapper. Credentials and clients are per call.
     return tavily_search
 

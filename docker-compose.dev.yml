@@ -16,6 +16,7 @@ services:
       - "127.0.0.1:${UI_PORT:-9501}:9501"
     environment:
       - ENVIRONMENT=development
+      - STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=full
       # The launcher starts the host-side rootless-Podman worker after the app
       # has created the sandbox_jobs table.
       - SANDBOX_ENABLED=${SANDBOX_ENABLED:-true}

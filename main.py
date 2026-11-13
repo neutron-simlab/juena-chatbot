@@ -36,16 +36,14 @@ def main():
         "juena.server.service:app",  # Import string for reload support
         host=global_config.SERVER_HOST,
         port=global_config.SERVER_PORT,
-        reload=reload,  # Enable auto-reload only if RELOAD=true
+        reload=reload,
         log_level="info",
-        # On SIGTERM uvicorn waits for in-flight requests before it runs the
-        # shutdown lifespans (research cancellation, Langfuse flush). Chat
-        # streams are not what it waits for -- sse-starlette ends every event
-        # stream as soon as shutdown begins -- but any other slow request
-        # could use up Docker's whole grace period, and the container would be
-        # killed before anything was flushed. Foreground cancellation can
-        # also wait for sandbox termination; allow its 25 s cleanup window.
-        # docker-compose.yml budgets additional time for lifespan shutdown.
+        # On SIGTERM uvicorn waits for in-flight requests before the shutdown
+        # work (research cancellation, Langfuse flush). Without a cap, one slow
+        # request could use up Docker's grace period and the container would be
+        # killed before anything was flushed. 30 s covers the 25 s sandbox
+        # cleanup a cancelled run may wait for; docker-compose.yml allows extra
+        # time for the shutdown work itself.
         timeout_graceful_shutdown=30,
     )
 

@@ -38,17 +38,44 @@ class TiffError(ValueError):
 
 
 def versions():
+    """Return the versions of Python and the analysis libraries.
+
+    Returns:
+        Version by name; recorded in the report and checked on reproduction.
+    """
     return {"python": sys.version.split()[0], "numpy": np.__version__,
             "tifffile": tifffile.__version__, "imagecodecs": imagecodecs.__version__,
             "matplotlib": matplotlib.__version__}
 
 
 def source_hash(path):
+    """Return a file's SHA-256 digest.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The digest, as hex.
+    """
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def load_plane(path, page_index, remaining_bytes):
+    """Decode one grayscale page of a TIFF, within the size limits.
+
+    Args:
+        path: The TIFF file.
+        page_index: Zero-based page to decode.
+        remaining_bytes: Decoded-array budget left for this request.
+
+    Returns:
+        The pixel array, and a description of the source: hash, size, page,
+        shape, pixel type, compression and selected metadata tags.
+
+    Raises:
+        TiffError: The file, page, layout, pixel type or size is not supported.
+    """
     path = Path(path)
     if path.stat().st_size > MAX_FILE_BYTES:
         raise TiffError("TIFF input exceeds the 64 MiB file limit")
@@ -89,10 +116,27 @@ def load_plane(path, page_index, remaining_bytes):
 
 
 def finite_values(data):
+    """Return the finite pixel values as a flat array.
+
+    Args:
+        data: Pixel array.
+
+    Returns:
+        The values that are neither NaN nor infinite.
+    """
     return data[np.isfinite(data)]
 
 
 def statistics(data):
+    """Summarize pixel values, counting non-finite ones separately.
+
+    Args:
+        data: Pixel array.
+
+    Returns:
+        Pixel counts, and the min, max, mean, std and sum of the finite values.
+        A reduction that overflows is None, with a warning.
+    """
     values = finite_values(data)
     result = {"pixels": int(data.size), "finite": int(values.size),
               "nonfinite": int(data.size - values.size)}
@@ -110,6 +154,18 @@ def statistics(data):
 
 
 def display_limits(data, scale, bounds=None):
+    """Choose the value range a preview shows.
+
+    Args:
+        data: Pixel array.
+        scale: ``"linear"`` or ``"log"``; log leaves out values at or below zero.
+        bounds: Fixed ``(low, high)`` limits; None uses the 1st and 99th
+            percentiles.
+
+    Returns:
+        The limits and how many pixels fall outside them. ``low`` and ``high``
+        are None when no pixel can be shown.
+    """
     values = finite_values(data)
     excluded = 0
     if scale == "log":
@@ -128,6 +184,14 @@ def display_limits(data, scale, bounds=None):
 
 
 def draw_plane(ax, data, title, limits):
+    """Draw one plane as an image with a scale bar of raw pixel values.
+
+    Args:
+        ax: The Matplotlib axes to draw on.
+        data: Pixel array.
+        title: The plot title.
+        limits: Display limits from ``display_limits``.
+    """
     ax.set_title(title, fontsize=9)
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
@@ -154,6 +218,26 @@ def draw_plane(ax, data, title, limits):
 
 def run(operation, inputs, *, pages=None, roi=None, scale="linear", output_dir=None,
         expected_hashes=None, expected_versions=None):
+    """Run one analysis and write its preview, JSON report and reproduction script.
+
+    Args:
+        operation: ``"inspect"``, ``"histogram"``, ``"roi"`` or ``"compare"``.
+        inputs: One to five TIFF paths.
+        pages: Zero-based page per input, or one page for all; None means page 0.
+        roi: Region bounds ``x0, y0, x1, y1``, for the roi operation only.
+        scale: Preview scaling, ``"linear"`` or ``"log"``.
+        output_dir: Where to write the outputs; None makes a new folder under
+            ``/workspace/outputs``.
+        expected_hashes: Source hashes a reproduction must match.
+        expected_versions: Library versions a reproduction must match.
+
+    Returns:
+        The report, also written to ``report.json``.
+
+    Raises:
+        TiffError: The request or an input is not supported, or a reproduction
+            does not match its sources or library versions.
+    """
     if operation not in {"inspect", "histogram", "roi", "compare"} or scale not in {"linear", "log"}:
         raise TiffError("Unsupported operation or display scale")
     if not 1 <= len(inputs) <= MAX_INPUTS:
@@ -256,7 +340,14 @@ def run(operation, inputs, *, pages=None, roi=None, scale="linear", output_dir=N
 
 
 def execute_request(payload):
-    """Worker entry point for a validated, structured agent-tool request."""
+    """Worker entry point for a validated, structured agent-tool request.
+
+    Prints the report as JSON. On a failure it prints the error as JSON to
+    stderr and exits with status 2.
+
+    Args:
+        payload: Keyword arguments for ``run``.
+    """
     try:
         report = run(**payload)
     except (tifffile.TiffFileError, OSError, ValueError, RuntimeError, NotImplementedError) as exc:

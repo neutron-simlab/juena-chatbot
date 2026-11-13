@@ -1,14 +1,8 @@
 """The JüNA-specific half of the Streamlit shell: the logo, the header, the CSS.
 
-Everything that renders a `ChatMessage`, an artifact or a streamed token moved
-to `juena_core.ui.components` (00-BOUNDARY.md, decision 7): those are shapes
-core's server defines, so core is the one place that has to agree with them.
-
-What stayed is what says which product this is. A logo is domain, not wiring.
-
-The core renderers are re-exported here so the pages that use them keep one
-import site, and so this module remains the answer to "where does the page get
-its rendering from".
+Rendering a `ChatMessage`, an artifact or a streamed token lives in
+`juena_core.ui.components`, because core's server defines those shapes. The core
+renderers are re-exported here so the pages import all rendering from one place.
 """
 
 from __future__ import annotations
@@ -80,15 +74,18 @@ HEADER_LOGO_PIXEL_DENSITY = 3
 def logo_data_uri(width_px: int, density: int) -> str | None:
     """Return the JüNA mark as a base64 PNG data URI, sized for high-DPI screens.
 
-    Not ``st.image(path, width=N)``: that resamples server-side to exactly N
-    pixels with a bilinear filter, which both aliases badly on a large
-    reduction and leaves the browser upscaling an 88px bitmap to 176 device
-    pixels on a 2x display. The result looked blurry. Emitting the image at
-    ``density`` times the displayed size and letting CSS scale it down keeps it
-    sharp at any device pixel ratio, and Lanczos resampling suits the ratio.
+    Not ``st.image(path, width=N)``: that resamples on the server to exactly N
+    pixels, so a 2x display upscales an 88px bitmap to 176 device pixels and it
+    looks blurry. Emitting the image at ``density`` times the displayed size and
+    letting CSS scale it down keeps it sharp at any device pixel ratio.
 
-    Returns ``None`` when the asset is absent, so a checkout without it still
-    renders a usable header.
+    Args:
+        width_px: Displayed width in CSS pixels.
+        density: How many image pixels per displayed pixel.
+
+    Returns:
+        The data URI, or ``None`` when the asset is absent, so a checkout
+        without it still renders a usable header.
     """
     if not LOGO_PATH.is_file():
         return None

@@ -8,6 +8,14 @@ from juena_rag.ingest.code.repository import load_repositories
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Ingest the named repositories, or every configured one.
+
+    Args:
+        argv: Command-line arguments; None reads them from the command line.
+
+    Returns:
+        The exit code: 1 when any repository failed, else 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repositories", nargs="*")
     parser.add_argument("--config", type=Path, default=Path("/app/config/repositories.yaml"))

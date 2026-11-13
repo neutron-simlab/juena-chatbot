@@ -36,16 +36,25 @@ async def create(
     """Admit one job, or return ``None`` when the user is already at the limit.
 
     The owner's `users` row is locked for the rest of the transaction before the
-    count runs. Sharing a transaction is not enough on its own: under
-    PostgreSQL's default Read Committed isolation a `COUNT` does not block a
-    concurrent `INSERT`, so two calls arriving together could both see the same
-    free slot and both admit. The row lock is what serializes them, and it is
-    scoped to one user -- two different people starting jobs never wait on each
-    other.
+    count runs. Under PostgreSQL's default Read Committed isolation a `COUNT`
+    does not block a concurrent `INSERT`, so without the lock two calls arriving
+    together could both see the same free slot and both admit. The lock is per
+    user, so two different people starting jobs never wait on each other.
 
-    A `users` row that does not exist takes no lock and the insert below then
-    fails on the foreign key. That is the right loud failure: `user_id` comes
-    from an authenticated context and cannot legitimately be absent.
+    A `users` row that does not exist takes no lock, and the insert then fails
+    on the foreign key. That loud failure is right: `user_id` comes from an
+    authenticated context and cannot legitimately be absent.
+
+    Args:
+        user_id: The job's owner.
+        thread_id: The conversation that started the job.
+        specialist: Name of the specialist to run.
+        objective: The task the specialist receives.
+        concurrency: How many active jobs one user may have.
+        run_input: Provider, model and files, frozen for the run.
+
+    Returns:
+        The new queued job, or None when the user is at the limit.
     """
     factory = get_session_factory()
     async with factory() as session, session.begin():
@@ -77,7 +86,11 @@ async def create(
 
 
 async def active_ids() -> list[UUID]:
-    """Durable work to attempt, including jobs interrupted by a dead process."""
+    """List durable work to attempt, including jobs interrupted by a dead process.
+
+    Returns:
+        Ids of the queued and running jobs, oldest first.
+    """
     factory = get_session_factory()
     async with factory() as session:
         result = await session.scalars(
@@ -96,6 +109,13 @@ async def claim(job_id: UUID) -> AsyncIterator[tuple[ResearchJob, AsyncConnectio
     ownership therefore also prevents the old runner from persisting progress.
     It is dedicated to the job, so long runs cannot exhaust the chat's pool or
     return an advisory lock to a pool. No lease columns or heartbeat are needed.
+
+    Args:
+        job_id: The job to claim.
+
+    Yields:
+        The job, now marked running, and its dedicated connection; or None when
+        another runner owns it or it is no longer active.
     """
     async with await AsyncConnection.connect(
         psycopg_database_url(settings().DATABASE_URL),
@@ -131,7 +151,19 @@ async def finish(
     base_findings: dict[str, str] | None = None,
     error: str = "",
 ) -> None:
-    """Record the outcome through the connection that owns the job."""
+    """Record the outcome through the connection that owns the job.
+
+    A job that is no longer active is left unchanged.
+
+    Args:
+        connection: The connection that claimed the job.
+        job_id: The job.
+        status: The terminal status.
+        report: The specialist's report.
+        findings: The files the run wrote.
+        base_findings: The content of the run's starting files, by path.
+        error: Why the job failed.
+    """
     await connection.execute(
         "UPDATE research_jobs SET status = %s, report = %s, findings = %s, "
         "base_findings = %s, error = %s, finished_at = now() "
@@ -142,7 +174,15 @@ async def finish(
 
 
 async def get(job_id: UUID, user_id: UUID) -> ResearchJob | None:
-    """One job, scoped to its owner. A job id alone is never enough."""
+    """Return one job, scoped to its owner. A job id alone is never enough.
+
+    Args:
+        job_id: The job.
+        user_id: The user asking.
+
+    Returns:
+        The job, or None when it does not exist or belongs to someone else.
+    """
     factory = get_session_factory()
     async with factory() as session:
         return await session.scalar(
@@ -155,11 +195,19 @@ async def get(job_id: UUID, user_id: UUID) -> ResearchJob | None:
 async def for_thread(
     thread_id: str, user_id: UUID, *, include_collected: bool = False
 ) -> list[ResearchJob]:
-    """Jobs on one thread, oldest first.
+    """List one user's jobs on one thread, oldest first.
 
     Collected jobs are excluded by default: the supervisor asks this question to
     find what it still owes the user, and a result it already reported is not
     that.
+
+    Args:
+        thread_id: The conversation.
+        user_id: The jobs' owner.
+        include_collected: Also return jobs already handed over.
+
+    Returns:
+        The matching jobs.
     """
     factory = get_session_factory()
     conditions = [ResearchJob.thread_id == thread_id, ResearchJob.user_id == user_id]
@@ -173,6 +221,11 @@ async def for_thread(
 
 
 async def mark_collected(job_id: UUID) -> None:
+    """Stamp one job collected, unless it already is.
+
+    Args:
+        job_id: The job.
+    """
     factory = get_session_factory()
     async with factory() as session, session.begin():
         await session.execute(
@@ -187,13 +240,16 @@ async def mark_collected_many(job_ids: Collection[UUID]) -> int:
 
     One statement rather than one call per id, because the caller is
     `ResearchDeliveryMiddleware` at the end of every supervisor turn and the list
-    it passes grows for the life of the conversation. That makes it **one
-    round trip** regardless of length -- not constant work: the `IN` list and the
-    index probes behind it are still linear in the number of ids. Round trips are
-    what was worth removing; a few hundred uuids in one predicate is not.
+    it passes grows for the life of the conversation. That makes it one round
+    trip regardless of length, though the work is still linear in the number of
+    ids; a few hundred ids in one `IN` list is cheap.
 
-    Returns how many rows this actually changed, which is how the caller can log
-    a real reconciliation without logging the no-op that every other turn is.
+    Args:
+        job_ids: The jobs to stamp.
+
+    Returns:
+        How many rows this actually changed, so the caller can log a real
+        reconciliation without logging the no-op that every other turn is.
     """
     if not job_ids:
         return 0

@@ -1,7 +1,7 @@
 """Handing a finished background job to the conversation, exactly once.
 
 Two failures sit either side of the same moment. Marking the job collected before
-its result is checkpointed loses the report if anything fails in between -- the
+its result is checkpointed loses the report if anything fails in between: the
 row says delivered and the conversation never saw it. Marking it afterwards has
 no "afterwards" to hook: a tool returns before the graph commits.
 
@@ -13,21 +13,20 @@ stamp:
 * stamp present -> the conversation has it; mark the row collected and say so;
 * stamp absent  -> the write never landed; hand the identical `Command` back.
 
-`ResearchDeliveryMiddleware.aafter_agent` is what performs that reconciliation,
-once per turn on every path out of the graph. It used to depend on the model
-calling `list_research` first, which is a prompt rule rather than a guarantee --
-and the model does not reliably follow it, leaving a delivered job advertised as
-still waiting in the sidebar for the rest of the conversation.
+`ResearchDeliveryMiddleware.aafter_agent` performs that reconciliation, once per
+turn on every path out of the graph. Relying on the model to call
+`list_research` first is not enough: it does not reliably do so, and a
+delivered job would stay advertised as waiting in the sidebar.
 
-Both windows are covered, and replaying is safe because the conflict paths are
-deterministic. The marker is deliberately not inferred from message history:
-summarization moves and drops old tool messages, so an absent report would read
-as an undelivered job long after the user had seen it.
+Replaying is safe because the conflict paths are deterministic. The marker is
+not inferred from message history: summarization moves and drops old tool
+messages, so an absent report would read as an undelivered job long after the
+user had seen it.
 
-**Every terminal status goes through `deliver`, not just `succeeded`.** A failure
-the user never saw is exactly as lost as a report they never saw, and a cancelled
-job acknowledged nowhere stays outstanding forever -- `list_research` would offer
-it again at the start of every turn for the rest of the conversation.
+Every terminal status goes through `deliver`, not just `succeeded`. A failure
+the user never saw is as lost as a report they never saw, and a cancelled job
+acknowledged nowhere stays outstanding: `list_research` would offer it again at
+the start of every turn.
 """
 
 from __future__ import annotations
@@ -85,7 +84,12 @@ class ResearchDeliveryMiddleware(AgentMiddleware[ResearchDeliveryState]):
     state_schema = ResearchDeliveryState
 
     async def aafter_agent(self, state: Any, runtime: Any) -> None:
-        """Stamp every job this conversation is holding a marker for."""
+        """Stamp every job this conversation is holding a marker for.
+
+        Args:
+            state: The conversation's graph state.
+            runtime: The run's runtime; not used.
+        """
         reconciled = await jobs.mark_collected_many(delivered_uuids(state))
         if reconciled:
             logger.info("Acknowledged %d delivered research job(s)", reconciled)
@@ -93,17 +97,30 @@ class ResearchDeliveryMiddleware(AgentMiddleware[ResearchDeliveryState]):
 
 
 def delivered_ids(state: Any) -> set[str]:
-    """Job ids this conversation has durably received."""
+    """Return the job ids this conversation has durably received.
+
+    Args:
+        state: The conversation's graph state.
+
+    Returns:
+        The ids, as strings.
+    """
     values = state if isinstance(state, dict) else {}
     return {str(item) for item in (values.get(DELIVERED_KEY) or [])}
 
 
 def delivered_uuids(state: Any) -> list[UUID]:
-    """The same ids as `UUID`s, dropping anything unparseable.
+    """Return the same ids as `UUID`s, dropping anything unparseable.
 
     Nothing should ever write a non-id here, and a malformed one is not worth
     ending a turn over: the cost of skipping it is one row that stays
     uncollected, which the next turn tries again.
+
+    Args:
+        state: The conversation's graph state.
+
+    Returns:
+        The ids that parse.
     """
     parsed: list[UUID] = []
     for item in delivered_ids(state):
@@ -115,7 +132,14 @@ def delivered_uuids(state: Any) -> list[UUID]:
 
 
 def current_findings(state: Any) -> dict[str, Any]:
-    """The conversation's findings as they stand now."""
+    """Return the conversation's findings as they stand now.
+
+    Args:
+        state: The conversation's graph state.
+
+    Returns:
+        A copy of the conversation's files, by path.
+    """
     values = state if isinstance(state, dict) else {}
     return dict(values.get("files") or {})
 
@@ -134,6 +158,16 @@ def plan_merge(
     conversation's version is canonical and the job's is preserved under the
     reserved conflict namespace, where a specialist cannot write and the path
     names the job it came from.
+
+    Args:
+        findings: The files the job wrote.
+        base_findings: The content of each file when the job started, by path.
+        current: The conversation's files now.
+        job_id: The job, named in any conflict path.
+
+    Returns:
+        The files to merge into the conversation, and an
+        ``(original path, conflict path)`` pair for each file set aside.
     """
     base = base_findings or {}
     merged: FindingsMap = {}
@@ -171,6 +205,15 @@ def deliver(
     the acknowledgement cannot be forgotten on the paths that carry no findings.
     `collected_at` is deliberately not set here: the row is stamped on the next
     call, once this write is known to have been checkpointed.
+
+    Args:
+        text: What the tool call returns to the supervisor.
+        job_id: The job being handed over.
+        tool_call_id: The tool call this answers.
+        files: Findings to merge into the conversation; None for none.
+
+    Returns:
+        The state update that delivers the outcome and records the delivery.
     """
     update: dict[str, Any] = {
         DELIVERED_KEY: [str(job_id)],
@@ -188,6 +231,15 @@ def describe(report: str, conflicts: list[tuple[str, str]], job_id: UUID) -> str
     supervisor to read if it turns out to matter -- inlining it here would put
     two versions of the same document into message history for the rest of the
     session, to settle a question that usually does not arise.
+
+    Args:
+        report: The specialist's report.
+        conflicts: The ``(original path, conflict path)`` pairs from `plan_merge`.
+        job_id: The job the report came from.
+
+    Returns:
+        The report, followed by a ``<merge_conflicts>`` block when there were
+        conflicts.
     """
     if not conflicts:
         return report

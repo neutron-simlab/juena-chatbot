@@ -7,6 +7,16 @@ from juena_rag.store.schema import apply_ddl
 
 
 def initialize(connection, dimension: int) -> None:
+    """Create the RAG schema in an empty database, or check an existing one fits.
+
+    Args:
+        connection: An open psycopg connection.
+        dimension: Embedding width the schema must have.
+
+    Raises:
+        RuntimeError: The schema is partial, has another embedding width, or
+            lacks an index.
+    """
     with connection.transaction():
         # Concurrent Compose invocations must not both observe an empty schema.
         connection.execute("SELECT pg_advisory_xact_lock(736482109)")
@@ -49,6 +59,7 @@ def initialize(connection, dimension: int) -> None:
 
 
 def main() -> None:
+    """Create or check the schema in the database ``JUENA_RAG_DSN`` names."""
     dimension = int(os.environ.get("BLABLADOR_EMBEDDING_DIMENSION", "4096"))
     with psycopg.connect(os.environ["JUENA_RAG_DSN"], options="-c search_path=public") as connection:
         initialize(connection, dimension)

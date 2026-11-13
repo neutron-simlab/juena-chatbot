@@ -149,6 +149,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_DIR=/data/logs
       - RELOAD=${RELOAD:-false}
+      # A Python traceback in the browser shows file paths and source lines.
+      # docker-compose.dev.yml turns them back on.
+      - STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=none
       
       # Durable identity, chat, checkpoints, and long-term memory.
       # Built here rather than inherited from the host environment. Compose
@@ -183,6 +186,10 @@ services:
       - REPO_CONFIG_PATH=/app/config/repositories.yaml
       - REPO_CACHE_DIR=/data/repos
     networks: [chatbot-network]
+    # A process in this container can never gain more rights than it started
+    # with (for example through a setuid program).
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy

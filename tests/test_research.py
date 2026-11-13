@@ -234,7 +234,7 @@ class _RefusingSandbox:
     """Stands in for the Podman backend and fails loudly if anything reaches it.
 
     The container's root filesystem is read-only, so a `/findings/` write that
-    got this far used to fail with `Errno 30: Read-only file system`.
+    reached it would fail with `Errno 30: Read-only file system`.
     """
 
     def __getattr__(self, name: str):
@@ -248,9 +248,9 @@ def _findings_backends(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]
     """The specialist backend in both shapes: with a sandbox and without."""
     from juena_core.agents.specialist_runtime import build_specialist_backend
 
-    # The sandbox is an opt-in core feature now, with its own settings object
-    # rather than a flag on this application's `Config`. `build_sandbox_backend`
-    # asks `sandbox_enabled()`, so that is the seam a test overrides.
+    # The sandbox is an opt-in core feature with its own settings object, not a
+    # flag on this application's `Config`. `build_sandbox_backend` asks
+    # `sandbox_enabled()`, so that is what a test overrides.
     monkeypatch.setattr(sandbox_runtime, "sandbox_enabled", lambda: True)
     monkeypatch.setattr(
         sandbox_runtime, "RuntimePodmanSandboxBackend", lambda: _RefusingSandbox()
@@ -272,19 +272,17 @@ async def test_findings_are_writable_and_readable_with_or_without_a_sandbox(
 ) -> None:
     """`/findings/` is graph state in both shapes, under its own full path.
 
-    Three bugs meet here. Left to the backend's default, `/findings/` was the
-    Podman container when the sandbox was on -- and that root is read-only, so
-    `write_file` failed outright with `Errno 30`. Routing it to a plain
-    `StateBackend` instead fixed the write but rewrote the key: `CompositeBackend`
-    strips a matched prefix, so `/findings/survey.md` was stored as `/survey.md`,
-    indistinguishable from any other top-level file and missed by the filter
-    `juena.research` uses. `FindingsStateBackend` does both halves.
+    Three things can go wrong here. Left to the backend's default, `/findings/`
+    is the Podman container when the sandbox is on -- and that root is
+    read-only, so `write_file` fails with `Errno 30`. A plain `StateBackend`
+    fixes the write but rewrites the key: `CompositeBackend` strips a matched
+    prefix, so `/findings/survey.md` is stored as `/survey.md`, missed by the
+    filter `juena.research` uses. `FindingsStateBackend` handles both.
 
-    Driven with `ainvoke` deliberately, because that is what the server does and
-    the third bug lived only there: `BackendProtocol` implements every `a*`
-    method as `asyncio.to_thread(self.<sync>, ...)`, so an `a*` override that
-    mapped the path applied it twice. An earlier version of this test called
-    `invoke`, passed, and proved nothing about the running system.
+    Driven with `ainvoke`, because that is what the server does and the third
+    failure shows only there: `BackendProtocol` implements every `a*` method as
+    `asyncio.to_thread(self.<sync>, ...)`, so an `a*` override that also mapped
+    the path would apply it twice. A test using `invoke` would pass regardless.
     """
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain.agents import create_agent
@@ -341,13 +339,13 @@ async def test_findings_are_writable_and_readable_with_or_without_a_sandbox(
 
 
 def test_a_finding_written_by_one_delegation_reaches_the_next() -> None:
-    """The claim `/findings/` exists to make true, finally asserted.
+    """A finding one specialist writes can be opened by the next delegation.
 
     A specialist cannot see the conversation or any earlier delegation; the
     `files` channel is the only thing that crosses. deepagents copies a
     subagent's whole state back except `messages`, `todos` and
-    `structured_response`, so `files` rides along -- **but only if the parent has
-    a `files` channel at all**, which it gets from `FilesystemMiddleware`. Drop
+    `structured_response`, so `files` rides along -- but only if the parent has
+    a `files` channel at all, which it gets from `FilesystemMiddleware`. Drop
     that middleware from the supervisor and every finding is silently discarded.
 
     The reader proves it saw the file by editing it: `edit_file` fails on a path
@@ -455,9 +453,9 @@ def test_a_finished_job_reads_as_finished_whether_it_worked_or_not() -> None:
 
     Every terminal status means "there is something here for the user", and the
     difference is in what `check_research` hands over. Cancellation is included
-    because collecting is what clears a job off the list -- a cancelled job that
-    read as its own status was never collected, so it was offered again at the
-    start of every turn for the rest of the conversation.
+    because collecting is what clears a job off the list -- a cancelled job shown
+    under its own status would never be collected, and would be offered again at
+    the start of every turn for the rest of the conversation.
     """
     assert _summary(_job(status="succeeded"))["status"] == "finished"
     assert _summary(_job(status="failed"))["status"] == "finished"
@@ -573,12 +571,10 @@ async def test_an_outcome_without_findings_is_still_acknowledged_durably(
 ) -> None:
     """A failure the user never saw is as lost as a report they never saw.
 
-    `failed` used to call `mark_collected` *before* its message was checkpointed,
-    so a crash in between left the row saying delivered and the conversation
-    never seeing why. `cancelled` returned plain text and stamped nothing at all,
-    so it stayed outstanding for the rest of the conversation. Both now take the
-    same route as a report: the marker rides the same write as the message, and
-    the row is stamped on the next call.
+    `failed` and `cancelled` take the same route as a report: the marker rides
+    the same write as the message, and the row is stamped on the next call.
+    Stamping it before the message is checkpointed would let a crash in between
+    leave the row saying delivered while the conversation never saw why.
     """
     job = _job(status=status, error="the model provider refused", finished_at=datetime.now(UTC))
     marked = _collector(monkeypatch, job)
@@ -601,7 +597,7 @@ async def test_a_terminal_job_already_delivered_is_never_handed_over_twice(
     """The marker is checked before the outcome is read, for every status.
 
     Reporting the same failure twice is exactly as wrong as reporting the same
-    result twice, and this is where the row finally learns it was collected.
+    result twice, and this is where the row is stamped as collected.
     """
     job = _job(
         status=status,
@@ -675,12 +671,9 @@ async def _run_once(monkeypatch: Any, result: dict) -> dict:
 def _handoff_package(structured_response: Any) -> AIMessage:
     """The real hand-off message, composed by the real middleware.
 
-    Not a hand-written fixture. The first version of these tests asserted on a
-    result carrying only a `HumanMessage`, a shape production never produces, and
-    passed while the defect it was written for was untouched:
-    `SpecialistOutcomeMiddleware` *always* emits a non-empty `AIMessage`, so the
-    "no final message" branch it exercised is unreachable in a real run.
-
+    Not a hand-written fixture: `SpecialistOutcomeMiddleware` always emits a
+    non-empty `AIMessage`, so a fixture of any other shape (a lone
+    `HumanMessage`, say) would exercise a branch a real run never reaches.
     Composing the package through the middleware means the test cannot drift from
     what the runner will actually be handed.
     """
@@ -722,14 +715,11 @@ def test_the_middleware_states_its_verdict_as_a_boolean() -> None:
 async def test_an_unverified_package_is_recorded_as_failed(monkeypatch: Any) -> None:
     """`ainvoke` returning says the graph ended, not that the specialist answered.
 
-    This is the observed failure, not a hypothetical. With the RAG store answering
-    500 to every search, three runs ended normally having found nothing, and each
-    stored `succeeded` — because the check was "is the final message non-empty",
-    and the middleware's `None returned. / STATUS: UNVERIFIED` package is 543
-    bytes of perfectly non-empty prose saying there is no result.
-
-    So this passes the *real* package through, and the assertion is on the stored
-    status. A test built on a message the middleware cannot emit proves nothing.
+    The middleware's `None returned. / STATUS: UNVERIFIED` package is long,
+    non-empty prose saying there is no result, so "is the final message
+    non-empty" is the wrong check: a run whose every search failed would be
+    stored as `succeeded`. So this passes the real package through, and the
+    assertion is on the stored status.
     """
     outcome = await _run_once(
         monkeypatch,
@@ -758,7 +748,7 @@ async def test_an_unverified_package_is_recorded_as_failed(monkeypatch: Any) -> 
 async def test_a_verified_package_is_recorded_as_succeeded_with_its_findings(
     monkeypatch: Any,
 ) -> None:
-    """The other half of the branch, so the fix cannot quietly fail every run."""
+    """The other half of the branch, so the check cannot quietly fail every run."""
     outcome = await _run_once(
         monkeypatch,
         {
@@ -791,7 +781,7 @@ def test_the_delivery_middleware_registers_an_after_agent_hook() -> None:
 
     Renaming or dropping `aafter_agent` would not fail anything else: the
     middleware would still compile, still declare the marker, and quietly stop
-    reconciling -- which is the state this fix was written to leave.
+    reconciling.
     """
     from langchain.agents.middleware import AgentMiddleware
 
@@ -804,12 +794,11 @@ def test_the_delivery_middleware_registers_an_after_agent_hook() -> None:
 async def test_a_delivered_job_is_acknowledged_without_the_model_asking(
     monkeypatch: Any,
 ) -> None:
-    """Reconciliation used to need `list_research`, and the model skips it.
+    """Reconciling must not depend on the model calling `list_research`, which it skips.
 
-    Observed directly: a job was delivered, read aloud, and edited by a later
-    specialist, and the next turn called no research tool at all. The row kept
-    `collected_at` null, so `GET /research` went on reporting `ready: 1` for a
-    result the user already had.
+    A turn after a delivery may call no research tool at all. The row would then
+    keep `collected_at` null, and `GET /research` would go on reporting
+    `ready: 1` for a result the user already has.
     """
     from juena.research import delivery
 

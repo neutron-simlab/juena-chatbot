@@ -1,7 +1,6 @@
 """Cloning the repositories, and judging which ones are usable.
 
-Everything about building or refreshing an index went with the Chroma cutover:
-juena-rag owns ingestion, and this module now only clones and reports.
+juena-rag builds the index; the code under test only clones and reports.
 """
 
 from __future__ import annotations
@@ -55,7 +54,7 @@ def test_a_repository_is_searchable_only_when_cloned_and_indexed() -> None:
 
 
 def test_one_broken_repository_does_not_disable_the_others() -> None:
-    """The whole point of step 4: `b` has no clone, so `a` and `c` still work."""
+    """`b` has no clone, so `a` and `c` still work."""
     survey = bootstrap.survey_repositories(
         _SurveyManager({"a", "c"}, ["a", "b", "c"]),
         _SurveyIndex({"a": 100, "b": 200, "c": 300}),
@@ -144,7 +143,7 @@ def _stub_manager(repo_ids: list[str], resolved: list[tuple[str, str | None]],
 def test_cloning_refreshes_every_repository_and_builds_no_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The half this pod still needs once search is remote."""
+    """Search runs in juena-rag; this pod only needs the clones the model reads."""
     resolved: list[tuple[str, str | None]] = []
     monkeypatch.setattr(bootstrap, "load_repo_configs", lambda _p=None: [])
     monkeypatch.setattr(bootstrap, "RepoManager", _stub_manager(["a", "b"], resolved))

@@ -39,7 +39,16 @@ print("sandbox plot and isolation checks passed")
 
 
 def check_worker(jobs, store, *, pause=time.sleep) -> bool:
-    """Submit through the same queue as chat; require both PNG bytes and evidence."""
+    """Submit through the same queue as chat; require both PNG bytes and evidence.
+
+    Args:
+        jobs: The sandbox job queue.
+        store: The workspace store the job runs in.
+        pause: Waits the given number of seconds between checks for a worker.
+
+    Returns:
+        Whether the smoke test passed.
+    """
     from PIL import Image
 
     identity = "smoke-" + uuid4().hex
@@ -85,6 +94,11 @@ def check_worker(jobs, store, *, pause=time.sleep) -> bool:
 
 
 def main() -> int:
+    """Create the sandbox job table, or run the smoke test against a real worker.
+
+    Returns:
+        The exit code: 0 on success, 1 on failure.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--initialize", action="store_true")
     parser.add_argument("--require-enabled", action="store_true")

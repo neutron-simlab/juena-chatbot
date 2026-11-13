@@ -1,9 +1,9 @@
 """The JüNA FastAPI application: core's factory, plus what is JüNA's alone.
 
-The routes, the streaming vocabulary, the lifespans and the identity seam are
-`juena_core.server.service.create_app`'s. What is passed in here is everything
-core cannot know: SAML, background research, the Podman sandbox, and the one
-paragraph of prompt text that closes a staged-input manifest.
+`juena_core.server.service.create_app` provides the routes, the streaming, the
+startup and shutdown work, and the hook for signing users in. This module passes
+in what core cannot know: SAML, background research, the Podman sandbox, and
+the paragraph of prompt text that ends the list of staged input files.
 """
 
 import warnings
@@ -36,25 +36,21 @@ from juena.server.research.endpoints import router as research_router
 from juena.server.tracing import langfuse_lifespan, start_langfuse
 from juena.uploads import UPLOAD_POLICY
 
-# Imported for its side effect: the module self-registers the agent factory.
-# Importing *this* module has to be enough, because the process serving the API
-# is not always `main.py` -- production runs `uvicorn juena.server.service:app`,
-# and the deployment plan splits the API and the UI into separate containers.
-# Registering only from `main.py` leaves those processes with an empty registry,
-# so every invocation would 404.
+# Imported for its side effect: the module registers the agent. Import it here,
+# not only in `main.py`: production runs `uvicorn juena.server.service:app`,
+# which never runs `main.py`, and without the agent every run answers 404.
 import juena.agents.juena_agent  # noqa: F401  register the JüNA supervisor
 
-# The same trap, one layer down: a model class nobody imports is never created
-# by `create_all`, and that fails at the first write rather than at startup.
+# Also for its side effect: a model class nobody imports is never created by
+# `create_all`, and that fails at the first write rather than at startup.
 import juena.server.database.models  # noqa: F401  add this app's tables
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = get_logger(__name__)
 logger.info("Service logging initialized")
 
-# Rendering an approval card and resuming from one have a single owner and a
-# single lifetime, so they register together -- and before the app is built,
-# because an unregistered kind can neither be shown nor answered.
+# Registers both how the approval card is shown and how it is answered. Do it
+# before the app is built: an unregistered kind can neither be shown nor answered.
 register_sandbox_interrupt()
 
 # Before the app is built: the first run must already carry the handler.
@@ -91,6 +87,11 @@ app = create_app(
         f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
         for url in (global_config.UI_PUBLIC_URL, global_config.JUENA_PUBLIC_URL)
     )),
+    # Core refuses a browser request that changes something unless it comes
+    # from the origins above. IFFLogin's page posts to these two from its own
+    # site, and neither trusts the session cookie: each is authorized by the
+    # SAML signature it carries.
+    origin_exempt_paths=("/auth/acs", "/auth/sls"),
     # Core's clarification arm plus the sandbox approval arm; the union exists
     # because `/resume` must accept exactly the kinds this deployment raises.
     resume_input=SandboxResumeInput,
@@ -110,9 +111,9 @@ app = create_app(
         silent_tools=frozenset({"execute", "analyze_tiff"}),
         tool_labels=JUENA_TOOL_LABELS,
     ),
-    # This block is prepended to the *supervisor's* turn, and the supervisor
-    # has neither `/repos` nor Context7 -- it cannot read `/inputs` either.
-    # So the instruction is about what to put in an objective, not what to do.
+    # Prepended to the supervisor's turn. The supervisor has neither `/repos`
+    # nor Context7 and cannot read `/inputs` either, so the note says what to
+    # put in an objective, not what to do.
     closing_note=(
         "Conversation files are shared under `/workspace`; uploads are in `/workspace/uploads`. "
         "Pasted material is under `/inputs`. No attachment or pin is needed. Name "

@@ -133,7 +133,10 @@ passwords, the filesystem identity secret and registered SP keys stable.
 
 Templates are not automatically copied onto the live gateway. Review changes
 before installing them, preserving the existing application's configuration
-and rollback material. Do not run competing lifecycle commands from multiple
+and rollback material. This includes the `server_tokens` line and the
+`add_header` lines in the JueNA server block of `nginx.with-juena.conf`: copy
+them into the installed `/etc/juena-edge/nginx.with-juena.conf` by hand, and
+keep `location` blocks free of their own `add_header`, which would drop them. Do not run competing lifecycle commands from multiple
 checkouts against the same Compose project.
 
 ## Proxy selection

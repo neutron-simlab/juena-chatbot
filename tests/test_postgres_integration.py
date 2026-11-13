@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TypedDict
 from uuid import uuid4
 
@@ -51,7 +52,9 @@ from juena_core.server.api.endpoints import build_api_router
 from juena_core.server.chat.endpoints import build_chat_router
 from juena_core.server.database.checkpointer import checkpointer_lifespan
 from juena_core.server.database.connection import database_lifespan, get_session_factory
+from juena.server.auth import endpoints as auth_endpoints
 from juena.server.auth.saml import PERSISTENT_NAME_ID_FORMAT, SamlIdentity
+from juena.server.database.models import SamlLoginRequest
 from juena_core.server.database.store import store_lifespan
 from juena_core.server.database.models import AuthSession, User, utc_now
 from juena.research import jobs as research_jobs
@@ -69,12 +72,10 @@ pytestmark = pytest.mark.skipif(
 def _use_test_database(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point *both* configurations at the throwaway database.
 
-    There are two of them since the cutover: this application's `Config`, which
-    its own modules read, and juena_core's frozen `CoreSettings`, which is what
-    `connection.py` actually opens a pool against. Core does not read
-    `global_config` and never will -- that is the whole point of decision 1 --
-    so patching only the application's would put this suite back on the
-    developer's database, the exact regression commit `40c846b` fixed.
+    There are two: this application's `Config`, which its own modules read, and
+    juena_core's frozen `CoreSettings`, which is what `connection.py` actually
+    opens a pool against. Core does not read `global_config`, so patching only
+    the application's would put this suite on the developer's database.
 
     Autouse, because the failure is silent: the tests still pass, against the
     wrong database, destroying rows someone was using.
@@ -88,9 +89,9 @@ def _use_test_database(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert juena_core.settings().DATABASE_URL == TEST_DATABASE_URL
 
-    # The sandbox is opt-in core now, and `conftest.py` turns it off for the
-    # unit suite. This module is one of the places that turns it back on
-    # explicitly: half of it exercises the job queue.
+    # The sandbox is an opt-in core feature, and `conftest.py` turns it off for
+    # the unit suite. This module turns it back on explicitly: half of it
+    # exercises the job queue.
     monkeypatch.setattr(
         sandbox_config,
         "_sandbox_settings",
@@ -177,11 +178,9 @@ async def test_clean_schema_and_user_owned_chats(monkeypatch: pytest.MonkeyPatch
             await session.commit()
             assert (await list_owned_chats(session, alice.id))[0].thread_id == newer_chat.thread_id
 
-            # The recency half of this test moved to juena-core, where
-            # `_authorize_thread` now lives as a closure inside
-            # `build_api_router` rather than a module-level function this could
-            # call. Core asserts it through the real route, against a real
-            # database, in `test_server_routes_postgres.py`.
+            # `_authorize_thread` lives inside core's `build_api_router`, out of
+            # reach here; juena-core tests it through the real route, against a
+            # real database.
 
             token = await create_auth_session(session, alice)
             await session.commit()
@@ -444,9 +443,8 @@ async def test_chat_and_agent_endpoints_enforce_thread_ownership(
         async def authenticated_user() -> Principal:
             return users[active["name"]]
 
-        # Core's routers are factories over the identity dependency now, so
-        # the dependency is visible in the signature rather than assumed. The
-        # override still keys on the same callable object.
+        # Core's routers are built around the identity dependency they are
+        # given; the override keys on that same callable object.
         app = FastAPI()
         app.include_router(build_chat_router(session_principal))
         app.include_router(build_api_router(session_principal))
@@ -456,9 +454,8 @@ async def test_chat_and_agent_endpoints_enforce_thread_ownership(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             created = await client.post(
                 "/chats",
-                # `agent_id` is required on the wire now: a conversation that
-                # does not know its own graph is the bug decision 13 exists to
-                # prevent, and this application has exactly one answer.
+                # `agent_id` is required: a conversation must know which agent
+                # graph it belongs to, and this application has exactly one.
                 json={
                     "thread_id": thread_id,
                     "agent_id": JUENA_AGENT_ID,
@@ -480,6 +477,80 @@ async def test_chat_and_agent_endpoints_enforce_thread_ownership(
                 )
             ).status_code == 404
             assert (await client.get("/chats")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_sign_in_is_tied_to_its_browser_and_clears_stale_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole sign-in against real tables; only IFFLogin itself is stood in for.
+
+    `/auth/login` writes the request row and sets the browser's cookie, and
+    `/auth/acs` reads both back, so nothing here is a hand-built input.
+    """
+
+    request_id = f"id-{uuid4().hex}"
+    stale_id = f"id-stale-{uuid4().hex}"
+    identity = SamlIdentity(
+        subject=f"sign-in-{uuid4()}",
+        subject_format=PERSISTENT_NAME_ID_FORMAT,
+        issuer="https://ifflogin.fz-juelich.de/saml/idp.xml",
+        in_response_to=request_id,
+    )
+    service = SimpleNamespace(
+        prepare_login=lambda relay_state: (request_id, "https://idp.example/sso?SAMLRequest=signed"),
+        parse_response=lambda *args, **kwargs: identity,
+    )
+    monkeypatch.setattr(auth_endpoints, "get_saml_service", lambda: service)
+    monkeypatch.setattr(global_config, "AUTH_DEV_BYPASS", False)
+    return_url = global_config.UI_PUBLIC_URL.rstrip("/")
+    # Posted by IFFLogin's page, so the browser labels it with IFFLogin's origin.
+    answer = {
+        "data": {"SAMLResponse": "signed-response", "RelayState": return_url},
+        "headers": {"Origin": "https://ifflogin.fz-juelich.de"},
+    }
+
+    async with database_lifespan():
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(SamlLoginRequest(
+                request_id=stale_id, relay_state=return_url,
+                created_at=utc_now() - timedelta(minutes=11),
+            ))
+            await session.commit()
+
+        app = FastAPI()
+        app.include_router(auth_endpoints.router)
+        transport = httpx.ASGITransport(app=app)
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="https://sp.example") as browser,
+            httpx.AsyncClient(transport=transport, base_url="https://sp.example") as other_browser,
+        ):
+            assert (await browser.get("/auth/login")).status_code == 303
+            async with factory() as session:
+                assert await session.get(SamlLoginRequest, stale_id) is None
+                assert await session.get(SamlLoginRequest, request_id) is not None
+
+            # The same valid answer, delivered by a browser that never asked.
+            planted = await other_browser.post("/auth/acs", **answer)
+            assert planted.status_code == 401
+            async with factory() as session:
+                assert (await session.get(SamlLoginRequest, request_id)).consumed_at is None
+                assert (await session.scalars(
+                    select(User).where(User.subject == identity.subject)
+                )).first() is None
+
+            finished = await browser.post("/auth/acs", **answer)
+            assert finished.status_code == 303
+            assert finished.headers["location"] == return_url
+            token = finished.cookies["juena_session"]
+            async with factory() as session:
+                assert (await session.get(SamlLoginRequest, request_id)).consumed_at is not None
+                principal = await session_principal(session_token=token, session=session)
+                assert principal.subject == identity.subject
+
+            # Replaying the consumed answer, even from the right browser, fails.
+            assert (await browser.post("/auth/acs", **answer)).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -649,14 +720,12 @@ async def test_admission_waits_on_the_owner_row_not_just_a_shared_transaction(
     Asserted by *blocking*, not by racing. A plain `asyncio.gather` of two
     `create` calls is timing-dependent -- whether both count before either
     inserts depends on how the driver happens to yield -- so it can pass against
-    an unlocked build by accident, and a test that only sometimes catches the
-    bug reads as proof the bug is gone.
+    an unlocked build by accident.
 
-    **The held lock must be `FOR KEY SHARE`, not `FOR UPDATE`.** An earlier
-    version of this test held `FOR UPDATE` and passed against an unlocked build,
-    because inserting a `research_jobs` row takes `FOR KEY SHARE` on the
-    referenced `users` row for the foreign key -- and that conflicts with a held
-    `FOR UPDATE`. Admission blocked either way and the test proved nothing.
+    The held lock must be `FOR KEY SHARE`, not `FOR UPDATE`. Inserting a
+    `research_jobs` row takes `FOR KEY SHARE` on the referenced `users` row for
+    the foreign key, and that conflicts with a held `FOR UPDATE`: admission would
+    block even in an unlocked build, and the test would prove nothing.
     `FOR KEY SHARE` is compatible with the foreign key's own lock and conflicts
     only with `FOR UPDATE`, so it blocks the explicit lock and nothing else.
     """
@@ -820,13 +889,12 @@ async def test_findings_survive_postgres_with_their_full_file_data_shape(
 ) -> None:
     """The column is JSON, so nothing on the database side guarantees the shape.
 
-    `findings` was annotated `dict[str, str]` while it actually held Deep Agents
-    `FileData`, and the value is merged straight back into the graph's `files`
-    channel on collection -- where a malformed entry breaks every later read of
-    that path. This exercises the real round trip rather than the annotation:
-    every `FileData` key must come back, and `base_findings` must come back
-    alongside it, because a conflict cannot be detected without the revision the
-    job read.
+    `findings` holds Deep Agents `FileData`, and the value is merged straight
+    back into the graph's `files` channel on collection -- where a malformed
+    entry breaks every later read of that path. This exercises the real round
+    trip: every `FileData` key must come back, and `base_findings` must come
+    back alongside it, because a conflict cannot be detected without the
+    revision the job read.
     """
     async with database_lifespan():
         user = await _research_user("research-shape")

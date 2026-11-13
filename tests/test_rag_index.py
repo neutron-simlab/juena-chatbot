@@ -1,9 +1,8 @@
 """The pgvector-backed index, asserted against the shape `repo_search` expects.
 
-The tools were written against a hit dictionary and two method signatures, and
-they still are; this file is what keeps that contract from drifting now that the
-Chroma implementation it was copied from has been deleted. Nothing here needs a
-network: the store is a fake.
+The search tools rely on a hit dictionary and two method signatures; this file
+keeps that contract from drifting. Nothing here needs a network: the store is a
+fake.
 """
 
 from dataclasses import dataclass, field
@@ -18,8 +17,8 @@ from juena.tools.repo_search import _serialize_vector_hit
 #: What `repo_search` reads out of a hit -- `_serialize_vector_hit` for what the
 #: model sees, `_distance_sort_key` for ranking across repositories. A key
 #: missing here is a key the tools would silently default, which is how a hit
-#: shape drifts. `id`, `start_index` and `end_index` are still produced but no
-#: longer read by anything, so they are not asserted.
+#: shape drifts. `id`, `start_index` and `end_index` are produced but read by
+#: nothing, so they are not asserted.
 REQUIRED_KEYS = (
     "file_path",
     "chunk_index",
@@ -106,13 +105,13 @@ def test_a_hit_survives_the_tools_own_serialiser():
     assert serialised["path"] == "/repos/jscatter/src/jscatter/dataarray.py"
     assert serialised["content"] == "def fit(self):"
     assert serialised["distance"] == 0.25
-    # Dropped: the model never used them and they were a third of the payload.
+    # Left out: the model never used them and they were a third of the payload.
     for gone in ("id", "file_path", "chunk_index", "start_index", "end_index", "char_count"):
         assert gone not in serialised
 
 
 def test_the_locator_fields_are_added_and_not_substituted():
-    """New keys are fine; changing the old ones would change model behaviour."""
+    """New keys are fine; changing the existing ones would change model behaviour."""
     hit = _as_chatbot_hit(FakeHit())
 
     assert (hit["start_line"], hit["end_line"]) == (12, 30)
@@ -191,10 +190,9 @@ def test_a_source_the_store_does_not_have_counts_as_none_not_zero(index):
 
 
 def test_an_unset_url_refuses_rather_than_serving_a_stale_local_index(monkeypatch):
-    """The old fallback would have answered from a retired Chroma index.
+    """A missing `JUENA_RAG_URL` stops the process; there is no local fallback.
 
-    Silently serving stale results is the failure nobody notices, so a missing
-    variable has to stop the process instead.
+    Silently serving stale results is the failure nobody notices.
     """
     import pytest
 

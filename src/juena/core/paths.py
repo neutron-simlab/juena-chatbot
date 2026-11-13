@@ -19,6 +19,13 @@ def repo_root() -> Path:
     A wheel lives under site-packages and has no adjacent pyproject.toml. The
     container explicitly names the directory holding its external app/config
     files instead of treating the installed Python package as a checkout.
+
+    Returns:
+        ``JUENA_APP_ROOT`` when set, else the nearest parent directory holding
+        a ``pyproject.toml``, else this file's directory.
+
+    Raises:
+        RuntimeError: ``JUENA_APP_ROOT`` is not an existing absolute directory.
     """
     if configured := os.getenv("JUENA_APP_ROOT"):
         root = Path(configured)
@@ -36,6 +43,9 @@ def get_config() -> Any:
     """Import ``Config`` lazily so importing a module does not load ``.env``.
 
     Also the seam tests patch to inject a stub configuration.
+
+    Returns:
+        The ``Config`` class.
     """
     from juena.core.config import Config
 

@@ -29,6 +29,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    """Send one test trace and wait until Langfuse can read it back.
+
+    Returns:
+        The exit code: 0 when the trace is readable, or with ``--if-configured``
+        when no keys are set yet; 1 otherwise.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("base_url")
     parser.add_argument(

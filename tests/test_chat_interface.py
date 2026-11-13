@@ -1,9 +1,8 @@
 """What the JüNA chat page does around core's stream loop.
 
 The stream loop itself, the chunk classifiers, the status container and the two
-interrupt cards moved to juena-core in plan 02/step 3 -- they implement the SSE
-contract core's server emits, so core is where they have to agree with it
-(00-BOUNDARY.md, decision 7). juena-core's ``test_ui_streaming.py`` holds them.
+interrupt cards are juena-core's, because they must match the event stream
+core's server sends; juena-core tests them.
 
 What is tested here is the page: which starter chips it offers, what it refuses
 to upload, and the fact that it draws this product's header before any of it.

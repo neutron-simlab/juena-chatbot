@@ -34,7 +34,10 @@ load_dotenv(path_env, override=False)
 
 
 class Config:
-    """Essential configuration for JueNA"""
+    """Essential configuration for JueNA, read from the environment and ``.env``.
+
+    Each setting is described where it is defined.
+    """
 
     OPENAI_API_KEY = None
     JUENA_SECRET_KEY = os.getenv("JUENA_SECRET_KEY", "")
@@ -91,9 +94,8 @@ class Config:
     CONTEXT7_TIMEOUT_SECONDS = int(os.getenv("CONTEXT7_TIMEOUT_SECONDS", "30"))
 
     # juena-rag, the shared retrieval service, and the only search backend: the
-    # repository tools search pgvector over HTTP. Required -- the Chroma index
-    # this replaced is deleted, so unset, `build_search_index()` refuses to start
-    # rather than serve from nothing.
+    # repository tools search pgvector over HTTP. Required: unset,
+    # `build_search_index()` refuses to start rather than serve from nothing.
     JUENA_RAG_URL = os.getenv("JUENA_RAG_URL", "").strip() or None
 
     # Sandboxed scientific execution. The `sandbox_jobs` table is the only
@@ -145,6 +147,13 @@ class Config:
     UI_PORT = int(os.getenv("UI_PORT", "9501"))
 
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+    # Exactly these two names. Development is the permissive mode: it allows
+    # the sign-in bypass, drops the HTTPS requirement and makes up a SAML key.
+    # A misspelt `production` must stop the process, not quietly weaken it.
+    if ENVIRONMENT not in ("development", "production"):
+        raise RuntimeError(
+            f"ENVIRONMENT must be 'development' or 'production', not {ENVIRONMENT!r}."
+        )
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     _development = ENVIRONMENT.lower() != "production"
 
@@ -160,9 +169,9 @@ class Config:
         "JUENA_PUBLIC_URL",
         "http://localhost:8080" if _development else None,
     )
-    # Compatibility alias for one release. It remains useful in development,
-    # where FastAPI and Streamlit run on separate localhost ports. A production
-    # gateway serves both from JUENA_PUBLIC_URL, so this defaults to that origin.
+    # Browser-facing origin of the UI. Needed in development, where FastAPI and
+    # Streamlit run on separate localhost ports. A production gateway serves
+    # both from JUENA_PUBLIC_URL, so this defaults to that origin.
     UI_PUBLIC_URL = os.getenv(
         "UI_PUBLIC_URL",
         "http://localhost:9501" if _development else JUENA_PUBLIC_URL,
@@ -211,10 +220,10 @@ class Config:
     )
     XMLSEC_BINARY = os.getenv("XMLSEC_BINARY", "/usr/bin/xmlsec1")
 
-    # Development-only authentication bypass, for use while SP registration
-    # with the FZJ IdP is pending. Refused outright outside development: the
-    # process will not start rather than silently exposing an unauthenticated
-    # login route. See deploy/SAML-IFFLOGIN.md.
+    # Development-only sign-in bypass, for running without an SP registered
+    # with the FZJ IdP. Refused outright outside development: the process will
+    # not start rather than silently exposing an unauthenticated login route.
+    # See deploy/SAML-IFFLOGIN.md.
     _auth_dev_bypass = os.getenv("AUTH_DEV_BYPASS", "false").lower() == "true"
     if _auth_dev_bypass and not _development:
         raise RuntimeError(
@@ -242,13 +251,13 @@ class Config:
 
     @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
-        """
-        Get dictionary of supported providers; personal readiness is checked by the API.
+        """Map each supported provider to whether it is available.
 
-        Uses direct config checks to avoid circular imports during initialization.
+        Personal readiness is checked by the API. Uses direct config checks to
+        avoid circular imports during initialization.
 
         Returns:
-            Dict mapping provider names to availability status
+            Provider name to availability.
         """
         from juena_core.schema.llm_models import Provider
 
@@ -256,7 +265,12 @@ class Config:
 
     @classmethod
     def validate_required(cls):
-        """Validate that required environment variables are set"""
+        """Validate that required environment variables are set.
+
+        Raises:
+            ValueError: One or more settings are missing or unsafe; the message
+                lists every problem found.
+        """
         errors = []
 
         try:
@@ -373,6 +387,9 @@ class Config:
         `LANGCHAIN_TRACING_V2`) before `LANGSMITH_TRACING`, so a stray `_V2`
         left in the environment would keep tracing on while startup printed
         "disabled". Writing `LANGSMITH_TRACING_V2` in both branches settles it.
+
+        Returns:
+            Whether LangSmith tracing is on.
         """
         if cls.LANGSMITH_TRACING and cls.LANGSMITH_API_KEY:
             os.environ["LANGSMITH_TRACING_V2"] = "true"
@@ -387,7 +404,14 @@ class Config:
 
     @classmethod
     def initialize(cls):
-        """Initialize configuration - call once at startup"""
+        """Initialize configuration; call once at startup.
+
+        Returns:
+            The ``Config`` class itself.
+
+        Raises:
+            ValueError: A required setting is missing or unsafe.
+        """
         cls.validate_required()
         langsmith_enabled = cls.setup_langsmith()
 
@@ -425,10 +449,9 @@ def _configure_core() -> None:
     Validation checks operator configuration. Personal model credentials are
     resolved only when a signed-in user makes a request.
 
-    This is the whole of 00-BOUNDARY.md decision 1 in practice: `Config` keeps
-    its `os.getenv` calls and its `validate_required()`, which knows about
-    SAML, production HTTPS and this deployment's sandbox, and core is handed a
-    frozen value object instead of being taught to read an environment.
+    `Config` keeps its `os.getenv` calls and its `validate_required()`, which
+    knows about SAML, production HTTPS and this deployment's sandbox. Core is
+    handed a frozen settings object instead of reading the environment itself.
     """
 
     juena_core.configure(
@@ -456,20 +479,17 @@ def _configure_core() -> None:
             ARTIFACT_ROOT=Config.SANDBOX_ARTIFACT_ROOT,
             AUDIT_FILE=Config.SANDBOX_AUDIT_FILE,
             LOG_LEVEL=Config.LOG_LEVEL,
-            # Both are facts about this deployment, and both are true: the API
-            # binds SERVER_HOST and Compose publishes 8080. They exist so core
-            # can refuse to pair a fixed, unauthenticated principal with a
-            # reachable API -- which is not this application, since every route
-            # here authenticates a real SAML session.
+            # The API binds SERVER_HOST and Compose publishes 8080. Core uses
+            # these to refuse a fixed, unauthenticated principal on a reachable
+            # API; this application signs every user in through SAML instead.
             BIND_HOST=Config.SERVER_HOST,
             API_PUBLISHED=True,
         )
     )
 
-    # Separate object, separate call: the sandbox is an optional core feature,
-    # and its settings must not become fields every consumer of core carries.
-    # Importing the `sandbox_jobs` model -- and so creating the table -- happens
-    # inside this call, and only when it is enabled.
+    # Separate calls: the sandbox is an optional core feature, so its settings
+    # are not fields every consumer of core carries. `configure_sandbox` imports
+    # the `sandbox_jobs` model (and so creates the table) only when enabled.
     configure_filesystem(ConversationFilesystem(
         WorkspaceStore(Config.SANDBOX_WORKSPACE_ROOT,
                        limit_bytes=Config.SANDBOX_WORKSPACE_LIMIT_BYTES,

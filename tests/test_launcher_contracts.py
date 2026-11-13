@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_explicit_core_check_fails_when_checkout_is_missing(tmp_path: Path) -> None:
-    """A missing checkout must not turn the boundary check into a green run."""
+    """A missing checkout must not turn the import-direction check into a green run."""
 
     env = os.environ.copy()
     env["JUENA_CORE_REPO"] = str(tmp_path / "missing-core")

@@ -37,10 +37,10 @@ NEUTRON_RESEARCH_SPECIALIST_DESCRIPTION = (
     "about neutron software -- sending them here produces a web search instead of an answer."
 )
 NEUTRON_RESEARCH_SPECIALIST_PROVIDER = Provider.BLABLADOR.value
-# The software specialist's model and host. A research run on Qwen at JUWELS
-# wrote 8 tokens/s with a 367k-token context (2026-11-06); HZDR serves DeepSeek
-# faster but only about 30 requests a minute, so juena_core paces it and JUWELS
-# serves the same model when HZDR still refuses.
+# The software specialist's model and host. Qwen at JUWELS wrote only 8
+# tokens/s at a 367k-token context; HZDR serves DeepSeek faster but only about
+# 30 requests a minute, so juena_core paces it and JUWELS serves the same model
+# when HZDR still refuses.
 NEUTRON_RESEARCH_SPECIALIST_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_HZDR.value
 NEUTRON_RESEARCH_SPECIALIST_BACKUP_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH_JUWELS.value
 
@@ -48,7 +48,16 @@ NEUTRON_RESEARCH_SPECIALIST_BACKUP_MODEL = BlabladorModelName.DEEPSEEK_V41_FLASH
 def build_neutron_research_prompt(
     *, has_tavily: bool | None, unattended: bool = False
 ) -> str:
-    """Append truthful runtime capability status to the authored prompt."""
+    """Append truthful runtime capability status to the authored prompt.
+
+    Args:
+        has_tavily: Whether web search is available; None leaves the status
+            out, for when it is decided per user at run time.
+        unattended: Whether this prompt is for the background-research copy.
+
+    Returns:
+        The system prompt.
+    """
 
     prompt = load_markdown("juena.agents.specialists.neutron_research", "AGENT.md")
     status = (
@@ -78,6 +87,17 @@ def build_neutron_research_specialist(
 
     ``unattended`` compiles the copy that background research runs, without
     ``ask_user``: a job nobody is watching cannot have its question answered.
+
+    Args:
+        tavily_tool: The web search tool, or None when it is not configured.
+        summarizer_model: Model that summarizes a history that grows too long.
+        fallback_models: Models to try when the main one fails.
+        unattended: Build the background-research copy.
+        checkpointer: Where the run saves its progress; background jobs pass
+            their own.
+
+    Returns:
+        The specialist's name, description and compiled graph.
     """
 
     backend = build_specialist_backend()

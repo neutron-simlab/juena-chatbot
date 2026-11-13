@@ -5,10 +5,9 @@ writes, the next one reads -- stops being the only case: a job returning a
 snapshot it never touched, two writers reaching the same path, or a crash on
 either side of the checkpoint that records delivery.
 
-The delegation boundary itself -- what state crosses into a specialist and what
-comes back -- moved to juena-core's `test_findings_and_delegation.py` in plan
-02/step 3, along with the reasoning those tests carried. `SpecialistDelegate`
-is core's; a background job is this application's.
+What state crosses into a specialist and what comes back is juena-core's
+`SpecialistDelegate`, tested in juena-core; a background job is this
+application's.
 """
 
 from __future__ import annotations
@@ -137,7 +136,7 @@ def test_the_conflict_path_is_deterministic_so_retrying_is_safe() -> None:
 
 
 def test_the_conflict_report_names_paths_without_inlining_them() -> None:
-    """Two copies of a document in message history is what we just removed."""
+    """Inlining the files would put a second copy of each in message history."""
 
     text = describe(
         "<specialist_report>…</specialist_report>",
@@ -275,9 +274,9 @@ async def test_a_crash_before_the_checkpoint_leaves_the_job_collectable(
 ) -> None:
     """Delivery is acknowledged by the write that performs it, not before it.
 
-    `collected_at` used to be set inside the tool. If anything failed between
-    that database write and the graph checkpoint, the row said delivered and the
-    conversation never saw the report -- a silent, unrecoverable loss.
+    If the tool set `collected_at` itself and anything failed between that
+    database write and the graph checkpoint, the row would say delivered while
+    the conversation never saw the report: a silent, unrecoverable loss.
     """
     from juena.research import jobs
     from juena.tools.research import build_research_tools

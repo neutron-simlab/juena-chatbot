@@ -30,6 +30,13 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
 
 
 def build_tools(tavily_tool: Any | None) -> list[Any]:
-    """Expose Tavily only when configured."""
+    """Expose Tavily only when configured.
+
+    Args:
+        tavily_tool: The web search tool, or None.
+
+    Returns:
+        Web search and page reading when the tool is given, otherwise nothing.
+    """
 
     return [tavily_tool, tavily_extract] if tavily_tool is not None else []

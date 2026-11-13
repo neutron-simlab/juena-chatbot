@@ -1,8 +1,8 @@
 """Clone the configured repositories, and report which ones are usable.
 
-No indexing happens here any more. juena-rag holds the vectors and an ingestion
-job fills them; what this machine still needs is the files themselves, so the
-model can open one and quote real line numbers.
+Nothing is indexed here: juena-rag holds the vectors and an ingestion job fills
+them. This machine needs the files themselves, so the model can open one and
+quote real line numbers.
 """
 
 from __future__ import annotations
@@ -24,11 +24,14 @@ BOOTSTRAP_DONE_ENV = "JUENA_BOOTSTRAP_DONE"
 
 
 def indexed_revisions() -> dict[str, str]:
-    """The commit juena-rag indexed each repository at. Empty if it cannot say.
+    """Ask juena-rag which commit it indexed each repository at.
 
-    Empty leaves every clone on its branch head, as before: the files may then be
-    newer than what search read, which is logged rather than fatal -- search is
-    unreachable in that case anyway.
+    Empty leaves every clone on its branch head, so the files may be newer than
+    what search read. That is logged, not fatal: search is unreachable in that
+    case anyway.
+
+    Returns:
+        The indexed commit by repository id; empty if juena-rag cannot say.
     """
     try:
         return build_search_index().indexed_revisions()
@@ -48,6 +51,13 @@ def clone_repositories(config_path: Path | None = None) -> dict[str, str]:
     ``/repos/`` to quote real line numbers. Those are the indexed file's lines only
     if the clone is at the indexed commit; the branch head moves on between
     ingests. Running this again after an ingest re-pins without a restart.
+
+    Args:
+        config_path: The repository registry; None uses the default location.
+
+    Returns:
+        The checked-out commit by repository id, for each repository that
+        could be cloned or refreshed.
     """
     repo_manager = RepoManager(load_repo_configs(config_path))
     indexed = indexed_revisions()
@@ -75,6 +85,11 @@ class RepositorySurvey:
 
     One pass rather than two questions, because asking a remote store twice costs
     a round trip per repository for an answer that cannot have changed in between.
+
+    Attributes:
+        searchable: Repositories that are both cloned and indexed; every
+            configured one when the store cannot be reached.
+        problems: What is wrong with the rest, one line each.
     """
 
     searchable: list[str]
@@ -82,6 +97,7 @@ class RepositorySurvey:
 
     @property
     def any_searchable(self) -> bool:
+        """Whether at least one repository is searchable."""
         return bool(self.searchable)
 
 
@@ -90,9 +106,16 @@ def survey_repositories(
 ) -> RepositorySurvey:
     """Check every repository once: is it cloned, and does the store hold it?
 
-    A repository needs **both** to be useful -- the store answers the search and
-    the clone answers the file read that follows it -- but one broken repository
-    is not a reason to take the tools away from the other eight.
+    A repository needs both to be useful (the store answers the search and the
+    clone answers the file read that follows it), but one broken repository is
+    not a reason to take the tools away from the others.
+
+    Args:
+        repo_manager: The configured repository clones.
+        vector_index: The juena-rag search client.
+
+    Returns:
+        Which repositories are usable, and what is wrong with the rest.
     """
     searchable: list[str] = []
     problems: list[str] = []
@@ -127,7 +150,14 @@ def survey_repositories(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint: clone or refresh every configured repository."""
+    """CLI entrypoint: clone or refresh every configured repository.
+
+    Args:
+        argv: Command-line arguments; None reads them from the command line.
+
+    Returns:
+        The exit code, always 0; a repository that fails is logged.
+    """
     argparse.ArgumentParser(prog="juena.indexing.bootstrap").parse_args(argv)
 
     cloned = clone_repositories()

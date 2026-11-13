@@ -8,6 +8,15 @@ import json
 
 
 def repository_report(manager, index) -> dict:
+    """Report which repositories are configured, cloned and indexed.
+
+    Args:
+        manager: The configured repository clones.
+        index: The juena-rag search client.
+
+    Returns:
+        The report. On failure it holds the exception's type, never its message.
+    """
     report = {"configured": list(manager.repo_ids)}
     try:
         index.ping()
@@ -22,6 +31,14 @@ def repository_report(manager, index) -> dict:
 
 
 def sandbox_report(config) -> dict:
+    """Report whether the sandbox job table exists and a worker is connected.
+
+    Args:
+        config: The application configuration.
+
+    Returns:
+        The report. On failure it holds the exception's type, never its message.
+    """
     import psycopg
     from juena_core.sandbox.jobs import (
         WORKER_LOCK_CLASSID, WORKER_LOCK_OBJID, database_url,
@@ -44,6 +61,11 @@ def sandbox_report(config) -> dict:
 
 
 def main() -> int:
+    """Print the repository and sandbox reports as JSON.
+
+    Returns:
+        The exit code: 1 when either check failed, else 0.
+    """
     from juena.core.config import global_config
     from juena.indexing.rag_index import RagVectorIndex
     from juena.indexing.repo_manager import RepoManager

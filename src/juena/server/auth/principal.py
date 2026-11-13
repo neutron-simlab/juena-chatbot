@@ -1,12 +1,9 @@
-"""SAML's side of the identity seam.
+"""Turn a SAML sign-in into juena-core's ``Principal``.
 
-Core owns what an authenticated caller *is* (:class:`Principal`), where the
-session lives, and the cookie dependency that reads it. It deliberately does
-not know what a SAML assertion is: ``upsert_principal`` takes the four fields,
-not an identity object (01/CP3).
-
-This module is the one place that translates between them, so the SAML
-vocabulary stops here and everything downstream speaks core's.
+Core owns what a signed-in caller is (:class:`Principal`), where the session
+lives, and the cookie dependency that reads it; it knows nothing about SAML.
+This module is the one place that translates between the two, so code past it
+never deals with SAML terms.
 """
 
 from __future__ import annotations
@@ -39,7 +36,15 @@ __all__ = [
 
 
 async def upsert_saml_user(session: AsyncSession, identity: SamlIdentity) -> Principal:
-    """Record the caller an assertion names, creating the ``users`` row if new."""
+    """Record the caller an assertion names, creating the ``users`` row if new.
+
+    Args:
+        session: Database session.
+        identity: The verified SAML identity.
+
+    Returns:
+        The user, as core's ``Principal``.
+    """
 
     return await upsert_principal(
         session,

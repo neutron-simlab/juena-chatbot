@@ -7,7 +7,13 @@ from juena.core.config import global_config
 
 @dataclass(frozen=True)
 class StarterPrompt:
-    """A chip label and the question it sends."""
+    """A chip label and the question it sends.
+
+    Attributes:
+        label: Text shown on the chip.
+        prompt: Question sent when the chip is clicked.
+        requires_sandbox: Whether the question needs sandboxed execution.
+    """
 
     label: str
     prompt: str
@@ -45,7 +51,12 @@ PLOT_STARTER = StarterPrompt(
 
 
 def build_starter_prompts() -> list[StarterPrompt]:
-    """Return immediate-send prompts available in this deployment."""
+    """Return immediate-send prompts available in this deployment.
+
+    Returns:
+        The fixed starters, plus the plotting starter when the sandbox is
+        enabled or its preview is switched on.
+    """
     prompts = list(STARTER_PROMPTS)
     if global_config.SANDBOX_ENABLED or global_config.SANDBOX_STARTER_PREVIEW:
         prompts.append(PLOT_STARTER)
