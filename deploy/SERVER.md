@@ -10,7 +10,9 @@ Choose a standalone gateway for a dedicated JüNA host, or follow
 Production commands always build the checkout containing the invoked launcher.
 
 Even a development server with real users runs with `ENVIRONMENT=production`
-and IFFLogin authentication. Use `./juena prod ...` and the installed
+and IFFLogin authentication. The value must be exactly `production` or
+`development`; anything else, including a trailing space, stops the application
+at startup instead of silently selecting development mode. Use `./juena prod ...` and the installed
 `/etc/juena/juena.env`; `.env` and commands without `prod` are for local
 workstations. See [troubleshooting](TROUBLESHOOTING.md) for known failures and
 [deployment records](BUILD-RECORD.md) for what to record at each installation.
@@ -92,6 +94,11 @@ mounts it read-only into nginx:
 ```yaml
 - ${JUENA_TLS_DIR:-./.tls}:/etc/nginx/tls:ro
 ```
+
+`deploy/nginx.conf` also sends browser security headers with every response.
+One of them, `Strict-Transport-Security`, makes browsers refuse plain HTTP and
+certificate warnings for this host name for a year, so renew the certificate
+before it expires: users cannot click past an expired one.
 
 Place these PEM files in that directory:
 

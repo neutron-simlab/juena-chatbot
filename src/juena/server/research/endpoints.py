@@ -28,11 +28,22 @@ async def list_research(
 
     Ownership is checked against the chat, not against the job rows: a thread id
     the user does not own must 404 whether or not any research exists on it.
+
+    Args:
+        thread_id: The conversation to report on.
+        user: The signed-in user.
+        session: Database session.
+
+    Returns:
+        ``{"jobs": [...], "running": int, "ready": int}``.
+
+    Raises:
+        HTTPException: 404 when the user does not own the chat.
     """
     try:
-        # `agent_id=None` deliberately: this route is addressed by thread, it
-        # runs no graph, and core makes the argument mandatory-but-nullable so
-        # that a route which *does* run one cannot skip the check by omission.
+        # `agent_id=None` on purpose: this route runs no graph. Core makes the
+        # argument required (though it may be None) so a route that does run
+        # one cannot skip the check by leaving it out.
         await get_owned_chat(session, user.id, thread_id, agent_id=None)
     except ChatNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Chat not found") from exc

@@ -162,7 +162,15 @@ async def _poll() -> None:
 
 @asynccontextmanager
 async def lifespan() -> AsyncIterator[None]:
-    """One database-driven execution path for both new and interrupted jobs."""
+    """Poll for and run background research while the server is up.
+
+    One database-driven execution path for both new and interrupted jobs. On
+    exit it cancels the poller and every running job; their rows stay active
+    for the next process to pick up.
+
+    Yields:
+        Nothing; the server runs inside this block.
+    """
     poller = asyncio.create_task(_poll(), name="research-poller", context=contextvars.Context())
     try:
         yield

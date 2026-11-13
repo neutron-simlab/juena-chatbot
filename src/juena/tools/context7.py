@@ -12,10 +12,29 @@ from juena.core.paths import get_config
 
 @dataclass
 class Context7Runtime:
+    """The Context7 tools the cached supervisor graph was built with.
+
+    Attributes:
+        tools: The Context7 tools.
+    """
+
     tools: list[Any]
 
 
 async def call_context7(key: str, name: str, arguments: dict) -> Any:
+    """Call one Context7 tool with a personal key, within the configured timeout.
+
+    Args:
+        key: The user's Context7 API key.
+        name: The Context7 tool to call.
+        arguments: The tool's arguments.
+
+    Returns:
+        The tool's result.
+
+    Raises:
+        TimeoutError: The call took longer than ``CONTEXT7_TIMEOUT_SECONDS``.
+    """
     config = get_config()
     async with asyncio.timeout(config.CONTEXT7_TIMEOUT_SECONDS):
         return await call_personal_tool({"mcpServers": {"context7": {
@@ -52,5 +71,10 @@ async def query_docs(libraryId: str, query: str, runtime: ToolRuntime[RuntimeMod
 
 
 async def load_optional_context7_tools() -> Context7Runtime:
+    """Return the Context7 tools for the graph.
+
+    Returns:
+        The tools; each call looks up the user's key itself.
+    """
     # No network or credentials during process-wide graph construction.
     return Context7Runtime(tools=[resolve_library_id, query_docs])

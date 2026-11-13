@@ -58,7 +58,19 @@ _SPECIALIST_SKILLS_PATH = Path(__file__).with_name("skills")
 def build_software_prompt(
     *, has_repo_research: bool, has_context7: bool | None, unattended: bool = False
 ) -> str:
-    """Append truthful runtime capability status to the authored prompt."""
+    """Append truthful runtime capability status to the authored prompt.
+
+    Args:
+        has_repo_research: Whether the repository catalogue and search tools
+            are present.
+        has_context7: Whether Context7 is available; None leaves its status
+            out, for when it is decided per user at run time.
+        unattended: Whether this prompt is for the background-research copy,
+            which cannot execute code.
+
+    Returns:
+        The system prompt.
+    """
 
     prompt = load_markdown("juena.agents.specialists.software", "AGENT.md")
     repo_status = (
@@ -119,6 +131,20 @@ def build_software_specialist(
     ``ask_user`` and no sandbox, because a job nobody is watching cannot answer
     an interrupt. Foreground commands run automatically, with execution evidence
     still recorded by the sandbox middleware.
+
+    Args:
+        repo_manager: The configured repository clones.
+        vector_index: The juena-rag search client.
+        has_repo_research: Whether to add the repository tools and ``/repos``.
+        context7_tools: The Context7 tools; empty when not configured.
+        summarizer_model: Model that summarizes a history that grows too long.
+        fallback_models: Models to try when the main one fails.
+        unattended: Build the background-research copy.
+        checkpointer: Where the run saves its progress; background jobs pass
+            their own.
+
+    Returns:
+        The specialist's name, description and compiled graph.
     """
 
     repo_cache_root = repo_manager.cache_dir if has_repo_research else None

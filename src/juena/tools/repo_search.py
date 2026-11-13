@@ -103,20 +103,19 @@ def _serialize_vector_hit(repo_id: str, hit: dict) -> dict:
     """One hit in the smallest shape the model can act on.
 
     Every field is either something the model reads, something it hands to
-    another tool, or something it ranks on. The chunk id, the character offsets
-    and the byte count were none of those and cost a third of the payload on
+    another tool, or something it ranks on. The chunk id and the character
+    offsets are none of those and would cost about a third of the payload on
     every search, which the specialist runs several times per question.
     """
 
     distance = hit.get("distance")
     serialised = {
         "repo_id": repo_id,
-        # The argument for `read_file`. `file_path` used to sit beside this
-        # restating the same path without the prefix.
+        # The argument for `read_file`.
         "path": _repo_virtual_path(repo_id, str(hit.get("file_path", ""))),
         "is_doc": hit.get("is_doc", False),
-        # Three decimals. The model compares hits with this; the seventeen
-        # digits it used to carry are float noise, not precision.
+        # Three decimals. The model compares hits with this; further digits
+        # are float noise, not precision.
         "distance": None if distance is None else round(float(distance), 3),
     }
 
@@ -233,7 +232,16 @@ def build_code_chat_tools(
     repo_manager: RepoManager,
     vector_index: RagVectorIndex,
 ) -> list:
-    """Create retrieval tools bound to the prepared repository resources."""
+    """Create retrieval tools bound to the prepared repository resources.
+
+    Args:
+        repo_manager: The configured repository clones.
+        vector_index: The juena-rag search client.
+
+    Returns:
+        ``search_code_semantic``, ``search_docs_local`` and
+        ``list_indexed_repositories``.
+    """
 
     @tool
     def search_code_semantic(

@@ -189,6 +189,15 @@ in the application and applies to both gateway modes.
 
 ## Validation policy and compatibility fixes
 
+A sign-in can only be completed by the browser that started it. `/auth/login`
+sets a ten-minute cookie, `__Host-juena_login`, holding the request ID, and
+`/auth/acs` rejects a valid IFFLogin response whose `InResponseTo` does not
+match it. Otherwise someone could sign in, copy their own response, and have
+another person's browser deliver it. Consequences: starting a second sign-in
+in another tab invalidates the first, and the cookie is always `Secure`, so a
+local SAML test over `http://localhost` works in Chrome and Firefox but not in
+Safari.
+
 JüNA requires a signed Response. A separate Assertion signature is optional
 and verified when present; the enclosing Response signature covers its
 assertion. Metadata advertises `WantAssertionsSigned="false"`. Do not disable

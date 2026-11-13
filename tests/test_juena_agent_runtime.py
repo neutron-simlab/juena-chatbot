@@ -168,13 +168,13 @@ def test_only_the_model_call_limit_terminates() -> None:
 
 
 def test_no_budget_spans_more_than_one_invocation() -> None:
-    """Deliberately absent, not overlooked.
+    """No limiter sets a `thread_limit`; every budget is per invocation.
 
     A resume after an approval or an `ask_user` answer is a new invocation, so
     `run_limit` restarts -- but the stock `thread_limit` counts every later turn
     of the same chat too, which would eventually stop a healthy long
     conversation. Bounding a user *turn* needs a turn identity JueNA does not
-    have. Until then the honest contract is per invocation.
+    have.
     """
     assert all(item.thread_limit is None for item in _limiters())
 
@@ -184,11 +184,11 @@ def test_no_budget_spans_more_than_one_invocation() -> None:
 
 @pytest.mark.asyncio
 async def test_a_long_conversation_is_not_ended_by_earlier_turns() -> None:
-    """Driven through a graph, because the config assertion alone is not proof.
+    """Turns on one `thread_id` whose combined model calls exceed the limit.
 
-    Two turns on one `thread_id` whose combined model calls exceed the limit. If
-    a `thread_limit` is ever added, the second turn stops answering and this
-    fails -- which is the whole point of writing it down.
+    Driven through a graph, because the config assertion alone does not prove
+    it. If a `thread_limit` is ever added, a later turn stops answering and this
+    fails.
     """
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -289,7 +289,7 @@ async def test_supervisor_assembly_registers_both_specialists(
         return supervisor_model if kwargs["model"] == "user-model" else summarizer_model
 
     def fake_build_software_specialist(**kwargs: Any) -> dict[str, Any]:
-        # Every call, not the last one: each specialist is now compiled twice,
+        # Every call, not the last one: each specialist is compiled twice,
         # once for `task` and once for background research.
         created.setdefault("software_calls", []).append(kwargs)
         created["software_kwargs"] = kwargs
@@ -491,18 +491,12 @@ def test_only_the_juena_agent_is_registered() -> None:
 
 @pytest.mark.asyncio
 async def test_shutdown_closes_an_instance_that_asks_to_be_closed() -> None:
-    """Core's shutdown contract is one method on the instance object.
+    """Core's shutdown calls `aclose()` or `close()` on an instance that has one.
 
-    It used to reach for `instance.context7_runtime.client` by name, which only
-    ever made sense for this application. The replacement is generic: if the
-    object an agent factory returned exposes `aclose()` or `close()`, shutdown
-    calls it.
-
-    JüNA's own `JuenaAgentResources` exposes neither, and that is now correct
-    rather than an omission -- `juena_core.mcp` hands back tools that reopen
-    their own connection per call, so Context7 has no client whose lifetime
-    must match the agent's. The retired adapter had no `close`/`aclose` either,
-    so this shutdown was already doing nothing for it.
+    The instance is the object an agent factory returned. JüNA's own
+    `JuenaAgentResources` has neither, which is correct: `juena_core.mcp` hands
+    back tools that open their own connection per call, so Context7 has no
+    client whose lifetime must match the agent's.
     """
 
     closed: list[str] = []

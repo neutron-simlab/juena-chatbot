@@ -2,6 +2,14 @@
 
 
 async def blablador_key() -> str:
+    """Read the personal Blablador key of the user the current run belongs to.
+
+    Returns:
+        The decrypted key.
+
+    Raises:
+        CredentialError: There is no signed-in run, or the user has no usable key.
+    """
     from langgraph.runtime import get_runtime
     from juena.server.credentials import CredentialError, personal_key
 
@@ -14,7 +22,15 @@ async def blablador_key() -> str:
 
 
 def credential_error_message(error: Exception) -> str | None:
-    """User-facing failures without upstream bodies, URLs, or credentials."""
+    """User-facing failures without upstream bodies, URLs, or credentials.
+
+    Args:
+        error: The exception a run raised.
+
+    Returns:
+        A safe message for a credential or Blablador failure, or None for any
+        other error.
+    """
     from openai import APIError, APIStatusError
     from juena.server.credentials import CredentialError
 

@@ -1,12 +1,8 @@
 """The JüNA HTTP client: core's transport, plus this application's routes.
 
-`BaseAgentClient` owns everything behind a route juena-core serves — the
-streaming transport, the SSE vocabulary, chats, artifacts and interrupts. It
-deliberately stops there (00-BOUNDARY.md, decision 10): `/auth/me` and
-`/research` are JüNA's, and a client method with no route behind it is a 404
-nobody notices until a user clicks it.
-
-This subclass adds identity, personal credential management, and research routes.
+`BaseAgentClient` covers every route juena-core serves: streaming, chats,
+artifacts and interrupts. `/auth/me`, the personal credential routes and
+`/research` are JüNA's own, so their methods live in this subclass.
 """
 
 from __future__ import annotations
@@ -56,13 +52,49 @@ class AgentClient(BaseAgentClient):
         return response.json()
 
     def save_api_key(self, service: str, key: str, endpoint: str) -> dict:
+        """Have the server check the user's personal key for a service and save it.
+
+        Args:
+            service: Service name, e.g. ``"blablador"``.
+            key: The API key.
+            endpoint: The service address the profile page showed; the server
+                refuses one that no longer matches its own.
+
+        Returns:
+            The user's key status for every service.
+
+        Raises:
+            AgentAuthenticationError: The session has expired.
+            AgentClientError: The key was refused or the server was unreachable.
+        """
         return self._credential_request("PUT", service, json={"key": key, "endpoint": endpoint})
 
     def remove_api_key(self, service: str, endpoint: str) -> dict:
+        """Delete the user's saved key for a service.
+
+        Args:
+            service: Service name, e.g. ``"blablador"``.
+            endpoint: The service address the profile page showed.
+
+        Returns:
+            The user's key status for every service.
+
+        Raises:
+            AgentAuthenticationError: The session has expired.
+            AgentClientError: The change was refused or the server was unreachable.
+        """
         return self._credential_request("DELETE", service, params={"endpoint": endpoint})
 
     def get_current_user(self) -> dict[str, Any]:
-        """Return the user associated with the current session cookie."""
+        """Return the user associated with the current session cookie.
+
+        Returns:
+            The user's id, email, display name, key status per service, and
+            whether they can chat.
+
+        Raises:
+            AgentClientError: The request failed, including an expired session.
+        """
         try:
             response = self._client.get(
                 f"{self.base_url}/auth/me",
@@ -77,9 +109,19 @@ class AgentClient(BaseAgentClient):
     def list_research(self, thread_id: str) -> dict[str, Any]:
         """Background research on a thread that has not been reported yet.
 
-        Returns ``{"jobs": [...], "running": int, "ready": int}``. Polling
-        failures are raised so the sidebar cannot mistake an expired session or
-        unavailable server for an authoritative "nothing outstanding" result.
+        Polling failures are raised so the sidebar cannot mistake an expired
+        session or unavailable server for an authoritative "nothing
+        outstanding" result.
+
+        Args:
+            thread_id: The conversation to ask about.
+
+        Returns:
+            ``{"jobs": [...], "running": int, "ready": int}``.
+
+        Raises:
+            AgentAuthenticationError: The session has expired.
+            AgentClientError: The server was unreachable or answered badly.
         """
         try:
             response = self._client.get(

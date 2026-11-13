@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -236,6 +238,27 @@ def _run_config(extra_env: dict[str, str], code: str) -> subprocess.CompletedPro
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.parametrize("name", ["prod", "Production", "production ", "staging", ""])
+def test_an_unrecognised_environment_name_refuses_to_start(name: str) -> None:
+    """A misspelt name must not quietly mean development.
+
+    Development mode is the permissive one: it allows the sign-in bypass, drops
+    the HTTPS requirement and makes up a SAML key. `production ` with a
+    trailing space is what an env file with a stray space delivers.
+    """
+
+    result = _run_config({"ENVIRONMENT": name}, "from juena.core.config import global_config")
+
+    assert result.returncode != 0
+    assert "ENVIRONMENT must be" in result.stdout + result.stderr
+
+
+def test_the_two_environment_names_still_start() -> None:
+    result = _run_config({"ENVIRONMENT": "development"}, "from juena.core.config import global_config")
+
+    assert result.returncode == 0, result.stderr
 
 
 _LANGSMITH_EFFECTIVE = (

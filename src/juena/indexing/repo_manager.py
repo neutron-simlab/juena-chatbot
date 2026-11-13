@@ -1,10 +1,8 @@
 """
 RepoManager -- clones and updates the configured git repositories.
 
-It used to walk them too, listing indexable files and hashing them into a
-manifest so an index could be updated incrementally. juena-rag now owns
-ingestion and re-indexes whole sources, so nothing here reads file contents:
-specialists reach the working tree through the read-only ``/repos/`` backend.
+Nothing here reads file contents: juena-rag owns ingestion, and specialists
+reach the working tree through the read-only ``/repos/`` backend.
 """
 
 from __future__ import annotations
@@ -36,11 +34,17 @@ class RepoManager:
     """Manages git-based repository cloning."""
 
     def __init__(self, configs: list[RepoConfig] | None = None) -> None:
+        """Initialize the manager.
+
+        Args:
+            configs: The repositories to manage; None loads the registry.
+        """
         self._configs: list[RepoConfig] = configs if configs is not None else load_repo_configs()
         self._roots: Dict[str, Path] = {}
 
     @property
     def repo_ids(self) -> list[str]:
+        """Ids of the configured repositories."""
         return [c.id for c in self._configs]
 
     @property
@@ -49,29 +53,67 @@ class RepoManager:
         return _cache_dir()
 
     def get_config(self, repo_id: str) -> RepoConfig | None:
+        """Return one repository's configuration.
+
+        Args:
+            repo_id: The repository id.
+
+        Returns:
+            The configuration, or None for an unknown id.
+        """
         for c in self._configs:
             if c.id == repo_id:
                 return c
         return None
 
     def local_root(self, repo_id: str) -> Path:
-        """Return the expected local cache path for *repo_id* without syncing it."""
+        """Return the expected local cache path for *repo_id* without syncing it.
+
+        Args:
+            repo_id: The repository id.
+
+        Returns:
+            Where the clone lives, whether or not it exists yet.
+
+        Raises:
+            ValueError: The repository is not configured.
+        """
         cfg = self.get_config(repo_id)
         if cfg is None:
             raise ValueError(f"Unknown repo: {repo_id}")
         return _cache_dir() / cfg.id
 
     def has_local_root(self, repo_id: str) -> bool:
-        """Return whether *repo_id* already exists in the local cache."""
+        """Return whether *repo_id* already exists in the local cache.
+
+        Args:
+            repo_id: The repository id.
+
+        Returns:
+            Whether a git clone is present at its cache path.
+        """
         root = self.local_root(repo_id)
         return root.is_dir() and (root / ".git").is_dir()
 
     def resolve_root(self, repo_id: str, revision: str | None = None) -> Path:
         """Return the absolute root directory for *repo_id*.
 
-        With *revision*, the working tree is left at that commit rather than at
-        the branch head: the commit juena-rag indexed, so a hit's line numbers are
-        the lines of the file the model opens.
+        Clones the repository, or refreshes an existing clone, the first time
+        this manager is asked for it. With *revision*, the working tree is
+        left at that commit rather than at the branch head: the commit juena-rag
+        indexed, so a hit's line numbers are the lines of the file the model
+        opens.
+
+        Args:
+            repo_id: The repository id.
+            revision: Commit to check out; None stays on the branch head.
+
+        Returns:
+            The clone's directory.
+
+        Raises:
+            ValueError: The repository is not configured or has no source URL.
+            RuntimeError: A git command failed.
         """
         if repo_id in self._roots:
             return self._roots[repo_id]
@@ -109,7 +151,17 @@ class RepoManager:
         return dest
 
     def current_revision(self, repo_id: str) -> str:
-        """Return the current HEAD revision for *repo_id*."""
+        """Return the current HEAD revision for *repo_id*.
+
+        Args:
+            repo_id: The repository id.
+
+        Returns:
+            The full commit hash.
+
+        Raises:
+            RuntimeError: ``git rev-parse`` failed.
+        """
         root = self.resolve_root(repo_id)
         result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],

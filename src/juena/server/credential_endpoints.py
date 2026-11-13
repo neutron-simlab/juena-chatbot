@@ -32,6 +32,16 @@ def _refusal(error: CredentialError) -> HTTPException:
 
 
 async def require_chat_credentials(user: Principal, provider: str | None) -> None:
+    """Refuse a chat run unless the user has a usable Blablador key.
+
+    Args:
+        user: The signed-in user.
+        provider: The provider the run asks for, if any.
+
+    Raises:
+        HTTPException: 400 for a provider other than Blablador, or the
+            credential error's status when the key is missing or unreadable.
+    """
     if provider is not None and provider != "blablador":
         raise HTTPException(400, "JüNA supports Blablador personal keys only.")
     try:
@@ -44,6 +54,22 @@ async def require_chat_credentials(user: Principal, provider: str | None) -> Non
 async def save_key(service: Service, request: Request, response: Response,
                    user: Principal = Depends(session_principal),
                    session: AsyncSession = Depends(get_db_session)) -> dict:
+    """Check a personal key with its service, then save it encrypted.
+
+    Args:
+        service: Which service the key is for.
+        request: The browser request; it must come from the UI's or the API's origin.
+        response: Used to forbid caching.
+        user: The signed-in user.
+        session: Database session.
+
+    Returns:
+        The user's key status for every service.
+
+    Raises:
+        HTTPException: 403 for another origin, 400 for a malformed key, or the
+            credential error's status when the check or the save is refused.
+    """
     _origin(request)
     response.headers["Cache-Control"] = "no-store"
     # Parse here so validation errors cannot echo a submitted secret in a 422.
@@ -66,6 +92,23 @@ async def save_key(service: Service, request: Request, response: Response,
 async def remove_key(service: Service, request: Request, response: Response, endpoint: str = Query(...),
                      user: Principal = Depends(session_principal),
                      session: AsyncSession = Depends(get_db_session)) -> dict:
+    """Delete the user's saved key for a service.
+
+    Args:
+        service: Which service the key is for.
+        request: The browser request; it must come from the UI's or the API's origin.
+        response: Used to forbid caching.
+        endpoint: The service address the profile page showed.
+        user: The signed-in user.
+        session: Database session.
+
+    Returns:
+        The user's key status for every service.
+
+    Raises:
+        HTTPException: 403 for another origin, or the credential error's
+            status when the change is refused.
+    """
     _origin(request)
     response.headers["Cache-Control"] = "no-store"
     try:

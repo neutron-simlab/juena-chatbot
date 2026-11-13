@@ -2,8 +2,8 @@
 
 The counterpart to `task`. Where `task` runs a specialist inside the tool call
 and returns its report, these three start one detached and let a later turn
-collect it -- so a ten-minute survey no longer holds the conversation, and
-closing the browser no longer abandons the work.
+collect it, so a ten-minute survey does not hold up the conversation, and
+closing the browser does not abandon the work.
 """
 
 from __future__ import annotations
@@ -114,7 +114,15 @@ def build_research_tools(
     *,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> list:
-    """Build the three background-research tools for the supervisor."""
+    """Build the three background-research tools for the supervisor.
+
+    Args:
+        specialist_names: The specialists ``start_research`` may run.
+        concurrency: How many active jobs one user may have.
+
+    Returns:
+        ``start_research``, ``check_research`` and ``list_research``.
+    """
 
     allowed = ", ".join(f"`{name}`" for name in specialist_names)
 

@@ -9,7 +9,12 @@ _REQUIREMENTS_RESOURCE = "repository-requirements.txt"
 
 
 def repository_software_requirements() -> tuple[str, ...]:
-    """Return the pinned, non-comment entries installed in the sandbox image."""
+    """Return the pinned, non-comment entries installed in the sandbox image.
+
+    Returns:
+        Each requirement line of ``repository-requirements.txt``, skipping
+        blank lines and comments.
+    """
 
     content = files("juena.sandbox").joinpath(_REQUIREMENTS_RESOURCE).read_text(
         encoding="utf-8"
@@ -22,7 +27,11 @@ def repository_software_requirements() -> tuple[str, ...]:
 
 
 def repository_software_prompt() -> str:
-    """Describe the repository software without implying runtime installation."""
+    """Describe the repository software without implying runtime installation.
+
+    Returns:
+        Prompt text naming the preinstalled packages.
+    """
 
     requirements = repository_software_requirements()
     if not requirements:

@@ -40,10 +40,8 @@ def test_delegation_rules_live_where_they_are_read_rather_than_twice() -> None:
     """Rules stated in a tool description do not also belong in the system prompt.
 
     Both copies cost tokens on every model call; only the one attached to the
-    tool is in front of the model at the moment it chooses. "Prefer one
-    specialist" and "self-contained objective" were verbatim in both, and
-    `subagent_type` is validated by the tool schema regardless of what either
-    says.
+    tool is in front of the model at the moment it chooses. `subagent_type` is
+    validated by the tool schema regardless of what either says.
     """
     from juena.agents.juena_agent import SUPERVISOR_TASK_DESCRIPTION
 
@@ -123,9 +121,8 @@ def test_supervisor_routes_execution_without_promising_it() -> None:
 
     Both specialists get one -- `build_software_prompt` states truthfully whether
     the sandbox is there. The supervisor cannot, so it must not claim execution
-    is available: `SANDBOX_ENABLED` defaults to false, and the old wording
-    ("Every authenticated user may request Python or shell execution") was simply
-    untrue in that deployment. Route the request and trust what comes back.
+    is available (`SANDBOX_ENABLED` defaults to false). It routes the request
+    and trusts what comes back. The phrases asserted absent promised execution.
     """
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
@@ -170,12 +167,12 @@ def test_prompts_forbid_linking_to_a_file_instead_of_attaching_it(
 
 
 def test_undelivered_files_are_reported_by_the_server_not_by_the_model() -> None:
-    """The prompt asked for something the middleware does unconditionally.
+    """The middleware reports undelivered files, so the prompt does not ask for it.
 
     `SpecialistOutcomeMiddleware` appends every undelivered file to the report's
     `limitations` whether or not the specialist mentioned it, and lists them in
-    `<verified_by_server>`. Instructing the model as well bought a duplicate that
-    could be ignored.
+    `<verified_by_server>`. Asking the model as well only adds a duplicate it
+    can ignore.
     """
     import inspect
 
@@ -191,7 +188,7 @@ def test_undelivered_files_are_reported_by_the_server_not_by_the_model() -> None
 
 
 def test_software_prompt_explains_the_virtual_repos_route() -> None:
-    """This one stays: it changes which tool the model picks, and nothing enforces it.
+    """Kept in the prompt: it changes which tool the model picks, and nothing enforces it.
 
     A read-only backend refuses a *write* to `/repos`, but nothing stops the
     model passing `/repos/...` to `execute` as though it were a shell path, where
@@ -204,19 +201,13 @@ def test_software_prompt_explains_the_virtual_repos_route() -> None:
 
 
 def test_findings_keep_create_and_edit_apart_whatever_deep_agents_does() -> None:
-    """The refusal is the backend's again, not a sentence in a prompt.
+    """The backend, not a sentence in a prompt, refuses to overwrite a finding.
 
-    Deep Agents 0.6.12 refused a `write_file` to an existing path with "...
-    because it already exists" and sent the model to `edit_file`; 0.7 made the
-    same call an upsert. The plan-02 cutover moved this application onto 0.7,
-    and `/findings/<slug>.md` accumulates across turns -- so for a short while a
-    second `write` silently replaced a finished report, with only the AGENT.md
-    sentence below standing between the model and lost evidence.
-
-    juena-core restored the contract where it belongs, in
-    `FindingsStateBackend.write`, so prompt text is a courtesy again rather than
-    the guard. Both halves are asserted here because the pair is the point: the
-    prompt tells the model what to do, and the backend is what makes it true.
+    Deep Agents' own `write_file` silently overwrites an existing path, and
+    `/findings/<slug>.md` accumulates across turns, so a second write would
+    replace a finished report. `FindingsStateBackend.write` refuses instead and
+    sends the model to `edit_file`. Both halves are asserted: the prompt tells
+    the model what to do, and the backend is what makes it true.
     """
 
     import inspect
@@ -246,11 +237,11 @@ def test_software_prompt_truthfully_describes_degraded_capabilities() -> None:
 
 
 def test_skill_loading_is_owned_by_the_middleware_that_injects_the_skills() -> None:
-    """`SkillsMiddleware` supplies ~270 words of progressive-disclosure guidance.
+    """`SkillsMiddleware` supplies ~270 words of guidance on loading skills.
 
-    The authored prompt restated it in twelve lines of its own, so the model read
-    the same procedure twice on every call, in two different phrasings. The
-    middleware's copy is the one that also carries the actual skill listing.
+    Restating it in the authored prompt would make the model read the same
+    procedure twice on every call, in two phrasings. The middleware's copy is
+    the one that also carries the actual skill listing.
     """
     from deepagents.middleware.skills import SKILLS_SYSTEM_PROMPT
 
@@ -259,7 +250,7 @@ def test_skill_loading_is_owned_by_the_middleware_that_injects_the_skills() -> N
     assert "SKILL.md" in SKILLS_SYSTEM_PROMPT
     assert "## Lazy skill loading" not in authored_prompt
     assert "no-skill decision" not in authored_prompt
-    # Still true, and still worth pinning: the authored prompt must stay generic.
+    # The authored prompt must stay generic.
     assert "jscatter" not in authored_prompt.lower()
 
 
@@ -307,11 +298,10 @@ def test_neutron_prompt_requires_verifying_tabular_data() -> None:
 
 
 def test_the_software_prompt_names_no_search_tool_that_does_not_exist() -> None:
-    """The prompt described `hybrid search` for a year after the tool was deleted.
+    """The prompt need not introduce every tool, but must never name a missing one.
 
-    Inverted from the original: the prompt no longer has to introduce every tool,
-    because each tool's own description does that at the call site. What it must
-    never do is name one that is gone, which is the direction the incident ran.
+    Each tool's own description introduces it at the call site. `hybrid` is
+    checked by name because the prompt once described a deleted hybrid search.
     """
     import re
 
@@ -327,15 +317,13 @@ def test_the_software_prompt_names_no_search_tool_that_does_not_exist() -> None:
 
 
 def test_supervisor_is_told_a_specialist_cannot_see_earlier_delegations() -> None:
-    """It re-sent an unchanged objective to a specialist that had already failed.
+    """Without this, the supervisor re-sends an unchanged objective after a failure.
 
     A subagent's state arrives with `messages` replaced by the objective alone, so
     nothing carries across invocations unless the supervisor writes it down.
 
-    The claim is scoped to conversation text rather than to everything: the
-    delegation boundary also passes `/inputs/` and `/findings/`, with shared
-    workspace access, and an
-    unqualified "only the objective" contradicted the mechanism it described.
+    The claim is limited to conversation text: a delegation also passes
+    `/inputs/` and `/findings/`, with shared workspace access.
     """
     prompt = load_markdown("juena.agents", "SUPERVISOR.md")
 
@@ -378,14 +366,11 @@ def test_both_specialists_are_told_to_use_the_shared_findings_channel(
 def test_writing_a_finding_is_triggered_by_the_objective_not_by_judgement(
     package: str, filename: str
 ) -> None:
-    """Zero findings files had ever been written when this replaced the old wording.
+    """A specialist writes a finding when the objective asks, not by its own judgement.
 
-    The first cause was mechanical -- `/findings/` resolved to the sandbox's
-    read-only root, so every write raised `Errno 30`. The second was the prompt:
-    it closed with "skip this only when you established nothing worth another
-    specialist's time", a judgement call beside a report section that specifies
-    every field. A specialist reads only the objective, so the trigger has to
-    come from there.
+    A specialist reads only the objective, so the trigger has to come from
+    there. "Skip this only when" is the judgement-call wording under which no
+    finding was ever written.
     """
     prompt = load_markdown(package, filename)
 
@@ -405,12 +390,12 @@ def test_writing_a_finding_is_triggered_by_the_objective_not_by_judgement(
 def test_the_finding_field_carries_the_answer_rather_than_a_summary_of_the_work(
     package: str, filename: str
 ) -> None:
-    """"Put the shortest accurate result in `finding`" fed a re-delegation loop.
+    """"Put the shortest accurate result in `finding`" causes a re-delegation loop.
 
     For "list eight repositories and describe each", the shortest accurate
-    result is "Eight repositories with their descriptions" -- which compresses
-    the answer out of the report. The supervisor had nothing to reply with, so
-    it delegated again, six times over, each report thinner than the last.
+    result is "Eight repositories with their descriptions" -- which leaves the
+    answer out of the report. The supervisor has nothing to reply with, so it
+    delegates again.
     """
     prompt = load_markdown(package, filename)
 
@@ -425,8 +410,7 @@ def test_the_supervisor_owns_whether_a_finding_gets_written() -> None:
     `ReadOnlyFindingsStateBackend` opens `/findings/` to the supervisor and keeps
     it unwritable. And because a specialist writes a finding only when the
     objective says so, the supervisor must know that an empty folder is the
-    normal case -- an earlier version told it to run `ls /findings/` before
-    answering, which returned `[]` and sent it back to delegate again.
+    normal case, not a sign that a delegation failed.
     """
     # Collapsed, so an assertion does not depend on where the markdown wraps.
     prompt = " ".join(load_markdown("juena.agents", "SUPERVISOR.md").split())

@@ -29,6 +29,17 @@ class SamlAuthenticationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class SamlIdentity:
+    """Who a verified SAML response says signed in.
+
+    Attributes:
+        subject: The persistent NameID, the user's stable id at the IdP.
+        subject_format: The NameID format.
+        issuer: Entity id of the IdP that issued the response.
+        in_response_to: Id of the sign-in request the response answers.
+        email: The user's email, if the IdP sent one.
+        display_name: The user's display name, if the IdP sent one.
+    """
+
     subject: str
     subject_format: str
     issuer: str
@@ -39,11 +50,27 @@ class SamlIdentity:
 
 @dataclass(frozen=True, slots=True)
 class SamlLogoutMessage:
+    """A SAML logout message for the browser to carry to the IdP.
+
+    Attributes:
+        redirect_url: Where to redirect the browser, for the Redirect binding.
+        html: The page to return, for the POST binding.
+    """
+
     redirect_url: str | None = None
     html: str | None = None
 
     @classmethod
     def from_http_info(cls, info: Mapping[str, Any]) -> "SamlLogoutMessage | None":
+        """Build the message from the HTTP details PySAML2 returns.
+
+        Args:
+            info: PySAML2's headers, method and data for one message.
+
+        Returns:
+            The message, or None when there is neither a ``Location`` header
+            nor POST data.
+        """
         if location := dict(info.get("headers", [])).get("Location"):
             return cls(redirect_url=str(location))
         if info.get("method") == "POST" and (data := info.get("data")):
@@ -65,12 +92,30 @@ class SamlService:
     """Small, framework-neutral wrapper around PySAML2."""
 
     def __init__(self, config: SPConfig) -> None:
+        """Initialize the service.
+
+        Args:
+            config: The loaded SP configuration, including the IdP metadata.
+
+        Raises:
+            RuntimeError: The IdP metadata has expired.
+        """
         self.config = config
         self.client = Saml2Client(config=config)
         self.metadata_expires_at = _metadata_expiry(config)
 
     @classmethod
     def from_config(cls) -> "SamlService":
+        """Build the service from the application settings, fetching the IdP metadata.
+
+        Returns:
+            The service.
+
+        Raises:
+            RuntimeError: A required setting or file is missing, the refresh
+                interval is under 60 seconds, or the IdP metadata is empty,
+                unsigned while a certificate is pinned, or expired.
+        """
         required = {
             "SAML_SP_ENTITY_ID": global_config.SAML_SP_ENTITY_ID,
             "SAML_SP_ACS_URL": global_config.SAML_SP_ACS_URL,
@@ -119,6 +164,11 @@ class SamlService:
         return cls(config)
 
     def refresh_metadata(self, refreshed: "SamlService") -> None:
+        """Take over freshly fetched IdP metadata.
+
+        Args:
+            refreshed: A service built from the new metadata.
+        """
         # Keep the existing client and its login/logout session cache. Every
         # client/security reference retains the same MetadataStore object.
         self.config.metadata.metadata = refreshed.config.metadata.metadata
@@ -126,6 +176,17 @@ class SamlService:
         self.metadata_expires_at = refreshed.metadata_expires_at
 
     def prepare_login(self, relay_state: str) -> tuple[str, str]:
+        """Create a signed sign-in request.
+
+        Args:
+            relay_state: Where to send the browser after sign-in.
+
+        Returns:
+            The request id, and the IdP address to redirect the browser to.
+
+        Raises:
+            RuntimeError: PySAML2 produced no redirect.
+        """
         request_id, info = self.client.prepare_for_authenticate(
             relay_state=relay_state,
             binding=BINDING_HTTP_REDIRECT,
@@ -144,6 +205,19 @@ class SamlService:
         encoded_response: str,
         outstanding: Mapping[str, str],
     ) -> SamlIdentity:
+        """Validate a sign-in response and read the identity from it.
+
+        Args:
+            encoded_response: The posted ``SAMLResponse``.
+            outstanding: Open sign-in requests, request id to relay state.
+
+        Returns:
+            The verified identity.
+
+        Raises:
+            SamlAuthenticationError: The response fails validation, or lacks a
+                persistent NameID or a field that ties it to a request.
+        """
         try:
             response = self.client.parse_authn_request_response(
                 encoded_response,
@@ -195,10 +269,23 @@ class SamlService:
         )
 
     def metadata_xml(self) -> bytes:
+        """Render this SP's signed metadata.
+
+        Returns:
+            The XML document.
+        """
         return render_metadata_xml(self.config)
 
     def prepare_logout(self, subject: str) -> SamlLogoutMessage | None:
-        """Return the Redirect or POST message for SP-initiated logout."""
+        """Return the Redirect or POST message for SP-initiated logout.
+
+        Args:
+            subject: The user's persistent NameID.
+
+        Returns:
+            The message, or None when PySAML2 holds no sign-in for the subject
+            or produced no message.
+        """
         # Preserve the IdP/SP qualifiers and session index cached at login.
         # Reconstructing a NameID from text alone misses that cache entry.
         name_id = next((name for name in self.client.users.subjects()
@@ -240,7 +327,19 @@ class SamlService:
         self, encoded_response: str, binding: str, *, relay_state: str | None = None,
         sigalg: str | None = None, signature: str | None = None,
     ) -> None:
-        """Validate a LogoutResponse returned by the IdP after global logout."""
+        """Validate a LogoutResponse returned by the IdP after global logout.
+
+        Args:
+            encoded_response: The ``SAMLResponse`` value.
+            binding: The SAML binding it arrived with, Redirect or POST.
+            relay_state: The ``RelayState`` parameter, if any.
+            sigalg: The ``SigAlg`` parameter of a Redirect-binding message.
+            signature: The ``Signature`` parameter of a Redirect-binding message.
+
+        Raises:
+            SamlAuthenticationError: The response is invalid, unsigned or
+                answers no logout we started.
+        """
 
         try:
             response = self.client.parse_logout_request_response(encoded_response, binding)
@@ -263,9 +362,20 @@ class SamlService:
     ) -> tuple[str | None, SamlLogoutMessage | None]:
         """Handle an IdP-initiated LogoutRequest.
 
-        Returns ``(saml_subject, message)``. The subject identifies whose
-        local sessions must be revoked; the message delivers our
-        LogoutResponse back to the IdP when it supplied one.
+        Args:
+            encoded_request: The ``SAMLRequest`` value.
+            binding: The SAML binding it arrived with, Redirect or POST.
+            relay_state: The ``RelayState`` parameter, if any.
+            sigalg: The ``SigAlg`` parameter of a Redirect-binding message.
+            signature: The ``Signature`` parameter of a Redirect-binding message.
+
+        Returns:
+            ``(saml_subject, message)``. The subject identifies whose local
+            sessions must be revoked; the message delivers our LogoutResponse
+            back to the IdP when it supplied one.
+
+        Raises:
+            SamlAuthenticationError: The request is invalid or unsigned.
         """
 
         try:
@@ -318,6 +428,15 @@ def _metadata_expiry(config: SPConfig) -> datetime | None:
 
 
 def get_saml_service() -> SamlService:
+    """Return the running SAML service.
+
+    Returns:
+        The service started by ``saml_lifespan``.
+
+    Raises:
+        RuntimeError: SAML has not been started.
+        HTTPException: 503 when the IdP metadata has expired.
+    """
     if _saml_service is None:
         raise RuntimeError("SAML service is not initialized")
     expiry = _saml_service.metadata_expires_at
@@ -345,6 +464,14 @@ async def _refresh_metadata(service: SamlService) -> None:
 
 @asynccontextmanager
 async def saml_lifespan() -> AsyncGenerator[SamlService, None]:
+    """Start the SAML service and refresh the IdP metadata in the background.
+
+    Yields:
+        The running service.
+
+    Raises:
+        RuntimeError: The SAML settings or the IdP metadata are not usable.
+    """
     global _saml_service
     service = await asyncio.to_thread(SamlService.from_config)
     _saml_service = service

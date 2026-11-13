@@ -8,6 +8,7 @@ BLABLADOR_TOKENS = "https://codebase.helmholtz.cloud/-/user_settings/personal_ac
 
 
 def render_blablador_guidance() -> None:
+    """Explain how to create a personal Blablador key and where to save it."""
     st.info("JüNA needs your personal Blablador API key before you can chat. Signing in with IFFLogin does not create this key.")
     st.markdown(
         "1. Sign in or register at [Helmholtz Codebase](https://codebase.helmholtz.cloud) "
@@ -20,10 +21,12 @@ def render_blablador_guidance() -> None:
 
 
 def open_profile() -> None:
+    """Switch the page to My profile; used as a button callback."""
     st.session_state.current_page = "profile"
 
 
 def render_profile_page() -> None:
+    """Render My profile: the user's identity and one key form per service."""
     user = st.session_state.user
     st.title("My profile")
     st.text(f"Name: {user.get('display_name') or 'Not provided by IFFLogin'}")

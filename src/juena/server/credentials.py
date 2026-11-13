@@ -22,6 +22,11 @@ SERVICES: tuple[Service, ...] = ("blablador", "tavily", "context7")
 
 
 class CredentialError(ValueError):
+    """A personal key is missing, unreadable, refused or cannot be checked.
+
+    ``code`` and ``status`` become the error code and HTTP status the API returns.
+    """
+
     def __init__(self, message: str, *, code: str = "credential_required", status: int = 403):
         super().__init__(message)
         self.code = code
@@ -29,6 +34,14 @@ class CredentialError(ValueError):
 
 
 def service_endpoint(service: Service) -> str:
+    """Return the address a service's key is used against.
+
+    Args:
+        service: The service.
+
+    Returns:
+        The service's base URL, without a trailing slash.
+    """
     return {
         "blablador": global_config.BLABLADOR_BASE_URL,
         "tavily": "https://api.tavily.com",
@@ -55,7 +68,17 @@ def _decrypt(row: UserAPICredential, owner: UUID, service: Service) -> str:
 
 
 async def credential_status(session: AsyncSession, user_id: UUID) -> dict:
-    rows = (await session.scalars(select(UserAPICredential).where(
+    """Report, per service, whether the user has a saved key and can use it.
+
+    Args:
+        session: Database session.
+        user_id: The user.
+
+    Returns:
+        For each service: ``saved``, ``available``, ``endpoint`` and
+        ``validated_at``.
+    """
+    rows =(await session.scalars(select(UserAPICredential).where(
         UserAPICredential.user_id == user_id))).all()
     by_service = {row.service: row for row in rows}
     result = {}
@@ -77,7 +100,21 @@ async def credential_status(session: AsyncSession, user_id: UUID) -> dict:
 
 
 async def personal_key(user_id: str | None, service: Service) -> str:
-    """Read fresh for every outbound call, including background recovery."""
+    """Return the user's decrypted key for a service.
+
+    Read fresh for every outbound call, including background recovery.
+
+    Args:
+        user_id: The signed-in user's id, as text.
+        service: The service.
+
+    Returns:
+        The key.
+
+    Raises:
+        CredentialError: There is no signed-in user, the account is inactive,
+            or there is no readable key.
+    """
     if not user_id:
         raise CredentialError("A signed-in JüNA user is required.")
     try:
@@ -105,7 +142,17 @@ async def _require_live_session(session: AsyncSession, user_id: UUID, token: str
 
 
 async def check_key(service: Service, key: str, endpoint: str) -> None:
-    """Bounded checks without conversation content or raw upstream errors."""
+    """Bounded checks without conversation content or raw upstream errors.
+
+    Args:
+        service: The service.
+        key: The key to check.
+        endpoint: The service address to check it against.
+
+    Raises:
+        CredentialError: The service rejected the key, or could not be reached
+            or was rate limiting.
+    """
     if service == "context7":
         from juena.tools.context7 import call_context7
         try:
@@ -136,7 +183,25 @@ async def check_key(service: Service, key: str, endpoint: str) -> None:
 
 async def change_key(session: AsyncSession, *, user_id: UUID, session_token: str,
                      service: Service, endpoint: str, key: str | None) -> dict:
-    """Serialize changes per owner; a failed check never replaces the saved key."""
+    """Serialize changes per owner; a failed check never replaces the saved key.
+
+    Args:
+        session: Database session.
+        user_id: The key's owner.
+        session_token: The session cookie; the change is refused if that
+            session ended meanwhile.
+        service: The service.
+        endpoint: The service address the profile page showed; it must match
+            the current one.
+        key: The new key; None deletes the saved one.
+
+    Returns:
+        The user's key status for every service.
+
+    Raises:
+        CredentialError: The address changed, the account is inactive, the key
+            was refused or could not be checked, or the session ended.
+    """
     if endpoint != service_endpoint(service):
         raise CredentialError("The service address changed. Refresh My profile and try again.",
                               code="credential_endpoint_changed", status=409)

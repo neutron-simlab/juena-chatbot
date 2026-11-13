@@ -12,6 +12,19 @@
 # metrically close. To get Inter everywhere, self-host the woff2 files and add
 # [[theme.fontFaces]] entries pointing at them -- see the notes at the bottom.
 
+# Without this, every user's browser reports usage statistics to Streamlit's
+# own servers -- the same kind of outside request as the Google Fonts one
+# avoided below.
+[browser]
+gatherUsageStats = false
+
+# Both are already Streamlit's defaults; they are written down so that nobody
+# turns them off to "fix" a proxy problem. With either off, a page on another
+# host could open this app's live connection with the user's cookie attached.
+[server]
+enableCORS = true
+enableXsrfProtection = true
+
 [theme]
 base = "light"
 

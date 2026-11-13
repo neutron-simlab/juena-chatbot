@@ -7,7 +7,22 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class SamlLogoutCORSMiddleware:
+    """Let the IdP's pages read replies from ``/auth/sls``, and nothing else.
+
+    Cross-origin access (CORS) is granted only to the origin of the IdP's
+    metadata URL, and only on the logout route.
+    """
+
     def __init__(self, app: ASGIApp, *, idp_metadata_url: str) -> None:
+        """Initialize the middleware.
+
+        Args:
+            app: The application to wrap.
+            idp_metadata_url: The IdP's metadata URL; its origin is the one allowed.
+
+        Raises:
+            ValueError: The URL has no explicit HTTP or HTTPS origin.
+        """
         self.app = app
         parsed = urlsplit(idp_metadata_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or "*" in parsed.netloc:

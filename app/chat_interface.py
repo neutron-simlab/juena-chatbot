@@ -1,13 +1,12 @@
 """The JüNA chat page.
 
-The stream loop, the chunk classifiers and the approval and question cards are
-`juena_core.ui.streaming`'s: they implement the SSE contract core's server
-emits, so core is where they have to agree with it (00-BOUNDARY.md, decision 7).
+The stream loop, the chunk classifiers and the approval and question cards live
+in `juena_core.ui.streaming`, because they implement the SSE (server-sent
+events, the live reply stream) contract that core's server emits.
 
-**The page is this application's.** What is left here is the layout, the
-starter chips, the upload rules the composer enforces before a message joins
-the transcript, and the four strings that describe *this* deployment's sandbox
-to the person approving a command.
+This module holds the layout, the starter chips, the upload rules the composer
+enforces before a message joins the transcript, and the strings that describe
+this deployment's sandbox to the person approving a command.
 """
 
 from typing import Any
@@ -43,8 +42,8 @@ from juena_core.ui.run_stream import get_stream_controller, start_response
 STARTER_PILLS_KEY = "starter_pills"
 
 # Shown on the confirmation card once its buttons are spent, so a deactivated
-# card still says why it went quiet. "in the sandbox" is true here and would be
-# a false promise from an application whose execution is something else.
+# card still says why it went quiet. Kept here, not in core, because "in the
+# sandbox" is true only of this deployment.
 DECISION_STATUS = {
     "approve": "Running in the sandbox…",
     "edit": "Running the edited command…",
@@ -55,9 +54,9 @@ DECISION_STATUS = {
 def _sandbox_limits_caption(limits: Any) -> str:
     """Describe what the approved command will and will not be able to do.
 
-    Every clause is a fact about the Podman sandbox this deployment runs --
-    `network: none` and the CPU/memory limits the worker enforces -- so it is
-    the application that says it, not core.
+    Every clause is a fact about this deployment's Podman sandbox (`network:
+    none` and the CPU and memory limits the worker enforces), so the
+    application says it, not core.
     """
 
     limits = limits or {}
@@ -104,7 +103,11 @@ SANDBOX_STATUS_RENDERERS = {"sandbox_status": _render_sandbox_status}
 
 
 def render_sandbox_interrupt() -> bool:
-    """Render this thread's pending approval or question, if there is one."""
+    """Render this thread's pending approval or question, if there is one.
+
+    Returns:
+        Whether a card was drawn, so the page can skip its composer.
+    """
 
     return render_pending_interrupt(
         approval=SANDBOX_APPROVAL_CARD,
@@ -115,11 +118,12 @@ def render_sandbox_interrupt() -> bool:
 def render_starter_topics() -> str | None:
     """Render starter topic chips for an empty chat.
 
-    Returns the chosen question, or None when nothing was picked.
-
     Streamlit's ``st.chat_input`` cannot be pre-filled programmatically, so a
     chip sends its question rather than staging it in the composer. The question
     is still shown verbatim as the user's own message, so nothing is hidden.
+
+    Returns:
+        The chosen question, or None when nothing was picked.
     """
     starters = build_starter_prompts()
     if not starters:

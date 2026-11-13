@@ -1,11 +1,8 @@
 """Tests for the two routes JüNA's ``AgentClient`` adds to core's client.
 
-Everything behind a route juena-core serves -- the streaming transport, the SSE
-parser, chats, artifacts, interrupts and thread cleanup -- moved to core's
-``test_client_contracts.py`` in plan 02/step 3, because the subclass does not
-touch any of it. What is left here is what decision 10 says belongs to this
-application: ``/auth/me`` and ``/research`` are JüNA's routes, so their client
-methods are JüNA's too.
+``/auth/me`` and ``/research`` are JüNA's routes. Everything else the client
+does (streaming, chats, artifacts, interrupts) is juena-core's and is tested
+there.
 """
 
 import httpx

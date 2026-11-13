@@ -32,7 +32,25 @@ def sp_settings(
     contact_name: str = "",
     contact_email: str = "",
 ) -> dict[str, Any]:
-    """Share the same SP identity, bindings and signing policy with the runtime."""
+    """Share the same SP identity, bindings and signing policy with the runtime.
+
+    Args:
+        entity_id: This SP's entity id.
+        acs_url: Where the IdP posts sign-in responses.
+        sls_url: Where the IdP sends logout messages.
+        cert_file: The SP's certificate file.
+        key_file: The SP's private key file.
+        xmlsec_binary: Path to the ``xmlsec1`` program.
+        organization_name: Organization published in the metadata; empty
+            leaves the organization out.
+        organization_url: The organization's web address.
+        contact_name: Name of the technical contact.
+        contact_email: Email of the technical contact; empty leaves the
+            contact out.
+
+    Returns:
+        PySAML2 settings for this SP, without IdP metadata.
+    """
     settings: dict[str, Any] = {
         "entityid": entity_id,
         "xmlsec_binary": xmlsec_binary,
@@ -79,7 +97,17 @@ def sp_settings(
 
 
 def metadata_xml(settings: dict[str, Any]) -> bytes:
-    """Export an SP document without fetching or trusting any IdP metadata."""
+    """Export an SP document without fetching or trusting any IdP metadata.
+
+    Args:
+        settings: SP settings from ``sp_settings``.
+
+    Returns:
+        The signed metadata XML.
+
+    Raises:
+        ValueError: The settings include IdP metadata.
+    """
     if "metadata" in settings:
         raise ValueError("Offline export accepts SP settings only, without IdP metadata")
     config = SPConfig()
@@ -88,7 +116,14 @@ def metadata_xml(settings: dict[str, Any]) -> bytes:
 
 
 def render_metadata_xml(config: SPConfig) -> bytes:
-    """Sign public metadata with the SP key, preserving the resulting XML bytes."""
+    """Sign public metadata with the SP key, preserving the resulting XML bytes.
+
+    Args:
+        config: A loaded SP configuration.
+
+    Returns:
+        The signed XML, exactly as signed.
+    """
     document = create_metadata_string(
         None,
         config=config,
@@ -102,6 +137,7 @@ def render_metadata_xml(config: SPConfig) -> bytes:
 
 
 def main() -> None:
+    """Write signed SP metadata to stdout, built from command-line settings."""
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ("entity-id", "acs-url", "sls-url", "cert-file", "key-file"):
         parser.add_argument("--" + argument, required=True)

@@ -80,7 +80,17 @@ def build_tools(
     has_repo_research: bool,
     context7_tools: Sequence[Any],
 ) -> list[Any]:
-    """Build only the software capabilities available in this deployment."""
+    """Build only the software capabilities available in this deployment.
+
+    Args:
+        repo_manager: The configured repository clones.
+        vector_index: The juena-rag search client.
+        has_repo_research: Whether to add the repository search tools.
+        context7_tools: The Context7 tools; empty when not configured.
+
+    Returns:
+        The repository tools when requested, followed by the Context7 tools.
+    """
 
     tools: list[Any] = []
     if has_repo_research:

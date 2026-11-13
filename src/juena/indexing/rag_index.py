@@ -1,11 +1,10 @@
 """Search backed by the juena-rag service. The only search backend there is.
 
-Presents the members `juena.tools.repo_search` uses -- ``search``,
-``search_many`` and the hit dictionary they return. That shape was inherited
-from the Chroma index this replaced, which is why it is a dictionary of loose
-keys rather than a type; it stays because the tools' JSON is what the model was
-prompted against. Indexing is not here either: the store is written by an
-ingestion job, not by this process.
+Presents the members `juena.tools.repo_search` uses: ``search``,
+``search_many`` and the hit dictionary they return. The hit stays a dictionary
+of loose keys rather than a type because the tools' JSON is what the model was
+prompted against. Nothing is indexed here: an ingestion job writes the store,
+not this process.
 """
 
 from __future__ import annotations
@@ -36,8 +35,14 @@ class RagVectorIndex:
     """
 
     def __init__(self, url: str, *, timeout: float | None = None) -> None:
-        """
-        :param url: where juena-rag is, e.g. ``http://juena-rag:8000``.
+        """Initialize the client.
+
+        Args:
+            url: Where juena-rag is, e.g. ``http://juena-rag:8000``.
+            timeout: Request timeout in seconds; None uses the client's default.
+
+        Raises:
+            ImportError: The juena-rag client package is not installed.
         """
         try:
             from juena_rag.store.http import DEFAULT_TIMEOUT, HttpStore
@@ -68,6 +73,16 @@ class RagVectorIndex:
 
         ``query_embedding`` is accepted and ignored: the service embeds, which is
         what stops two processes from embedding with two different models.
+
+        Args:
+            repo_id: The repository to search.
+            query: The search text.
+            n_results: Maximum number of hits.
+            where: Equality filter on hit fields, e.g. ``{"is_doc": True}``.
+            query_embedding: Ignored.
+
+        Returns:
+            Hit dictionaries, in the store's ranking.
         """
         return self._search([repo_id], query, n_results=n_results, where=where)
 
@@ -82,6 +97,16 @@ class RagVectorIndex:
 
         One request rather than one per repository: the store already ranks
         across sources, so there is no fan-out to do here.
+
+        Args:
+            repo_ids: The repositories to search.
+            query: The search text.
+            n_results: Maximum number of hits.
+            where: Equality filter on hit fields, e.g. ``{"is_doc": True}``.
+
+        Returns:
+            Hit dictionaries, in the store's ranking; empty when no repository
+            is given.
         """
         if not repo_ids:
             return []
@@ -93,11 +118,17 @@ class RagVectorIndex:
         return [source.source_id for source in self._store.list_sources()]
 
     def collection_count_existing(self, repo_id: str) -> int | None:
-        """How many chunks this repository has, or ``None`` if the store lacks it.
+        """Count the chunks the store holds for one repository.
 
         One request per call rather than a cached catalogue: the only caller runs
         it once per repository at startup, and a cache that outlives an ingest is
         how a rebuilt corpus goes on looking empty.
+
+        Args:
+            repo_id: The repository to count.
+
+        Returns:
+            The chunk count, or ``None`` if the store lacks the repository.
         """
         for source in self._store.list_sources():
             if source.source_id == repo_id:
@@ -105,10 +136,12 @@ class RagVectorIndex:
         return None
 
     def catalogue(self) -> list[dict[str, Any]]:
-        """Every repository the store holds, with how many chunks each has.
+        """List every repository the store holds, with how many chunks each has.
 
-        One request rather than ``repo_ids`` plus a count per repository, which
-        was nine round trips to answer one question.
+        One request rather than ``repo_ids`` plus a count per repository.
+
+        Returns:
+            One ``{"repo_id", "chunks"}`` dictionary per repository.
         """
         return [
             {"repo_id": source.source_id, "chunks": source.chunk_count}
@@ -116,11 +149,14 @@ class RagVectorIndex:
         ]
 
     def indexed_revisions(self) -> dict[str, str]:
-        """The commit each repository was indexed at, by repository.
+        """Return the commit each repository was indexed at.
 
         What the clones are checked out at, so the file the model opens is the
         file the search read -- not the branch head, which moves on between
         ingests.
+
+        Returns:
+            The indexed commit by repository id.
         """
         return {
             source.source_id: source.active_revision
@@ -160,9 +196,8 @@ class RagVectorIndex:
 def _as_chatbot_hit(hit: Any) -> dict[str, Any]:
     """One ``SearchHit`` in the shape ``_serialize_vector_hit`` expects.
 
-    The first six keys are the existing contract and must not drift -- the tools'
-    JSON is what the model was prompted against. ``start_line``, ``end_line`` and
-    ``symbol`` are new, and are additions rather than changes.
+    Keep these keys stable: the tools' JSON is what the model was prompted
+    against.
     """
     extra = hit.extra or {}
     return {
@@ -175,8 +210,8 @@ def _as_chatbot_hit(hit: Any) -> dict[str, Any]:
         "is_doc": extra.get("is_doc", False),
         "distance": hit.distance,
         "content": hit.text,
-        # New with pgvector: a line range a citation can show a person, and the
-        # `def`/`class` the chunk sits inside.
+        # A line range a citation can show a person, and the `def`/`class` the
+        # chunk sits inside.
         "start_line": extra.get("start_line"),
         "end_line": extra.get("end_line"),
         "symbol": extra.get("symbol"),
@@ -184,11 +219,11 @@ def _as_chatbot_hit(hit: Any) -> dict[str, Any]:
 
 
 def _matches(hit: dict[str, Any], where: dict[str, Any]) -> bool:
-    """Chroma's ``where`` clause, for the equality filters this codebase uses.
+    """Apply a ``where`` filter, for the equality filters this codebase uses.
 
-    Only ``{"is_doc": True}`` is passed today. Anything richer -- Chroma's
-    ``$and``, ``$in`` and friends -- is refused loudly rather than ignored, since
-    silently returning unfiltered results is the kind of bug nobody notices.
+    Only ``{"is_doc": True}`` is passed today. Operator filters such as
+    ``$and`` or ``$in`` raise rather than being ignored, since silently
+    returning unfiltered results is the kind of bug nobody notices.
     """
     for key, expected in where.items():
         if isinstance(expected, dict):
@@ -202,11 +237,16 @@ def _matches(hit: dict[str, Any], where: dict[str, Any]) -> bool:
 
 
 def build_search_index() -> RagVectorIndex:
-    """The search backend, which is juena-rag and nothing else.
+    """Build the search backend, which is juena-rag and nothing else.
 
-    Refuses to start rather than falling back to the retired Chroma index: an
-    unset variable used to mean "serve from whatever is on disk", and a stale
-    local index that keeps answering is the failure nobody notices.
+    There is no fallback to a local index: a stale local index that keeps
+    answering is the failure nobody notices.
+
+    Returns:
+        A client for the juena-rag service at ``JUENA_RAG_URL``.
+
+    Raises:
+        RuntimeError: ``JUENA_RAG_URL`` is not set.
     """
     from juena.core.config import global_config
 

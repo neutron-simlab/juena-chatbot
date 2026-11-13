@@ -56,7 +56,13 @@ Available specialist types:
 
 @dataclass
 class JuenaAgentResources:
-    """Keep long-lived resources alive for the cached supervisor graph."""
+    """Keep long-lived resources alive for the cached supervisor graph.
+
+    Attributes:
+        app: The compiled supervisor graph.
+        context7_runtime: The Context7 tools the graph was built with.
+        background_specialists: Builders for unattended specialists, by name.
+    """
 
     app: CompiledStateGraph
     context7_runtime: Context7Runtime | None = None
@@ -69,7 +75,15 @@ async def create_juena_agent(
     provider: str,
     model: str,
 ) -> tuple[JuenaAgentResources, CompiledStateGraph]:
-    """Build the strict supervisor and both first-class specialists."""
+    """Build the strict supervisor and both first-class specialists.
+
+    Args:
+        provider: Model provider for the supervisor.
+        model: Model name for the supervisor.
+
+    Returns:
+        The resources to keep alive, and the compiled supervisor graph.
+    """
 
     repo_manager = RepoManager()
     vector_index = build_search_index()
@@ -136,11 +150,9 @@ async def create_juena_agent(
 
     store = get_store()
     supervisor_backend = build_supervisor_backend(store)
-    # The stack, its order and the no-TodoListMiddleware decision are core's --
-    # middleware order is nesting order, and a core test asserts these class
-    # names in sequence. `extra` is its one splice point, between
-    # PatchToolCallsMiddleware and RuntimeModelMiddleware, which is exactly
-    # where these two used to sit.
+    # Core owns the middleware stack and its order (order is nesting order).
+    # `extra` is the one place to add to it, between PatchToolCallsMiddleware
+    # and RuntimeModelMiddleware.
     middleware = build_supervisor_middleware(
         backend=supervisor_backend,
         summarizer_model=summarizer_model,
@@ -149,17 +161,16 @@ async def create_juena_agent(
         # boundary itself. See `juena_core.agents.delegation` for what may cross
         # into a specialist and what comes back.
         subagents=specialists,
-        # SUPERVISOR.md owns delegation policy. The task tool itself still carries
-        # the authoritative specialist names and descriptions. Passed explicitly
-        # because core's default says "execution evidence" where this one says
-        # "sandbox exit codes", and prompt text does not change in this cutover.
+        # SUPERVISOR.md owns delegation policy; the task tool carries the
+        # specialist names and descriptions. Passed explicitly because core's
+        # default says "execution evidence" where this one says "sandbox exit
+        # codes".
         task_description=SUPERVISOR_TASK_DESCRIPTION,
         extra=(
             ArtifactMessageMiddleware(),
             # Declares the private, checkpointed marker `check_research` stamps
-            # when it delivers a background result, which is what makes
-            # collection idempotent across a crash on either side of the
-            # checkpoint. Research is this application's, not core's.
+            # when it delivers a background result, so a crash on either side
+            # of the checkpoint cannot make collection deliver it twice or lose it.
             ResearchDeliveryMiddleware(),
         ),
     )

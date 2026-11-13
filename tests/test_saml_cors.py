@@ -99,3 +99,35 @@ async def test_untrusted_origin_cannot_read_logout_response(slo_browser, origin)
     })
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["https://other.fz-juelich.de", "null"])
+async def test_another_website_cannot_sign_the_user_out(slo_browser, origin):
+    """The sign-out button is a form post, which any page could otherwise imitate."""
+
+    response = await slo_browser.client.post("/auth/logout", headers={"Origin": origin})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "origin_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_our_own_page_can_still_post_the_sign_out_form(slo_browser):
+    ui = urlsplit(global_config.UI_PUBLIC_URL)
+
+    response = await slo_browser.client.post(
+        "/auth/logout", headers={"Origin": f"{ui.scheme}://{ui.netloc}"}
+    )
+
+    # Past the origin check and on to authentication, which this fixture denies.
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_sign_in_answer_is_accepted_from_the_idp_origin(slo_browser):
+    """`/auth/acs` is posted by IFFLogin's page; an empty post reaches its own validation."""
+
+    response = await slo_browser.client.post("/auth/acs")
+
+    assert response.status_code == 422

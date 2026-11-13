@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 
 from juena.server.auth import endpoints as auth_endpoints
@@ -13,6 +15,7 @@ from juena.server.auth.saml import (
     SamlIdentity,
     SamlService,
 )
+from juena_core.server.database.connection import get_db_session
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,10 +43,10 @@ def _service_with_client(client) -> SamlService:  # noqa: ANN001
 
 
 def test_compose_forwards_the_auth_bypass_override_to_the_container() -> None:
-    """The plan's one-shot bypass-off command must beat the mounted dotenv.
+    """A one-shot ``AUTH_DEV_BYPASS=false ./juena up`` must beat the mounted dotenv.
 
-    Without this Compose entry, ``AUTH_DEV_BYPASS=false ./juena up`` changes
-    only the launcher's environment. The application container still reads the
+    Without this Compose entry, that command changes only the launcher's
+    environment. The application container still reads the
     value from ``/app/.env``, so the documented SAML gate can unknowingly run
     with the development bypass enabled.
     """
@@ -125,6 +128,9 @@ class _Session:
     async def execute(self, statement):  # noqa: ANN001
         return _Scalars(self.records)
 
+    def add(self, record) -> None:  # noqa: ANN001
+        self.records.append(record)
+
     async def commit(self) -> None:
         return None
 
@@ -161,6 +167,7 @@ async def test_acs_consumes_request_once_and_sets_hardened_cookie(
     response = await auth_endpoints.assertion_consumer_service(
         saml_response="signed-response",
         relay_state="http://localhost:9501/",
+        login_cookie="request-1",
         session=session,  # type: ignore[arg-type]
     )
 
@@ -176,9 +183,135 @@ async def test_acs_consumes_request_once_and_sets_hardened_cookie(
         await auth_endpoints.assertion_consumer_service(
             saml_response="signed-response",
             relay_state="http://localhost:9501/",
+            login_cookie="request-1",
             session=session,  # type: ignore[arg-type]
         )
     assert replay.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# A sign-in belongs to the browser that started it
+#
+# IFFLogin's signed answer travels through the browser, so whoever signs in can
+# copy their own answer before it is delivered. Without a tie to the browser, a
+# colleague could make *your* browser deliver *their* answer: you would be
+# signed in to their account without noticing, and the key you save and the
+# files you upload would land there.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def sign_in(monkeypatch):
+    """The real app with a stand-in for IFFLogin and for Postgres.
+
+    `browser()` opens a separate browser, each with its own cookie jar, so a
+    cookie only reaches `/auth/acs` if `/auth/login` really set it there.
+    """
+
+    from juena.server.service import app
+
+    session = _Session([])
+    request_ids = iter(["request-1", "request-2"])
+    answered = {"request_id": "request-1"}
+
+    def answer_for(*args, **kwargs):  # noqa: ANN002, ANN003
+        return SamlIdentity(
+            subject="subject",
+            subject_format=PERSISTENT_NAME_ID_FORMAT,
+            issuer="https://ifflogin.fz-juelich.de/saml/idp.xml",
+            in_response_to=answered["request_id"],
+        )
+
+    service = SimpleNamespace(
+        prepare_login=lambda relay_state: (next(request_ids), "https://idp.example/sso?SAMLRequest=signed"),
+        parse_response=answer_for,
+    )
+
+    async def fake_upsert(*args, **kwargs):  # noqa: ANN002, ANN003
+        return SimpleNamespace(id="user-1")
+
+    async def fake_session(*args, **kwargs):  # noqa: ANN002, ANN003
+        return "opaque-token"
+
+    monkeypatch.setattr(auth_endpoints, "get_saml_service", lambda: service)
+    monkeypatch.setattr(auth_endpoints, "upsert_saml_user", fake_upsert)
+    monkeypatch.setattr(auth_endpoints, "create_auth_session", fake_session)
+    monkeypatch.setattr(auth_endpoints.global_config, "AUTH_DEV_BYPASS", False)
+    monkeypatch.setitem(app.dependency_overrides, get_db_session, lambda: session)
+
+    def browser() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://sp.example")
+
+    # What the browser sends when IFFLogin's page posts the answer back: the
+    # form fields, labelled with IFFLogin's origin rather than JüNA's.
+    answer = {
+        "data": {
+            "SAMLResponse": "signed-response",
+            "RelayState": auth_endpoints.global_config.UI_PUBLIC_URL.rstrip("/"),
+        },
+        "headers": {"Origin": "https://ifflogin.fz-juelich.de"},
+    }
+    yield SimpleNamespace(browser=browser, answer=answer, answered=answered, records=session.records)
+
+
+@pytest.mark.asyncio
+async def test_login_gives_the_browser_a_hardened_sign_in_cookie(sign_in) -> None:
+    async with sign_in.browser() as browser:
+        response = await browser.get("/auth/login")
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("https://idp.example/sso")
+    cookie = response.headers["set-cookie"]
+    # `__Host-` makes the browser refuse this cookie from any other host,
+    # including a neighbouring one under the same parent domain.
+    assert "__Host-juena_login=request-1" in cookie
+    assert "HttpOnly" in cookie
+    assert "Secure" in cookie
+    assert "Path=/" in cookie
+    # IFFLogin posts the answer from its own site; `lax` would withhold the cookie.
+    assert "SameSite=none" in cookie
+    assert "Max-Age=600" in cookie
+
+
+@pytest.mark.asyncio
+async def test_the_browser_that_started_a_sign_in_can_finish_it(sign_in) -> None:
+    async with sign_in.browser() as browser:
+        await browser.get("/auth/login")
+        response = await browser.post("/auth/acs", **sign_in.answer)
+
+    assert response.status_code == 303
+    cookies = response.headers.get_list("set-cookie")
+    assert any(cookie.startswith("juena_session=opaque-token") for cookie in cookies)
+    # The sign-in cookie has done its job and is cleared.
+    assert any(cookie.startswith("__Host-juena_login=") and "Max-Age=0" in cookie for cookie in cookies)
+    assert sign_in.records[0].consumed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_another_browser_cannot_finish_someone_elses_sign_in(sign_in) -> None:
+    """The planted sign-in: a valid answer, delivered by a browser that never asked."""
+
+    async with sign_in.browser() as attacker, sign_in.browser() as victim:
+        await attacker.get("/auth/login")
+        response = await victim.post("/auth/acs", **sign_in.answer)
+
+    assert response.status_code == 401
+    assert "juena_session" not in response.headers.get("set-cookie", "")
+    assert sign_in.records[0].consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_browser_mid_sign_in_cannot_be_handed_another_answer(sign_in) -> None:
+    """The victim has a sign-in of their own open; the attacker's answer still fails."""
+
+    async with sign_in.browser() as attacker, sign_in.browser() as victim:
+        await attacker.get("/auth/login")   # request-1, the one IFFLogin answered
+        await victim.get("/auth/login")     # request-2, still waiting
+        response = await victim.post("/auth/acs", **sign_in.answer)
+
+    assert response.status_code == 401
+    assert "juena_session" not in response.headers.get("set-cookie", "")
+    assert all(record.consumed_at is None for record in sign_in.records)
 
 
 # ---------------------------------------------------------------------------

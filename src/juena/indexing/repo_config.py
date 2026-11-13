@@ -29,12 +29,32 @@ _DEFAULT_EXCLUDE = [
 
 @dataclass
 class RepoSource:
+    """Where to clone a repository from.
+
+    Attributes:
+        url: Git URL.
+        branch: Branch to clone and follow.
+    """
+
     url: str
     branch: str = "main"
 
 
 @dataclass
 class RepoConfig:
+    """One repository from ``config/repositories.yaml``.
+
+    The other fields (``include_globs``, ``exclude_globs``, ``max_file_bytes``,
+    ``chunk_size``, ``chunk_overlap``, ``docs_paths``) are parsed from the
+    registry, but nothing in this application reads them.
+
+    Attributes:
+        id: Repository id; also its directory name in the clone cache.
+        name: Display name.
+        description: What the repository is for.
+        source: Where to clone it from.
+    """
+
     id: str
     name: str
     description: str = ""
@@ -56,7 +76,16 @@ def _resolve_config_path() -> Path:
 
 
 def load_repo_configs(config_path: Path | None = None) -> list[RepoConfig]:
-    """Parse the YAML config and return a list of ``RepoConfig`` objects."""
+    """Parse the YAML config and return a list of ``RepoConfig`` objects.
+
+    Args:
+        config_path: The registry file; None uses ``REPO_CONFIG_PATH`` or
+            ``config/repositories.yaml``.
+
+    Returns:
+        One configuration per entry with a ``source.url``; empty when the file
+        does not exist.
+    """
     config_path = config_path or _resolve_config_path()
     if not config_path.exists():
         logger.warning("Repository config not found at %s – no repos will be indexed", config_path)

@@ -1,16 +1,16 @@
 """Postgres models this application owns, beside the three core creates.
 
-`Base`, `utc_now`, `User`, `AuthSession` and `Chat` are juena-core's (00, decision
-9, part 4). Only the tables no other consumer of core has live here: the SAML
-login handshake, personal credentials, and background research jobs.
+`Base`, `utc_now`, `User`, `AuthSession` and `Chat` are juena-core's. Only this
+application's own tables live here: the SAML login handshake, personal
+credentials, and background research jobs.
 
-**A model class nobody imports is never created by `create_all`.** There is no
-Alembic, so the failure is a missing table at first write rather than an error at
-startup. `juena.server.service` imports this module for that side effect, with a
-`# noqa: F401`, exactly as it imports the agent module for its registration.
+A model class nobody imports is never created by `create_all`. With no
+migration tool (no Alembic), the failure is a missing table at first write, not
+an error at startup. `juena.server.service` imports this module for that side
+effect.
 
-`sandbox_jobs` is not here either: it is core's optional model, attached to the
-same metadata by `configure_sandbox(... enabled=True)` and absent otherwise.
+`sandbox_jobs` is core's optional model, added to the same metadata by
+`configure_sandbox(... enabled=True)` and absent otherwise.
 """
 
 from __future__ import annotations
@@ -39,7 +39,17 @@ __all__ = ["SamlLoginRequest", "ResearchJob", "UserAPICredential"]
 
 
 class UserAPICredential(Base):
-    """One encrypted personal key per service; identity remains core-owned."""
+    """One encrypted personal key per service; identity remains core-owned.
+
+    Attributes:
+        user_id: The key's owner.
+        service: Which service the key is for.
+        encrypted_key: The key, encrypted together with its owner, service and
+            endpoint.
+        endpoint: The service address the key was checked against.
+        created_at: When the row was created.
+        validated_at: When the key was last checked and saved.
+    """
 
     __tablename__ = "user_api_credentials"
 
@@ -52,6 +62,15 @@ class UserAPICredential(Base):
 
 
 class SamlLoginRequest(Base):
+    """One SAML sign-in request sent to the IdP.
+
+    Attributes:
+        request_id: The SAML request id.
+        relay_state: Where to send the browser after sign-in.
+        created_at: When the sign-in started; old requests are no longer accepted.
+        consumed_at: When the answer was accepted; each request is accepted once.
+    """
+
     __tablename__ = "saml_login_requests"
 
     request_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -73,12 +92,29 @@ class ResearchJob(Base):
     The supervisor normally delegates inside its own tool call, which ties the
     specialist's lifetime to the HTTP connection. A row here is the alternative:
     the run happens in a background task and the answer waits until a later turn
-    collects it, so closing the browser no longer abandons the work.
+    collects it, so closing the browser does not abandon the work.
 
-    `report` holds the finished `<specialist_report>` package verbatim -- the
-    same text the `task` tool would have returned -- and `findings` the files the
-    run wrote under `/findings/`, because a standalone invocation does not share
-    graph state with the conversation that asked for it.
+    `report` holds the finished `<specialist_report>` package verbatim (the text
+    the `task` tool would have returned), and `findings` the files the run wrote
+    under `/findings/`, because a standalone run does not share graph state with
+    the conversation that asked for it.
+
+    Attributes:
+        id: The job id.
+        user_id: The job's owner.
+        thread_id: The conversation that started it.
+        specialist: Name of the specialist that runs it.
+        objective: The task the specialist receives.
+        run_input: Provider, model and files, frozen at admission.
+        status: One of the statuses in ``juena.research.constants``.
+        report: The finished report.
+        findings: The files the run created or changed.
+        base_findings: The content those files started from, by path.
+        error: Why the job failed.
+        created_at: When the job was admitted.
+        started_at: When a runner first claimed it.
+        finished_at: When it reached a final status.
+        collected_at: When a supervisor turn read the result out.
     """
 
     __tablename__ = "research_jobs"
